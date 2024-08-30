@@ -3,12 +3,11 @@ from src.utils import AtomsDict
 from ase import Atoms, Atom
 from langchain.agents import tool
 import os 
-from typing import Annotated
+from typing import Annotated,Dict,Optional
 import numpy as np
 from ase.lattice.cubic import FaceCenteredCubic
 import ast
 
-WORKING_DIRECTORY = '/Users/hongshuh/Desktop/LLM/material_agent/out'
 
 @tool
 def get_kpoints(atom_dict: AtomsDict, k_point_distance: str) -> str:
@@ -46,6 +45,7 @@ def dummy_structure(concentration: float) -> AtomsDict:
 @tool
 def write_script(
     content: Annotated[str, "Text content to be written into the document."],
+    WORKING_DIRECTORY: Annotated[str, "The working directory."],
 ) -> Annotated[str, "Path of the saved document file."]:
     """Save the quantum espresso input file to the specified file path"""
     ## Error when '/' in the content, manually delete
@@ -55,4 +55,31 @@ def write_script(
         file.write(content)
     return f"Document saved to {path}"
 
+#TODO 
+@tool
+def save_atoms(
+    atoms: AtomsDict,
+    file_name: Annotated[str, "File path to save the atoms."],
+    WORKING_DIRECTORY: Annotated[str, "The working directory."],
+) -> str:
+    """Save the atoms object to the specified file path"""
+    path = os.path.join(WORKING_DIRECTORY, 'lattice.xyz')
+    with open(path, "w") as file:
+        file.write(str(atoms))
+    return f"Atoms saved to {path}"
+
+#TODO
+@tool
+def qe_calculator(
+    file_name: Annotated[str, "File path to save the document."],
+    WORKING_DIRECTORY: Annotated[str, "The working directory."],
+    start: Annotated[Optional[int], "The start line. Default is 0"] = None,
+    end: Annotated[Optional[int], "The end line. Default is None"] = None,
+) -> str:
+    """Read the specified document."""
+    with open(os.path.join(WORKING_DIRECTORY,file_name),"r") as file:
+        lines = file.readlines()
+    if start is not None:
+        start = 0
+    return "\n".join(lines[start:end])
 
