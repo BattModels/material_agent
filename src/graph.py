@@ -17,7 +17,7 @@ from langgraph.prebuilt import ToolNode
 
 from src.agent import create_agent
 from src.tools import get_kpoints, dummy_structure, write_script
-
+from src.prompt import *
 # This defines the object that is passed between each node
 # in the graph. We will create different nodes for each agent and tool
 class AgentState(TypedDict):
@@ -32,7 +32,7 @@ def router(state) -> Literal["call_tool", "__end__", "continue"]:
     if last_message.tool_calls:
         # The previous agent is invoking a tool
         return "call_tool"
-    if "Document saved to" in last_message.content:
+    if "FINAL ANSWER" in last_message.content:
         # Any agent decided the work is done
         return "__end__"
     return "continue"
@@ -52,12 +52,16 @@ def agent_node(state, agent, name):
     }
 
 def create_graph(config: dict) -> StateGraph:
-    llm = ChatAnthropic(model=config["LANGSIM_MODEL"], api_key=config['ANTHROPIC_API_KEY'])
+    if 'claude' in config['LANGSIM_MODEL']:
+        llm = ChatAnthropic(model=config["LANGSIM_MODEL"], api_key=config['ANTHROPIC_API_KEY'])
+
     # Define the agents
-    input_agent = create_agent(llm, [get_kpoints, dummy_structure,write_script], system_message="")
+    input_agent = create_agent(llm, [get_kpoints, dummy_structure,write_script], prompt_content=dftwriter_prompt,system_message="")
     # Define the node to run the agents
     input_node = functools.partial(agent_node, agent=input_agent, name="input_generator")
 
+    calculate_agent = create_agent(llm, [], prompt_content=calculater_prompt,system_message="")
+    calculate_node = functools.partial(agent_node, agent=calculate_agent, name="calculator")
     # Define the node to run tools
     tools = [get_kpoints, dummy_structure, write_script]
     tool_node = ToolNode(tools)
@@ -65,10 +69,14 @@ def create_graph(config: dict) -> StateGraph:
     # Create the graph
     graph = StateGraph(AgentState)
     graph.add_node("input_generator", input_node)
+    graph.add_node("calculator", calculate_node)
     graph.add_node("call_tool", tool_node)
     graph.add_conditional_edges("input_generator",
                                router,
                                {'continue': "input_generator",'call_tool': "call_tool", '__end__': END})
+    graph.add_conditional_edges("calculator",
+                               router,
+                               {'continue': "calculator",'call_tool': "call_tool", '__end__': END})
     graph.add_conditional_edges(
     "call_tool",
     # Each agent node updates the 'sender' field
@@ -78,6 +86,7 @@ def create_graph(config: dict) -> StateGraph:
     lambda x: x["sender"],
     {
         "input_generator": "input_generator",
+        'calculator': "calculator",
     },
 )
     graph.add_edge(START, "input_generator") 
