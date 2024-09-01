@@ -1,5 +1,5 @@
 
-from src.utils import AtomsDict
+from src.utils import AtomsDict,element_list
 from ase import Atoms, Atom
 from langchain.agents import tool
 import os 
@@ -7,7 +7,7 @@ from typing import Annotated,Dict,Optional
 import numpy as np
 from ase.lattice.cubic import FaceCenteredCubic
 import ast
-
+import re
 
 @tool
 def get_kpoints(atom_dict: AtomsDict, k_point_distance: str) -> str:
@@ -50,36 +50,22 @@ def write_script(
     """Save the quantum espresso input file to the specified file path"""
     ## Error when '/' in the content, manually delete
     path = os.path.join(WORKING_DIRECTORY, 'input.in')
-    
     with open(path,"w") as file:
         file.write(content)
     return f"Document saved to {path}"
 
-#TODO 
 @tool
-def save_atoms(
-    atoms: AtomsDict,
-    file_name: Annotated[str, "File path to save the atoms."],
-    WORKING_DIRECTORY: Annotated[str, "The working directory."],
-) -> str:
-    """Save the atoms object to the specified file path"""
-    path = os.path.join(WORKING_DIRECTORY, 'lattice.xyz')
-    with open(path, "w") as file:
-        file.write(str(atoms))
-    return f"Atoms saved to {path}"
+def find_pseudopotential(element: element_list,
+                         pseudo_dir: str) -> str:
+    """Return the pseudopotential file path for given element symbol and directory."""
+    
+    for roots, dirs, files in os.walk(f'./{pseudo_dir}'):
+        for file in files:
+            if element == file.split('.')[0].split('_')[0].capitalize():
+                return file
+    return f"Could not find pseudopotential for {element}"
 
-#TODO
-@tool
-def qe_calculator(
-    file_name: Annotated[str, "File path to save the document."],
-    WORKING_DIRECTORY: Annotated[str, "The working directory."],
-    start: Annotated[Optional[int], "The start line. Default is 0"] = None,
-    end: Annotated[Optional[int], "The end line. Default is None"] = None,
-) -> str:
-    """Read the specified document."""
-    with open(os.path.join(WORKING_DIRECTORY,file_name),"r") as file:
-        lines = file.readlines()
-    if start is not None:
-        start = 0
-    return "\n".join(lines[start:end])
+
+
+
 

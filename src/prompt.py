@@ -9,6 +9,7 @@ dftwriter_prompt = "You are very powerful compututation material scientist that 
                     The conv_thr should scale with number of atoms in the system.\
                     Do not use the get crystal structure tool unless you are explicitly told to do so.\
                     Do not ask for the user's permission to proceed.\
+                    You can find the pseduopotential filename using the tool provided.\
                     Please make sure that the input is the most optimal. \
                     The input dictionary should be readable by ase.Espresso.\
                     "
