@@ -32,18 +32,32 @@ if __name__ == "__main__":
     
 
     save_graph_to_file(graph, WORKING_DIRECTORY)
-    exit()
-    events = graph.stream(
-        {
-            "messages": [
-                HumanMessage(
-                    content=f"Generate a quantum espresso input for a crystal structure with 50% Cu atoms and save into a file. The working directory is {WORKING_DIRECTORY}.",
-                ) 
-            ],
-        },
-        # Maximum number of steps to take in the graph
-        {"recursion_limit": 150},
-    )
-    for s in events:
-        print(s)
-        print("----")
+    # exit()
+    # events = graph.stream(
+    #     {
+    #         "messages": [
+    #             HumanMessage(
+    #                 content=f"Generate a quantum espresso input for a crystal structure with 100% Cu atoms and save into a file. The working directory is {WORKING_DIRECTORY}.\
+    #                     The pseduopotential directory is {config['pseudo_dir']}. The k point distance is normal."
+    #             ) 
+    #         ],
+    #     },
+    #     # Maximum number of steps to take in the graph
+    #     {"recursion_limit": 150},
+    # )
+    # for s in events:
+    #     print(s)
+    #     print("----")
+
+
+    for s in graph.stream(
+    {
+        "messages": [
+            HumanMessage(content=f"Generate a quantum espresso input for a crystal structure with 100% Cu atoms and save into a file. The working directory is {WORKING_DIRECTORY}.\
+                        The pseduopotential directory is {config['pseudo_dir']}. The k point distance is normal.")
+        ]
+    }
+):
+        if "__end__" not in s:
+            print(s)
+            print("----")
