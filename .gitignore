@@ -4,3 +4,5 @@
 
 espresso.*
 *.ipynb
+md_files
+test

@@ -1,0 +1,1 @@
+lmp_mpi -np 8 -in test/shear/in.shear
