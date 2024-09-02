@@ -1,5 +1,6 @@
 
-from src.utils import AtomsDict,element_list
+from matplotlib.pyplot import sca
+from src.utils import *
 from ase import Atoms, Atom
 from langchain.agents import tool
 import os 
@@ -8,6 +9,12 @@ import numpy as np
 from ase.lattice.cubic import FaceCenteredCubic
 import ast
 import re
+from ase.io import read
+from ase.calculators.espresso import Espresso, EspressoProfile
+from ase.eos import calculate_eos
+from ase.units import kJ
+
+
 
 @tool
 def get_kpoints(atom_dict: AtomsDict, k_point_distance: str) -> str:
@@ -37,7 +44,8 @@ def dummy_structure(concentration: float) -> AtomsDict:
     # Randomly select indices to replace
     indices_to_replace = np.random.choice(len(atoms), num_atoms_to_replace, replace=False)
     atoms.numbers[indices_to_replace] = 79
-    scaleFactor = concentration * (6.5 - 3.58) / 3.58 + 1
+    # scaleFactor = concentration * (6.5 - 3.58) / 3.58 + 1
+    scaleFactor = 1.0
     atoms.set_cell(atoms.cell * scaleFactor, scale_atoms=True)
 
     return atoms.todict()
@@ -64,6 +72,33 @@ def find_pseudopotential(element: str,
             if element == file.split('.')[0].split('_')[0].capitalize():
                 return file
     return f"Could not find pseudopotential for {element}"
+
+@tool
+def get_bulk_modulus(
+    working_directory: str,
+    pseudo_dir: str,
+    input_file: str,
+) -> float:
+    '''Calculate the bulk modulus of the given quantum espresso input file, pseudopotential directory and working directory'''
+    atoms = read(os.path.join(working_directory,input_file))
+    with open(os.path.join(working_directory,input_file),'r') as file:
+        content = file.read()
+    input_data = parse_qe_input_string(content)
+    pseudopotentials = filter_potential(input_data)
+
+    profile = EspressoProfile(command='mpiexec -n 8 pw.x', pseudo_dir=pseudo_dir)
+
+    atoms.calc = Espresso(
+    profile=profile,
+    pseudopotentials=pseudopotentials,
+    input_data=input_data
+)
+    eos = calculate_eos(atoms)
+    v, e, B = eos.fit()
+    bulk_modulus = B / kJ * 1.0e24
+
+    return bulk_modulus
+   
 
 
 
