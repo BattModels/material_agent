@@ -3,7 +3,7 @@ from src.utils import AtomsDict,element_list
 from ase import Atoms, Atom
 from langchain.agents import tool
 import os 
-from typing import Annotated,Dict,Optional
+from typing import Annotated,Dict, Literal,Optional
 import numpy as np
 from ase.lattice.cubic import FaceCenteredCubic
 import ast
@@ -55,11 +55,11 @@ def write_script(
     return f"Document saved to {path}"
 
 @tool
-def find_pseudopotential(element: element_list,
+def find_pseudopotential(element: str,
                          pseudo_dir: str) -> str:
     """Return the pseudopotential file path for given element symbol and directory."""
     
-    for roots, dirs, files in os.walk(f'./{pseudo_dir}'):
+    for roots, dirs, files in os.walk(f'{pseudo_dir}'):
         for file in files:
             if element == file.split('.')[0].split('_')[0].capitalize():
                 return file

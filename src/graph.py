@@ -76,7 +76,7 @@ def create_graph(config: dict) -> StateGraph:
         )
         return supervisor_chain.invoke(state)
    
-    dft_agent = create_react_agent(llm, tools=[get_kpoints, dummy_structure, write_script, find_pseudopotential],
+    dft_agent = create_react_agent(llm, tools=[get_kpoints, dummy_structure, find_pseudopotential,write_script],
                                    state_modifier=dftwriter_prompt)   
     dft_node = functools.partial(agent_node, agent=dft_agent, name="DFT_Agent")
 
