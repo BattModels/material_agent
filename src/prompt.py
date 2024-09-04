@@ -11,7 +11,7 @@ dftwriter_prompt = "You are very powerful compututation material scientist that 
                     Do not ask for the user's permission to proceed.\
                     You can find the pseduopotential filename using the tool provided.\
                     Please make sure that the input is the most optimal. \
-                    The input dictionary should be readable by ase.Espresso. If you get error, summerize the error information\
+                    The input dictionary should be readable by ase.Espresso.\
                     "
 
 calculater_prompt = "You are very powerful assistant that performs bulk modulus calculations on atomistic level, but don't know current events. \
