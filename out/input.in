@@ -3,19 +3,19 @@
     restart_mode = 'from_scratch'
     pseudo_dir = '/Users/hongshuh/Desktop/LLM/material_agent/SSSP_1.3.0_PBE_precision'
     outdir = './out'
-    prefix = 'Cu'
+    prefix = 'CuAu'
     tprnfor = .true.
     tstress = .true.
 /
 &SYSTEM
     ibrav = 0
     nat = 8
-    ntyp = 1
-    ecutwfc = 60
-    ecutrho = 480
+    ntyp = 2
+    ecutwfc = 90
+    ecutrho = 720
     occupations = 'smearing'
-    smearing = 'mv'
-    degauss = 0.01
+    smearing = 'marzari-vanderbilt'
+    degauss = 0.02
 /
 &ELECTRONS
     conv_thr = 1.0e-8
@@ -23,21 +23,19 @@
 /
 ATOMIC_SPECIES
 Cu 63.546 Cu.paw.z_11.ld1.psl.v1.0.0-low.upf
-
-K_POINTS automatic
-6 6 3 0 0 0
-
-CELL_PARAMETERS angstrom
-3.58000000 0.00000000 0.00000000
-0.00000000 3.58000000 0.00000000
-0.00000000 0.00000000 7.16000000
-
+Au 196.967 Au_ONCV_PBE-1.0.oncvpsp.upf
 ATOMIC_POSITIONS crystal
-Cu 0.000000000 0.000000000 0.000000000
-Cu 0.500000000 0.500000000 0.000000000
-Cu 0.500000000 0.000000000 0.250000000
-Cu 0.000000000 0.500000000 0.250000000
-Cu 0.000000000 0.000000000 0.500000000
-Cu 0.500000000 0.500000000 0.500000000
-Cu 0.500000000 0.000000000 0.750000000
-Cu 0.000000000 0.500000000 0.750000000
+Au  0.000000000   0.000000000   0.000000000
+Cu  0.500000000   0.500000000   0.000000000
+Cu  0.500000000   0.000000000   0.250000000
+Cu  0.000000000   0.500000000   0.250000000
+Cu  0.000000000   0.000000000   0.500000000
+Au  0.500000000   0.500000000   0.500000000
+Cu  0.500000000   0.000000000   0.750000000
+Au  0.000000000   0.500000000   0.750000000
+K_POINTS automatic
+5 5 3 0 0 0
+CELL_PARAMETERS angstrom
+ 4.894000000   0.000000000   0.000000000
+ 0.000000000   4.894000000   0.000000000
+ 0.000000000   0.000000000   9.788000000

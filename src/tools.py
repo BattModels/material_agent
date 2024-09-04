@@ -36,7 +36,7 @@ def get_kpoints(atom_dict: AtomsDict, k_point_distance: str) -> str:
 
 @tool
 def dummy_structure(concentration: float) -> AtomsDict:
-    """Returns a crystal structure with a given concentration of Cu atoms"""
+    """Returns a crystal structure with a given concentration of Cu atoms and the rest Au atoms"""  
     atoms = FaceCenteredCubic("Cu", latticeconstant=3.58)
     atoms *= (1,1,2)
     # Calculate the number of Cu atoms to replace
@@ -44,8 +44,8 @@ def dummy_structure(concentration: float) -> AtomsDict:
     # Randomly select indices to replace
     indices_to_replace = np.random.choice(len(atoms), num_atoms_to_replace, replace=False)
     atoms.numbers[indices_to_replace] = 79
-    # scaleFactor = concentration * (6.5 - 3.58) / 3.58 + 1
-    scaleFactor = 1.0
+    scaleFactor = (1.0 - concentration) * (6.5 - 3.58) / 3.58 + 1
+    # scaleFactor = 1.0
     atoms.set_cell(atoms.cell * scaleFactor, scale_atoms=True)
 
     return atoms.todict()

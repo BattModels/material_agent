@@ -83,6 +83,11 @@ def create_graph(config: dict) -> StateGraph:
     hpc_agent = create_react_agent(llm, tools=[])
     hpc_node = functools.partial(agent_node, agent=hpc_agent, name="HPC_Agent")
 
+
+    save_graph_to_file(dft_agent, config['working_directory'], "dft_agent")
+    # save_graph_to_file(dft_agent, config['working_directory'], "dft_agent")
+
+
     # Create the graph
     graph = StateGraph(AgentState)
     graph.add_node("DFT_Agent", dft_node)

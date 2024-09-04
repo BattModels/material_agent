@@ -40,44 +40,17 @@ if __name__ == "__main__":
     # graph = create_react_agent(llm, tools=[get_kpoints, dummy_structure, find_pseudopotential,write_script,get_bulk_modulus],
     #                                state_modifier=dftwriter_prompt)
 
-    save_graph_to_file(graph, WORKING_DIRECTORY)
+    save_graph_to_file(graph, WORKING_DIRECTORY, "super_graph")
     # exit()
-    # events = graph.stream(
-    #     {
-    #         "messages": [
-    #             HumanMessage(
-    #                 content=f"Generate a quantum espresso input for a crystal structure with 100% Cu atoms and save into a file. The working directory is {WORKING_DIRECTORY}.\
-    #                     The pseduopotential directory is {config['pseudo_dir']}. The k point distance is normal."
-    #             ) 
-    #         ],
-    #     },
-    #     # Maximum number of steps to take in the graph
-    #     {"recursion_limit": 150},
-    # )
-    # for s in events:
-    #     print(s)
-    #     print("----")
-
-
-#     for s in graph.stream(
-#     {
-#         "messages": [
-#             HumanMessage(content=f"Generate a quantum espresso input for a crystal structure with 100% Cu atoms and calculate its bulk modules. The working directory is {WORKING_DIRECTORY}.\
-#                         The pseduopotential directory is {pseudo_dir}.")
-#         ]
-#     }
-# ):
-#         if "__end__" not in s:
-#             print(s)
-#             print("----")
     for s in graph.stream(
     {
         "messages": [
-            HumanMessage(content=f"Generate a quantum espresso input for a crystal structure with 100% Cu atoms and calculate its bulk modules. The working directory is {WORKING_DIRECTORY}.\
+            HumanMessage(content=f"Generate a quantum espresso input for a crystal structure with Cu atoms and Au atoms and calculate its bulk modules. \
+                        Find the concentation of Cu give bulk modulus 170 GPa with an error of plus or minus 5. Try different concentation Until reaches 5 trials. The working directory is {WORKING_DIRECTORY}.\
                         The pseduopotential directory is {pseudo_dir}.")
         ]
     }
-):
+,{"recursion_limit": 50}):
         if "__end__" not in s:
             print(s)
             print("----")

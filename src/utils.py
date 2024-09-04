@@ -22,10 +22,10 @@ class AtomsDict(BaseModel):
     pbc: List[bool]
 
 
-def save_graph_to_file(graph, path: str):
+def save_graph_to_file(graph, path: str, name: str):
     try:
         im = graph.get_graph(xray=True).draw_mermaid_png()
-        with open(os.path.join(path, "graph.png"), "wb") as f:
+        with open(os.path.join(path, f"{name}.png"), "wb") as f:
             f.write(im)
     except Exception:
         # This requires some extra dependencies and is optional
