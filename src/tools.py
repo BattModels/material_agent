@@ -13,8 +13,9 @@ from ase.io import read
 from ase.calculators.espresso import Espresso, EspressoProfile
 from ase.eos import calculate_eos
 from ase.units import kJ
-
-
+from ase.filters import ExpCellFilter
+from ase.optimize import BFGS
+from ase.io.trajectory import Trajectory
 
 @tool
 def get_kpoints(atom_dict: AtomsDict, k_point_distance: str) -> str:
@@ -93,6 +94,15 @@ def get_bulk_modulus(
     pseudopotentials=pseudopotentials,
     input_data=input_data
 )
+
+    # run variable cell relax first to make sure we have optimum scaling factor
+    ecf = ExpCellFilter(atoms)
+    dyn = BFGS(ecf)
+    traj = Trajectory('relax.traj', 'w', atoms)
+    dyn.attach(traj)
+    dyn.run(fmax=0.05)
+
+    # now we calculate eos
     eos = calculate_eos(atoms)
     v, e, B = eos.fit()
     bulk_modulus = B / kJ * 1.0e24
