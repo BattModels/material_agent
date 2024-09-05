@@ -45,8 +45,8 @@ if __name__ == "__main__":
     for s in graph.stream(
     {
         "messages": [
-            HumanMessage(content=f"Generate a quantum espresso input for a crystal structure with Cu atoms and Au atoms and calculate its bulk modules. \
-                        Find the concentation of Cu give bulk modulus 170 GPa with an error of plus or minus 5. Try different concentation Until reaches 5 trials. The working directory is {WORKING_DIRECTORY}.\
+            HumanMessage(content=f"Generate a quantum espresso input for a crystal structure with 50% Cu atoms and Au atoms and calculate its bulk modules. \
+                     Try until reaches 5 trials. The working directory is {WORKING_DIRECTORY}.\
                         The pseduopotential directory is {pseudo_dir}.")
         ]
     }

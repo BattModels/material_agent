@@ -98,7 +98,7 @@ def get_bulk_modulus(
     # run variable cell relax first to make sure we have optimum scaling factor
     ecf = ExpCellFilter(atoms)
     dyn = BFGS(ecf)
-    traj = Trajectory('relax.traj', 'w', atoms)
+    traj = Trajectory(os.path.join(working_directory,'relax.traj'), 'w', atoms)
     dyn.attach(traj)
     dyn.run(fmax=0.05)
 
