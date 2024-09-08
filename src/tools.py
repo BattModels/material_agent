@@ -14,7 +14,7 @@ from ase.calculators.espresso import Espresso, EspressoProfile
 from ase.eos import calculate_eos
 from ase.units import kJ
 from ase.filters import ExpCellFilter
-from ase.optimize import BFGS
+from ase.optimize import BFGS, FIRE
 from ase.io.trajectory import Trajectory
 
 @tool
@@ -97,10 +97,10 @@ def get_bulk_modulus(
 
     # run variable cell relax first to make sure we have optimum scaling factor
     ecf = ExpCellFilter(atoms)
-    dyn = BFGS(ecf)
+    dyn = FIRE(ecf)
     traj = Trajectory(os.path.join(working_directory,'relax.traj'), 'w', atoms)
     dyn.attach(traj)
-    dyn.run(fmax=0.05)
+    dyn.run(fmax=1.5)
 
     # now we calculate eos
     eos = calculate_eos(atoms)
