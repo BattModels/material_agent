@@ -25,6 +25,49 @@ calculater_prompt = "You are very powerful assistant that performs bulk modulus 
             Also, is user specified a acceptable error range, for each calculation if the resulting bulk modulus is within that range, stop immediately.\
             ",
 
+HPC_resources = """
+Artemis by the Numbers
+
+Node     #   CPU         GPU          RAM      Disk   $
+-----------------------------------------------------------
+H100     3   AMD 9654    4x H100 SXM  768 GB   1.9 TB  117,950
+A100     2   AMD 7513    4x A100 SXM  512 GB   1.6 TB  58,597
+Largemem 3   AMD 9654                 768 GB   1.9 TB  13,989
+CPU      25  AMD 9654                 368 GB   1.9 TB  12,998
+
+CPU Specifications
+----------------------------------------------
+CPU                 Cores  Threads  Base    Boost             L3 Cache
+AMD Epyc 9654 CPU    96     192     2.6 GHz 3.55 GHz (All Core)  384 MB
+AMD Epyc 7513 CPU    32      64     2.6 GHz 3.65 GHz (Max)       128 MB
+
+*Nodes are partitioned by threads, not cores. Picking 1 or a multiple of 2 is advisable; see sbatch's --distribution flag.
+
+GPU Specifications
+-------------------------------------------------
+GPU        VRAM  GPU Mem Bandwidth  FP64  FP64 TC  FP32 - TC  BF16 TC
+A100 SXM   80 GB  2,039 GB/s         9.7   19.5    156        312
+H100 SXM   80 GB  3.34 TB/s          34    67      989        1989
+
+*FLOPs are listed in teraFLOPs (10¹² floating point operations per second). Tensor Cores (TC) are specialized for general matrix multiplications (GEMM).
+
+Partitions
+-----------------------------------------------------------
+Partition        Nodes         Max Wall Time  Priority  Max Jobs  Max Nodes
+venkvis-cpu      CPU           48 hrs
+venkvis-largemem Large Mem     48 hrs
+venkvis-a100     A100          8 hrs
+venkvis-h100     H100          8 hrs
+debug            all           30 minutes     100       1         4
+"""
+
+HPC_prompt = f"You are a very powerful high performance computing expert that runs calculations on the supercomputer. \
+            Based on the resources info {HPC_resources}, you are responsible for determining how much resources to request and which partition \
+            to submit the job to. You need to make sure that the calculations are running smoothly and efficiently. \
+            after determining those hyperparameters, You should use the right tool to submit the job to the supercomputer, and the tool will give you back the output files. \
+            Then you need to use the right tool to parse the output files and return the result needed. \
+            ",
+
 supervisor_prompt = "You are a very powerful supervisor that oversees the work of the powerful assistant and computation material scientist. \
             You are responsible for ensuring that the assistant and the scientist are working together to achieve the desired bulk modulus. \
                 You should be able to provide feedback to the assistant and the scientist. "
