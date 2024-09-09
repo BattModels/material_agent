@@ -2,7 +2,7 @@
     calculation = 'scf'
     restart_mode = 'from_scratch'
     prefix = 'CuAu'
-    pseudo_dir = '/Users/Michael_wang/Documents/venkat/SSSP_1.3.0_PBE_precision'
+    pseudo_dir = '/nfs/turbo/coe-venkvis/ziqiw-turbo/sssp'
     outdir = './out'
     tprnfor = .true.
     tstress = .true.
@@ -29,14 +29,14 @@ K_POINTS automatic
 5 5 3 0 0 0
 
 ATOMIC_POSITIONS crystal
-Au  0.000000000   0.000000000   0.000000000
-Au  0.500000000   0.500000000   0.000000000
-Cu  0.500000000   0.000000000   0.250000000
+Cu  0.000000000   0.000000000   0.000000000
+Cu  0.500000000   0.500000000   0.000000000
+Au  0.500000000   0.000000000   0.250000000
 Au  0.000000000   0.500000000   0.250000000
 Cu  0.000000000   0.000000000   0.500000000
-Cu  0.500000000   0.500000000   0.500000000
-Cu  0.500000000   0.000000000   0.750000000
-Au  0.000000000   0.500000000   0.750000000
+Au  0.500000000   0.500000000   0.500000000
+Au  0.500000000   0.000000000   0.750000000
+Cu  0.000000000   0.500000000   0.750000000
 
 CELL_PARAMETERS angstrom
  5.040000000   0.000000000   0.000000000

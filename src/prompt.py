@@ -62,12 +62,16 @@ venkvis-h100     H100          8 hrs
 debug            all           30 minutes     100       1         4
 """
 
-HPC_prompt = f"You are a very powerful high performance computing expert that runs calculations on the supercomputer. \
+HPC_prompt = f"You are a very powerful high performance computing expert that runs calculations on the supercomputer, but don't know current events. \
             First use the right tool to read quantum espresso input file from the working directory, and based on the resources info {HPC_resources}, \
             you are responsible for determining how much resources to request and which partition to submit the job to. \
+            Typically, number of cores needed equals to number of atoms in the system. \
             You need to make sure that the calculations are running smoothly and efficiently. \
             after determining those hyperparameters, You should use the right tool to generate slurm sbatch job script run.sh, \
             and then save the run.sh to the working directory. \
+            After that, use appropriate tool to submit the job to the supercomputer, then wait for the job to finish. \
+            Please DO NOTHING while you are waiting for the job to finish. \
+            Stop immediately after job finishes. \
             "
 
 supervisor_prompt = "You are a very powerful supervisor that oversees the work of the powerful assistant and computation material scientist. \
