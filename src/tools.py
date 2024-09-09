@@ -133,14 +133,6 @@ def get_lattice_constant(
     input_data=input_data
 )
 
-    # run variable cell relax first to make sure we have optimum scaling factor
-    # ecf = ExpCellFilter(atoms)
-    # dyn = BFGS(ecf)
-    # traj = Trajectory(os.path.join(working_directory,'relax.traj'), 'w', atoms)
-    # dyn.attach(traj)
-    # dyn.run(fmax=0.05)
-
-    # now we calculate eos
     eos = calculate_eos(atoms)
     v, e, B = eos.fit()
     lc = (v)**(1/3)
