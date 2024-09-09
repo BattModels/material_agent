@@ -42,15 +42,18 @@ if __name__ == "__main__":
 
     save_graph_to_file(graph, WORKING_DIRECTORY, "super_graph")
     # exit()
+    namelist = ['Li (bcc)', 'Na (bcc)', 'K (bcc)', 'Rb (bcc)', 'Ca (fcc)', 'Sr (fcc)', 'Ba (bcc)', 'V (bcc)', 'Nb (bcc)', 'Ta (bcc)', 'Mo (bcc)', 'W (bcc)', 'Fe (bcc)', 'Rh (fcc)', 'Ir (fcc)', 'Ni (fcc)', 'Pd (fcc)', 'Pt (fcc)', 'Cu (fcc)', 'Ag (fcc)', 'Au (fcc)', 'Al (fcc)', 'Pb (fcc)', 'C (dia)', 'Si (dia)', 'Ge (dia)', 'Sn (dia)']
+    filelist = ['Li_bcc.in', 'Na_bcc.in', 'K_bcc.in', 'Si_dia.in', 'Pd_fcc.in', 'Ge_dia.in', 'Au_fcc.in', 'C_dia.in', 'Cu_fcc.in', 'Fe_bcc.in', 'Ca_fcc.in', 'Pb_fcc.in', 'W_bcc.in', 'Mo_bcc.in', 'Pt_fcc.in', 'Ag_fcc.in', 'Rh_fcc.in', 'Sr_fcc.in', 'Nb_bcc.in', 'Al_fcc.in', 'Rb_bcc.in', 'Ta_bcc.in', 'Ir_fcc.in', 'Sn_dia.in', 'Ba_bcc.in', 'V_bcc.in', 'Ni_fcc.in']
     for s in graph.stream(
     {
         "messages": [
-            HumanMessage(content=f"Generate a quantum espresso input for a crystal structure with 50% Cu atoms and Au atoms and calculate its bulk modules. \
-                     Try until reaches 5 trials. The working directory is {WORKING_DIRECTORY}.\
+            HumanMessage(content=f"Generate 27 quantum espresso input file for {namelist}. \
+                            calculate their lattice constant and report it for each time, if failed ,just report the error message and continue the next.\
+                     The working directory is {WORKING_DIRECTORY}.\
                         The pseduopotential directory is {pseudo_dir}.")
         ]
     }
-,{"recursion_limit": 50}):
+,{"recursion_limit": 1000}):
         if "__end__" not in s:
             print(s)
             print("----")
