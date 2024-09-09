@@ -39,7 +39,7 @@ def router(state) -> Literal["call_tool", "__end__", "continue"]:
         return "__end__"
     return "continue"
 
-members = ["DFT_Agent", "HPC_Agent"]
+members = ["DFT_Agent", "HPC_Agent",'Chem_Agent']
 system_prompt = (
     "You are a supervisor tasked with managing a conversation between the"
     " following workers:  {members}. Given the following user request,"
@@ -68,7 +68,7 @@ def agent_node(state, agent, name):
 
 def create_graph(config: dict) -> StateGraph:
     if 'claude' in config['LANGSIM_MODEL']:
-        llm = ChatAnthropic(model=config["LANGSIM_MODEL"], api_key=config['ANTHROPIC_API_KEY'], temperature=0)
+        llm = ChatAnthropic(model=config["LANGSIM_MODEL"], api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     def supervisor_agent(state):
         supervisor_chain = (
             prompt
@@ -76,13 +76,16 @@ def create_graph(config: dict) -> StateGraph:
         )
         return supervisor_chain.invoke(state)
    
-    dft_agent = create_react_agent(llm, tools=[get_kpoints, dummy_structure, find_pseudopotential,write_script,get_bulk_modulus],
+    dft_agent = create_react_agent(llm, tools=[get_kpoints, dummy_structure, find_pseudopotential,write_script,get_bulk_modulus,get_lattice_constant],
                                    state_modifier=dftwriter_prompt)   
     dft_node = functools.partial(agent_node, agent=dft_agent, name="DFT_Agent")
 
     hpc_agent = create_react_agent(llm, tools=[generate_batch_script, read_script, submit_and_monitor_job],
                                    state_modifier=HPC_prompt)
     hpc_node = functools.partial(agent_node, agent=hpc_agent, name="HPC_Agent")
+
+    # hpc_agent2 = create_react_agent(llm, tools=[])
+    # hpc_node2 = functools.partial(agent_node, agent=hpc_agent2, name="Chem_Agent")
 
 
     save_graph_to_file(dft_agent, config['working_directory'], "dft_agent")
@@ -93,6 +96,8 @@ def create_graph(config: dict) -> StateGraph:
     graph = StateGraph(AgentState)
     graph.add_node("DFT_Agent", dft_node)
     graph.add_node("HPC_Agent", hpc_node)
+    # graph.add_node("Chem_Agent", hpc_node2)
+
     graph.add_node("Supervisor", supervisor_agent)
     
     for member in members:
