@@ -57,7 +57,7 @@ class routeResponse(BaseModel):
 prompt = ChatPromptTemplate.from_messages(
     [
         ("system", system_prompt+"Given the conversation above, who should act next?\
-            Or should we FINISH? Select one of: {options}. We don't need HPC_Agent at the moment" ),
+            Or should we FINISH? Select one of: {options}." ),
         MessagesPlaceholder(variable_name="messages"),
     ]
 ).partial(options=str(options), members=", ".join(members))
@@ -80,7 +80,8 @@ def create_graph(config: dict) -> StateGraph:
                                    state_modifier=dftwriter_prompt)   
     dft_node = functools.partial(agent_node, agent=dft_agent, name="DFT_Agent")
 
-    hpc_agent = create_react_agent(llm, tools=[])
+    hpc_agent = create_react_agent(llm, tools=[generate_batch_script, read_script, submit_and_monitor_job],
+                                   state_modifier=HPC_prompt)
     hpc_node = functools.partial(agent_node, agent=hpc_agent, name="HPC_Agent")
 
     # hpc_agent2 = create_react_agent(llm, tools=[])

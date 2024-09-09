@@ -23,6 +23,8 @@ def _set_if_undefined(var: str):
 
 if __name__ == "__main__":
 
+    # userMessage = "Generate a quantum espresso input for a crystal structure with 50% Cu atoms and Au atoms and calculate its bulk modules. Try until reaches 5 trials."
+    userMessage = "Generate a quantum espresso input for a crystal structure with 50% Cu atoms and Au atoms, and run the calculation with slurm."
     
     config = load_config(os.path.join('./config', "default.yaml"))
     WORKING_DIRECTORY = config['working_directory']
