@@ -6,12 +6,10 @@ dftwriter_prompt = "You are very powerful compututation material scientist that 
                     Use the right smearing based on the material.\
                     If not specified, use normal for k point spacing.\
                     If the system involves hubbard U correction, specify starting magnetization in SYSTEM card and hubbard U parameters in HUBBARD card, and use the pre-defined hubbard correction tool.\
-                    The conv_thr should scale with number of atoms in the system.\
-                    Do not use the get crystal structure tool unless you are explicitly told to do so.\
-                    Do not ask for the user's permission to proceed.\
+                    The electron conv_thr should be 1e-6.\
                     You can find the pseduopotential filename using the tool provided.\
                     Please make sure that the input is the most optimal. \
-                    The input dictionary should be readable by ase.Espresso.\
+                    The input dictionary should be readable by ase.Espresso. You need to report to supervisor each time you finish one calculation.\
                     "
 
 calculater_prompt = "You are very powerful assistant that performs bulk modulus calculations on atomistic level, but don't know current events. \
