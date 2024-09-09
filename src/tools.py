@@ -16,6 +16,7 @@ from ase.units import kJ
 from ase.filters import ExpCellFilter
 from ase.optimize import BFGS, FIRE
 from ase.io.trajectory import Trajectory
+import subprocess
 
 @tool
 def get_kpoints(atom_dict: AtomsDict, k_point_distance: str) -> str:
@@ -64,6 +65,17 @@ def write_script(
     return f"Document saved to {path}"
 
 @tool
+def read_script(
+    WORKING_DIRECTORY: Annotated[str, "The working directory."]
+) -> Annotated[str, "read content"]:
+    """read the quantum espresso input file from the specified file path"""
+    ## Error when '/' in the content, manually delete
+    path = os.path.join(WORKING_DIRECTORY, 'input.in')
+    with open(path,"r") as file:
+        content = file.read()
+    return content
+
+@tool
 def find_pseudopotential(element: str,
                          pseudo_dir: str) -> str:
     """Return the pseudopotential file path for given element symbol and directory."""
@@ -109,7 +121,66 @@ def get_bulk_modulus(
 
     return bulk_modulus
    
+@tool
+def generate_batch_script(
+    partition: str,
+    nnodes: int,
+    ntasks: int,
+    time: str,
+    inputFile: str,
+) -> str:
+    '''Generate a slurm sbatch submission script for quantum espresso with given parameters'''
+    batchScript = f"""#!/bin/bash
+#SBATCH -J agentJob # Job name
+#SBATCH -n {ntasks} # Number of total cores
+#SBATCH -N {nnodes} # Number of nodes
+#SBATCH --time={time}
+#SBATCH -p {partition}
+#SBATCH --mem-per-cpu=2000M # Memory pool for all cores in MB
+#SBATCH -e out/err.err #change the name of the err file 
+#SBATCH -o out/out.out # File to which STDOUT will be written %j is the job #
 
+export OMP_NUM_THREADS=1
+
+spack load /qn6ee2y
+
+echo "Job started on `hostname` at `date`"
+
+mpirun pw.x < {inputFile} > {inputFile}.pwo
+
+echo " "
+echo "Job Ended at `date`"
+    """
+    with open("out/run.sh", "w") as file:
+        file.write(batchScript)
+    
+    return "Batch script saved as run.sh"
+
+
+@tool
+def run_and_monitor_job(
+    working_directory: str,
+    partition: str,
+    nnodes: int,
+    ntasks: int,
+    time: str,
+    inputFile: str,
+) -> str:
+    '''Run the quantum espresso job monitor the progress, and return the result once the job is done'''
+    os.system(f"sbatch out/run.sh")
+    
+    # Run a command and capture its output
+    result = subprocess.run("sbatch out/run.sh", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    # Get the standard output
+    output = result.stdout
+    
+    # find the first job's ID
+    jobID = re.search(r'^\s*(\d+)', output, re.MULTILINE)
+    jobID = jobID.group(1)
+    
+    
+    return "Job submitted successfully"
 
 
 
