@@ -1,4 +1,5 @@
 
+from fileinput import filename
 from matplotlib.pyplot import sca
 from src.utils import *
 from ase import Atoms, Atom
@@ -36,8 +37,9 @@ def get_kpoints(atom_dict: AtomsDict, k_point_distance: str) -> str:
     return kpoints
 
 @tool
-def dummy_structure(concentration: float) -> AtomsDict:
-    """Returns a crystal structure with a given concentration of Cu atoms and the rest Au atoms"""  
+def dummy_structure(concentration: float,
+                    scale_factor: float) -> AtomsDict:
+    """Returns a crystal structure with a given concentration of Cu atoms and the rest Au atoms, and a scale factor for the cell size."""  
     atoms = FaceCenteredCubic("Cu", latticeconstant=3.58)
     atoms *= (1,1,2)
     # Calculate the number of Cu atoms to replace
@@ -45,20 +47,21 @@ def dummy_structure(concentration: float) -> AtomsDict:
     # Randomly select indices to replace
     indices_to_replace = np.random.choice(len(atoms), num_atoms_to_replace, replace=False)
     atoms.numbers[indices_to_replace] = 79
-    scaleFactor = (1.0 - concentration) * (6.5 - 3.58) / 3.58 + 1
+    # scaleFactor = (1.0 - concentration) * (6.5 - 3.58) / 3.58 + 1
     # scaleFactor = 1.0
-    atoms.set_cell(atoms.cell * scaleFactor, scale_atoms=True)
+    atoms.set_cell(atoms.cell * scale_factor, scale_atoms=True)
 
     return atoms.todict()
 
 @tool
 def write_script(
     content: Annotated[str, "Text content to be written into the document."],
+    file_name: Annotated[str, "Name of the file to be saved."],
     WORKING_DIRECTORY: Annotated[str, "The working directory."],
 ) -> Annotated[str, "Path of the saved document file."]:
     """Save the quantum espresso input file to the specified file path"""
     ## Error when '/' in the content, manually delete
-    path = os.path.join(WORKING_DIRECTORY, 'input.in')
+    path = os.path.join(WORKING_DIRECTORY, f'{file_name}')
     with open(path,"w") as file:
         file.write(content)
     return f"Document saved to {path}"
@@ -108,6 +111,43 @@ def get_bulk_modulus(
     bulk_modulus = B / kJ * 1.0e24
 
     return bulk_modulus
+
+@tool
+def get_lattice_constant(
+    working_directory: str,
+    pseudo_dir: str,
+    input_file: str,
+) -> float:
+    '''Calculate the lattice constant of the given quantum espresso input file, pseudopotential directory and working directory'''
+    atoms = read(os.path.join(working_directory,input_file))
+    with open(os.path.join(working_directory,input_file),'r') as file:
+        content = file.read()
+    input_data = parse_qe_input_string(content)
+    pseudopotentials = filter_potential(input_data)
+
+    profile = EspressoProfile(command='mpiexec -n 2 pw.x', pseudo_dir=pseudo_dir)
+
+    atoms.calc = Espresso(
+    profile=profile,
+    pseudopotentials=pseudopotentials,
+    input_data=input_data
+)
+
+    # run variable cell relax first to make sure we have optimum scaling factor
+    # ecf = ExpCellFilter(atoms)
+    # dyn = BFGS(ecf)
+    # traj = Trajectory(os.path.join(working_directory,'relax.traj'), 'w', atoms)
+    # dyn.attach(traj)
+    # dyn.run(fmax=0.05)
+
+    # now we calculate eos
+    eos = calculate_eos(atoms)
+    v, e, B = eos.fit()
+    lc = (v)**(1/3)
+    print(f'{input_file} lattice constant is {lc}')
+    with open(os.path.join(working_directory,input_file.split('.')[0]+'.out'),'w') as file:
+        file.write(f'\n# {input_file} Lattice constant is {lc}')
+    return lc
    
 
 
