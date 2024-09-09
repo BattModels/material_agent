@@ -17,6 +17,7 @@ from ase.filters import ExpCellFilter
 from ase.optimize import BFGS, FIRE
 from ase.io.trajectory import Trajectory
 import subprocess
+import time
 
 @tool
 def get_kpoints(atom_dict: AtomsDict, k_point_distance: str) -> str:
@@ -130,6 +131,7 @@ def generate_batch_script(
     inputFile: str,
 ) -> str:
     '''Generate a slurm sbatch submission script for quantum espresso with given parameters'''
+    print("Generating batch script...")
     batchScript = f"""#!/bin/bash
 #SBATCH -J agentJob # Job name
 #SBATCH -n {ntasks} # Number of total cores
@@ -146,7 +148,7 @@ spack load /qn6ee2y
 
 echo "Job started on `hostname` at `date`"
 
-mpirun pw.x < {inputFile} > {inputFile}.pwo
+mpirun pw.x < out/{inputFile} > out/{inputFile}.pwo
 
 echo " "
 echo "Job Ended at `date`"
@@ -157,28 +159,48 @@ echo "Job Ended at `date`"
     return "Batch script saved as run.sh"
 
 
+# Function to check if a job is still running
+def is_job_running(job_id):
+    # Run a command and capture its output
+    result = subprocess.run(f"squeue --job {job_id}", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    # Get the standard output
+    output = result.stdout
+    return job_id in output  # If job_id is found in squeue output, job is running
+
+# Function to wait for all jobs to finish
+def wait_for_jobs(job_id):
+    while is_job_running(job_id):
+        print(f"Waiting for job {job_id} to finish...")
+        time.sleep(30)
+    print(f"Job {job_id} finished")
+
+
 @tool
-def run_and_monitor_job(
-    working_directory: str,
-    partition: str,
-    nnodes: int,
-    ntasks: int,
-    time: str,
-    inputFile: str,
+def submit_and_monitor_job(
+    WORKING_DIRECTORY: Annotated[str, "The working directory."],
+    slurmScript: Annotated[str, "The slurm script to be submitted."]
 ) -> str:
-    '''Run the quantum espresso job monitor the progress, and return the result once the job is done'''
-    os.system(f"sbatch out/run.sh")
+    '''submit the quantum espresso job to HPC, monitor the progress, and return the result once the job is done'''
     
+    path = os.path.join(WORKING_DIRECTORY, slurmScript)
+    
+    print(f"submitting {path}")
     # Run a command and capture its output
     result = subprocess.run("sbatch out/run.sh", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-
+    
+    # print(f"submission result:")
     # Get the standard output
     output = result.stdout
     
-    # find the first job's ID
-    jobID = re.search(r'^\s*(\d+)', output, re.MULTILINE)
-    jobID = jobID.group(1)
+    print(output)
     
+    # # find the first job's ID
+    # jobID = re.search(r'^\s*(\d+)', output, re.MULTILINE)
+    # jobID = jobID.group(1)
+    jobID = output.split()[-1]
+    
+    # print(f"waiting for job {jobID} to finish")
+    wait_for_jobs(jobID)
     
     return "Job submitted successfully"
 

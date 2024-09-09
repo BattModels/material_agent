@@ -80,7 +80,8 @@ def create_graph(config: dict) -> StateGraph:
                                    state_modifier=dftwriter_prompt)   
     dft_node = functools.partial(agent_node, agent=dft_agent, name="DFT_Agent")
 
-    hpc_agent = create_react_agent(llm, tools=[generate_batch_script, read_script], state_modifier=HPC_prompt)
+    hpc_agent = create_react_agent(llm, tools=[generate_batch_script, read_script, submit_and_monitor_job],
+                                   state_modifier=HPC_prompt)
     hpc_node = functools.partial(agent_node, agent=hpc_agent, name="HPC_Agent")
 
 
