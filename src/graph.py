@@ -39,7 +39,7 @@ def router(state) -> Literal["call_tool", "__end__", "continue"]:
         return "__end__"
     return "continue"
 
-members = ["DFT_Agent", "HPC_Agent",'Chem_Agent']
+members = ["DFT_Agent", "HPC_Agent"]
 system_prompt = (
     "You are a supervisor tasked with managing a conversation between the"
     " following workers:  {members}. Given the following user request,"
