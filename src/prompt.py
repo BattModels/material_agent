@@ -10,7 +10,7 @@ dftwriter_prompt = "You are very powerful compututation material scientist that 
                     The electron conv_thr should be 1e-6.\
                     You can find the pseduopotential filename using the tool provided.\
                     Please make sure that the input is the most optimal. \
-                    The input dictionary should be readable by ase.Espresso. You need to report to supervisor each time you finish one calculation.\
+                    The input dictionary should be readable by ase.Espresso. \
                     "
 
 calculater_prompt = "You are very powerful assistant that performs bulk modulus calculations on atomistic level, but don't know current events. \

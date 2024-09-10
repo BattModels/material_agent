@@ -1,9 +1,11 @@
+from networkx import draw
 import os,yaml
 from xml.dom.minidom import Element
 from typing import Callable, List, Literal
 from langchain_core.pydantic_v1 import BaseModel
-
-
+from IPython.display import Image, display
+from langchain_core.runnables.graph import CurveStyle, MermaidDrawMethod, NodeStyles
+import getpass
 def load_config(path: str):
     ## Load the configuration file
     with open(path) as f:
@@ -22,11 +24,17 @@ class AtomsDict(BaseModel):
     pbc: List[bool]
 
 
+def _set_if_undefined(var: str):
+    if not os.environ.get(var):
+        os.environ[var] = getpass.getpass(f"Please provide your {var}")
+
 def save_graph_to_file(graph, path: str, name: str):
     try:
-        im = graph.get_graph(xray=True).draw_mermaid_png()
+        im = graph.get_graph().draw_mermaid_png()
+        print(graph.get_graph().draw_mermaid())
         with open(os.path.join(path, f"{name}.png"), "wb") as f:
             f.write(im)
+        print(f"Graph saved to {os.path.join(path, f'{name}.png')}")
     except Exception:
         # This requires some extra dependencies and is optional
         pass
