@@ -63,6 +63,7 @@ def write_script(
 ) -> Annotated[str, "Path of the saved document file."]:
     """Save the quantum espresso input file to the specified file path"""
     ## Error when '/' in the content, manually delete
+    os.makedirs(WORKING_DIRECTORY, exist_ok=True)
     path = os.path.join(WORKING_DIRECTORY, f'{file_name}')
     with open(path,"w") as file:
         file.write(content)
@@ -156,6 +157,7 @@ def get_lattice_constant(
    
 @tool
 def generate_batch_script(
+    WORKING_DIRECTORY: str,
     partition: str,
     nnodes: int,
     ntasks: int,
@@ -185,10 +187,11 @@ mpirun pw.x < out/{inputFile} > out/{inputFile}.pwo
 echo " "
 echo "Job Ended at `date`"
     """
-    with open("out/run.sh", "w") as file:
+    os.makedirs(WORKING_DIRECTORY, exist_ok=True)
+    with open(os.path.join(WORKING_DIRECTORY, "run.sh"), "w") as file:
         file.write(batchScript)
     
-    return "Batch script saved as run.sh"
+    return "Batch script saved as run.sh, job output file will be saved as out/{inputFile}.pwo"
 
 
 # Function to check if a job is still running
@@ -210,7 +213,8 @@ def wait_for_jobs(job_id):
 @tool
 def submit_and_monitor_job(
     WORKING_DIRECTORY: Annotated[str, "The working directory."],
-    slurmScript: Annotated[str, "The slurm script to be submitted."]
+    slurmScript: Annotated[str, "The slurm script to be submitted."],
+    output_file: Annotated[str, "The quantum espresso output file."]
 ) -> str:
     '''submit the quantum espresso job to HPC, monitor the progress, and return the result once the job is done'''
     
@@ -234,8 +238,15 @@ def submit_and_monitor_job(
     # print(f"waiting for job {jobID} to finish")
     wait_for_jobs(jobID)
     
-    return "Job submitted successfully"
+    return "Job finished successfully, the output file is avaible at {output_file}"
 
-
+@tool
+def read_energy_from_output(
+    WORKING_DIRECTORY: Annotated[str, "The working directory."],
+    output_file: Annotated[str, "The output file to be read."]
+) -> str:
+    '''Read the total energy from the quantum espresso job output file and return it in a string'''
+    atoms = read(os.path.join(WORKING_DIRECTORY, output_file))
+    return f"the energy is {atoms.get_potential_energy()} eV"
 
 

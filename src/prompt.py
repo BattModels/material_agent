@@ -67,9 +67,10 @@ HPC_prompt = f"You are a very powerful high performance computing expert that ru
             You need to make sure that the calculations are running smoothly and efficiently. \
             after determining those hyperparameters, You should use the right tool to generate slurm sbatch job script run.sh, \
             and then save the run.sh to the working directory. \
-            After that, use appropriate tool to submit the job to the supercomputer, then wait for the job to finish. \
-            Please DO NOTHING while you are waiting for the job to finish. \
-            Stop immediately after job finishes. \
+            After that, use appropriate tool to submit the job to the supercomputer.\
+            The tool itself will wait for the job to finish, get back to you once the job is finished. \
+            Please use the right tool to read the quantum espresso output file and extract the desired quantity. \
+            Stop immediately after you give back the result to the supervisor. \
             "
 
 supervisor_prompt = "You are a very powerful supervisor that oversees the work of the powerful assistant and computation material scientist. \
