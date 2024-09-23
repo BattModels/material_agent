@@ -6,8 +6,8 @@ LANGSIM_MODEL: "claude-3-5-sonnet-20240620"
 
 
 # Pseudo potential path
-pseudo_dir: '/Users/hongshuh/Desktop/LLM/material_agent/SSSP_1.3.0_PBE_precision'
+pseudo_dir: '/nfs/turbo/coe-venkvis/hongshuh/material_agent/SSSP_1.3.0_PBE_precision'
 
 
 # Working directory
-working_directory: '/Users/hongshuh/Desktop/LLM/material_agent/out'
+working_directory: '/nfs/turbo/coe-venkvis/hongshuh/material_agent/out'
