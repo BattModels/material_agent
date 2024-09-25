@@ -1,7 +1,7 @@
 /SSSP_1.3.0_PBE_precision
 **/__pycache__/
 **/out/
-
+config
 espresso.*
 *.ipynb
 asdf.*

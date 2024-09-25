@@ -31,10 +31,10 @@ def _set_if_undefined(var: str):
 def save_graph_to_file(graph, path: str, name: str):
     try:
         im = graph.get_graph().draw_mermaid_png()
-        print(graph.get_graph().draw_mermaid())
+        # print(graph.get_graph().draw_mermaid())
         with open(os.path.join(path, f"{name}.png"), "wb") as f:
             f.write(im)
-        print(f"Graph saved to {os.path.join(path, f'{name}.png')}")
+        # print(f"Graph saved to {os.path.join(path, f'{name}.png')}")
     except Exception:
         # This requires some extra dependencies and is optional
         pass

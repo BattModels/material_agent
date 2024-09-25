@@ -25,7 +25,8 @@ if __name__ == "__main__":
 
 
     # userMessage = "Generate a quantum espresso input for a crystal structure with 50% Cu atoms and Au atoms and calculate its bulk modules. Try until reaches 5 trials."
-    userMessage = "Generate a quantum espresso input for a crystal structure with 50% Cu atoms and Au atoms, and calculate the energy of the system."
+    userMessage = "You are going to do cenvergence test for Li BCC structure. Compute the the total energy for different kpoints based on kspacing 0.1,0.2 ,0.3 and low, normal, high ecutwfc. \
+        Use the highest ecutwfc and kpoints convergence test. Use the highest kpoints for ecutwfc convergence test. Report the results when finished."
     
     config = load_config(os.path.join('./config', "default.yaml"))
     WORKING_DIRECTORY = config['working_directory']

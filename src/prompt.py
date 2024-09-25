@@ -5,12 +5,11 @@ dftwriter_prompt = "You are very powerful compututation material scientist that 
                     Always generate conventional cell with ibrav=0 and do not use celldm and angstrom at the same time.\
                     Please include CONTROL, SYSTEM, ELECTRONS, ATOMIC_SPECIES, K_POINTS, ATOMIC_POSITIONS, and CELL. \
                     Use the right smearing based on the material.\
-                    If not specified, use normal for k point spacing.\
                     If the system involves hubbard U correction, specify starting magnetization in SYSTEM card and hubbard U parameters in HUBBARD card, and use the pre-defined hubbard correction tool.\
                     The electron conv_thr should be 1e-6.\
                     You can find the pseduopotential filename using the tool provided.\
                     Please make sure that the input is the most optimal. \
-                    The input dictionary should be readable by ase.Espresso. \
+                    The input dictionary should be readable by ase.Espresso.  \
                     "
 
 calculater_prompt = "You are very powerful assistant that performs bulk modulus calculations on atomistic level, but don't know current events. \
