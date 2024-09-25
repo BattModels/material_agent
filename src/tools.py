@@ -21,18 +21,16 @@ import subprocess
 import time
 
 @tool
-def get_kpoints(atom_dict: AtomsDict, k_point_distance: str) -> str:
-    """Returns the kpoints of a given ase atoms object and user specified k_point_distance (k_point_distance could be fine, normal, coarse or very fine, default is normal)"""
+def get_kpoints(atom_dict: AtomsDict, kspacing: float) -> str:
+    """Returns the kpoints of a given ase atoms object and specific kspacing."""
     atoms = Atoms(**atom_dict.dict())
     cell = atoms.cell
-    if 'fine' in k_point_distance and 'very' not in k_point_distance:
-        kspacing = 0.2
-    elif 'very' in k_point_distance and 'fine' in k_point_distance:
-        kspacing = 0.1
-    elif 'coarse' in k_point_distance:
-        return [1,1,1]
-    else:
-        kspacing = 0.3
+    ## Check input kspacing is valid
+    if kspacing <= 0:
+        return "Invalid kspacing, should be greater than 0"
+    if kspacing > 0.5:
+        return "Too Coarse kspacing, should be less than 0.5"
+    ## Calculate the kpoints
     kpoints = [
         (np.ceil(2 * np.pi / np.linalg.norm(ii) / kspacing).astype(int)) for ii in cell
     ]
@@ -166,6 +164,10 @@ def generate_batch_script(
 ) -> str:
     '''Generate a slurm sbatch submission script for quantum espresso with given parameters'''
     print("Generating batch script...")
+    #Check if input file exists
+    if not os.path.exists(os.path.join(WORKING_DIRECTORY, inputFile)):
+        return "Input file does not, please check the file name and try again"
+
     batchScript = f"""#!/bin/bash
 #SBATCH -J agentJob # Job name
 #SBATCH -n {ntasks} # Number of total cores
@@ -178,7 +180,7 @@ def generate_batch_script(
 
 export OMP_NUM_THREADS=1
 
-spack load /qn6ee2y
+spack load quantum-espresso@7.2
 
 echo "Job started on `hostname` at `date`"
 
@@ -191,7 +193,7 @@ echo "Job Ended at `date`"
     with open(os.path.join(WORKING_DIRECTORY, "run.sh"), "w") as file:
         file.write(batchScript)
     
-    return "Batch script saved as run.sh, job output file will be saved as out/{inputFile}.pwo"
+    return f"Batch script saved as run.sh, job output file will be saved as out/{inputFile}.pwo"
 
 
 # Function to check if a job is still running
