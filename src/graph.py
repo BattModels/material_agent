@@ -62,9 +62,17 @@ prompt = ChatPromptTemplate.from_messages(
     ]
 ).partial(options=str(options), members=", ".join(members))
 
+def print_stream(s):
+    message = s["messages"][-1]
+    if isinstance(message, tuple):
+        print(message)
+    else:
+        message.pretty_print()
+
 def agent_node(state, agent, name):
-    result = agent.invoke(state)
-    return {"messages": [HumanMessage(content=result["messages"][-1].content, name=name)]}
+    for s in agent.stream(state, {"recursion_limit": 1000}):
+        print_stream(s)
+    return {"messages": [HumanMessage(content=s["messages"][-1].content, name=name)]}
 
 def create_graph(config: dict) -> StateGraph:
     if 'claude' in config['LANGSIM_MODEL']:
