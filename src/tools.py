@@ -158,11 +158,11 @@ def generate_batch_script(
     WORKING_DIRECTORY: str,
     partition: str,
     nnodes: int,
-    ntasks: int,
+    natom: int,
     time: str,
     inputFile: str,
 ) -> str:
-    '''Generate a slurm sbatch submission script for quantum espresso with given parameters'''
+    '''Generate a slurm sbatch submission script for quantum espresso with given parameters. natom should be equal to number of atoms in the system'''
     print("Generating batch script...")
     #Check if input file exists
     if not os.path.exists(os.path.join(WORKING_DIRECTORY, inputFile)):
@@ -170,7 +170,7 @@ def generate_batch_script(
 
     batchScript = f"""#!/bin/bash
 #SBATCH -J agentJob # Job name
-#SBATCH -n {ntasks} # Number of total cores
+#SBATCH -n {natom} # Number of total cores
 #SBATCH -N {nnodes} # Number of nodes
 #SBATCH --time={time}
 #SBATCH -p {partition}
@@ -240,7 +240,7 @@ def submit_and_monitor_job(
     # print(f"waiting for job {jobID} to finish")
     wait_for_jobs(jobID)
     
-    return "Job finished successfully, the output file is avaible at {output_file}"
+    return f"Job finished successfully, the output file is avaible at {output_file}"
 
 @tool
 def read_energy_from_output(
