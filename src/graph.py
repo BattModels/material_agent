@@ -39,7 +39,7 @@ def router(state) -> Literal["call_tool", "__end__", "continue"]:
         return "__end__"
     return "continue"
 
-members = ["DFT_Agent", "HPC_Agent"]
+members = ["DFT_Agent", "HPC_Agent",'CSS_Agent']
 system_prompt = (
     "You are a supervisor tasked with managing a conversation between the"
     " following workers:  {members}. Given the following user request,"
@@ -84,8 +84,8 @@ def create_graph(config: dict) -> StateGraph:
                                    state_modifier=HPC_prompt+'Report to supervisor you have finished the task.')
     hpc_node = functools.partial(agent_node, agent=hpc_agent, name="HPC_Agent")
 
-    # hpc_agent2 = create_react_agent(llm, tools=[])
-    # hpc_node2 = functools.partial(agent_node, agent=hpc_agent2, name="Chem_Agent")
+    css_agent = create_react_agent(llm, tools=[],state_modifier=None)
+    css_node = functools.partial(agent_node, agent=css_agent, name="CSS_Agent")
 
 
     save_graph_to_file(dft_agent, config['working_directory'], "dft_agent")
@@ -96,7 +96,7 @@ def create_graph(config: dict) -> StateGraph:
     graph = StateGraph(AgentState)
     graph.add_node("DFT_Agent", dft_node)
     graph.add_node("HPC_Agent", hpc_node)
-    # graph.add_node("Chem_Agent", hpc_node2)
+    graph.add_node("CSS_Agent", css_node)
 
     graph.add_node("Supervisor", supervisor_agent)
     
