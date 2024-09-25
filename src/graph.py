@@ -77,11 +77,11 @@ def create_graph(config: dict) -> StateGraph:
         return supervisor_chain.invoke(state)
    
     dft_agent = create_react_agent(llm, tools=[get_kpoints, dummy_structure, find_pseudopotential,write_script,get_bulk_modulus,get_lattice_constant],
-                                   state_modifier=dftwriter_prompt)   
+                                   state_modifier=dftwriter_prompt+'Report to supervisor you have finished writing the quantum espressi script. Specify the script name.')   
     dft_node = functools.partial(agent_node, agent=dft_agent, name="DFT_Agent")
 
     hpc_agent = create_react_agent(llm, tools=[generate_batch_script, read_script, submit_and_monitor_job, read_energy_from_output],
-                                   state_modifier=HPC_prompt)
+                                   state_modifier=HPC_prompt+'Report to supervisor you have finished the task.')
     hpc_node = functools.partial(agent_node, agent=hpc_agent, name="HPC_Agent")
 
     css_agent = create_react_agent(llm, tools=[],state_modifier=None)
