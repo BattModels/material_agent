@@ -76,7 +76,6 @@ venkvis-cpu      CPU           48 hrs
 venkvis-largemem Large Mem     48 hrs
 venkvis-a100     A100          8 hrs
 venkvis-h100     H100          8 hrs
-debug            all           30 minutes     100       1         4
 """
 
 HPC_prompt = f"You are a very powerful high performance computing expert that runs calculations on the supercomputer, but don't know current events. \

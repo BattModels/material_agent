@@ -89,10 +89,12 @@ def create_graph(config: dict) -> StateGraph:
                                    state_modifier=dft_agent_prompt)   
     dft_node = functools.partial(agent_node, agent=dft_agent, name="DFT_Agent")
 
+
     ### HPC Agent
-    hpc_tools = [generate_batch_script, read_script, submit_and_monitor_job, read_energy_from_output]
+    hpc_tools = [read_script, generate_submit_and_monitor_job, read_energy_from_output]
     hpc_agent = create_react_agent(llm, tools=hpc_tools,
                                    state_modifier=HPC_prompt+'Report to supervisor you have finished the task.')
+
     hpc_node = functools.partial(agent_node, agent=hpc_agent, name="HPC_Agent")
 
     css_agent = create_react_agent(llm, tools=[],state_modifier=None)
