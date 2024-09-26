@@ -22,21 +22,19 @@ import time
 from pysqa import QueueAdapter
 
 @tool
-def get_kpoints(atom_dict: AtomsDict, k_point_distance: str) -> str:
-    """Returns the kpoints of a given ase atoms object and user specified k_point_distance (k_point_distance could be fine, normal, coarse or very fine, default is normal)"""
+def get_kpoints(atom_dict: AtomsDict, kspacing: float) -> str:
+    """Returns the kpoints of a given ase atoms object and specific kspacing."""
     atoms = Atoms(**atom_dict.dict())
     cell = atoms.cell
-    if 'fine' in k_point_distance and 'very' not in k_point_distance:
-        kspacing = 0.2
-    elif 'very' in k_point_distance and 'fine' in k_point_distance:
-        kspacing = 0.1
-    elif 'coarse' in k_point_distance:
-        return [1,1,1]
-    else:
-        kspacing = 0.3
+    ## Check input kspacing is valid
+    if kspacing <= 0:
+        return "Invalid kspacing, should be greater than 0"
+    if kspacing > 0.5:
+        return "Too Coarse kspacing, should be less than 0.5"
+    ## Calculate the kpoints
     kpoints = [
-        (np.ceil(2 * np.pi / np.linalg.norm(ii) / kspacing).astype(int)) for ii in cell
-    ]
+            2 * ((np.ceil(2 * np.pi / np.linalg.norm(ii) / kspacing).astype(int)) // 2 + 1) for ii in cell
+        ]
     return kpoints
 
 @tool
@@ -157,90 +155,6 @@ def get_lattice_constant(
         file.write(f'\n# {input_file} Lattice constant is {lc}')
     return lc
    
-# @tool
-# def generate_batch_script(
-#     WORKING_DIRECTORY: str,
-#     partition: str,
-#     nnodes: int,
-#     natom: int,
-#     time: str,
-#     inputFile: str,
-# ) -> str:
-#     '''Generate a slurm sbatch submission script for quantum espresso with given parameters. natom should be equal to number of atoms in the system'''
-#     print("Generating batch script...")
-#     batchScript = f"""#!/bin/bash
-# #SBATCH -J agentJob # Job name
-# #SBATCH -n {natom} # Number of total cores
-# #SBATCH -N {nnodes} # Number of nodes
-# #SBATCH --time={time}
-# #SBATCH -p {partition}
-# #SBATCH --mem-per-cpu=2000M # Memory pool for all cores in MB
-# #SBATCH -e out/err.err #change the name of the err file 
-# #SBATCH -o out/out.out # File to which STDOUT will be written %j is the job #
-
-# export OMP_NUM_THREADS=1
-
-# spack load /qn6ee2y
-
-# echo "Job started on `hostname` at `date`"
-
-# mpirun pw.x < out/{inputFile} > out/{inputFile}.pwo
-
-# echo " "
-# echo "Job Ended at `date`"
-#     """
-#     os.makedirs(WORKING_DIRECTORY, exist_ok=True)
-#     with open(os.path.join(WORKING_DIRECTORY, "run.sh"), "w") as file:
-#         file.write(batchScript)
-    
-#     return f"Batch script saved as run.sh, job output file will be saved as out/{inputFile}.pwo"
-
-
-# # Function to check if a job is still running
-# def is_job_running(job_id):
-#     # Run a command and capture its output
-#     result = subprocess.run(f"squeue --job {job_id}", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-#     # Get the standard output
-#     output = result.stdout
-#     return job_id in output  # If job_id is found in squeue output, job is running
-
-# # Function to wait for all jobs to finish
-# def wait_for_jobs(job_id):
-#     while is_job_running(job_id):
-#         print(f"Waiting for job {job_id} to finish...")
-#         time.sleep(30)
-#     print(f"Job {job_id} finished")
-
-
-# @tool
-# def submit_and_monitor_job(
-#     WORKING_DIRECTORY: Annotated[str, "The working directory."],
-#     slurmScript: Annotated[str, "The slurm script to be submitted."],
-#     output_file: Annotated[str, "The quantum espresso output file."]
-# ) -> str:
-#     '''submit the quantum espresso job to HPC, monitor the progress, and return the result once the job is done'''
-    
-#     path = os.path.join(WORKING_DIRECTORY, slurmScript)
-    
-#     print(f"submitting {path}")
-#     # Run a command and capture its output
-#     result = subprocess.run("sbatch out/run.sh", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    
-#     # print(f"submission result:")
-#     # Get the standard output
-#     output = result.stdout
-    
-#     print(output)
-    
-#     # # find the first job's ID
-#     # jobID = re.search(r'^\s*(\d+)', output, re.MULTILINE)
-#     # jobID = jobID.group(1)
-#     jobID = output.split()[-1]
-    
-#     # print(f"waiting for job {jobID} to finish")
-#     wait_for_jobs(jobID)
-    
-#     return f"Job finished successfully, the output file is avaible at {output_file}"
 
 
 def create_pysqa_prerequisites(WORKING_DIRECTORY: str):
@@ -291,8 +205,6 @@ def generate_submit_and_monitor_job(
     if not os.path.exists(os.path.join(WORKING_DIRECTORY, "slurm.sh")) or not os.path.exists(os.path.join(WORKING_DIRECTORY, "queue.yaml")):
         print("Creating pysqa prerequisites...")
         create_pysqa_prerequisites(WORKING_DIRECTORY)
-
-    
     print("Generating batch script...")
     qa = QueueAdapter(directory=WORKING_DIRECTORY)
     
@@ -309,7 +221,7 @@ def generate_submit_and_monitor_job(
     command =f"""
 export OMP_NUM_THREADS=1
 
-spack load /qn6ee2y
+spack load quantum-espresso@7.2
 
 echo "Job started on `hostname` at `date`"
 
