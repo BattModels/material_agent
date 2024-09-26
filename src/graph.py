@@ -83,12 +83,15 @@ def create_graph(config: dict) -> StateGraph:
             | llm.with_structured_output(routeResponse)
         )
         return supervisor_chain.invoke(state)
-   
-    dft_agent = create_react_agent(llm, tools=[get_kpoints, dummy_structure, find_pseudopotential,write_script,get_bulk_modulus,get_lattice_constant],
-                                   state_modifier=dftwriter_prompt+'Report to supervisor you have finished writing the quantum espressi script. Specify the script name.')   
+    ### DFT Agent
+    dft_tools = [get_kpoints, dummy_structure, find_pseudopotential,write_script,get_bulk_modulus,get_lattice_constant]
+    dft_agent = create_react_agent(llm, tools=dft_tools,
+                                   state_modifier=dft_agent_prompt)   
     dft_node = functools.partial(agent_node, agent=dft_agent, name="DFT_Agent")
 
-    hpc_agent = create_react_agent(llm, tools=[generate_batch_script, read_script, submit_and_monitor_job, read_energy_from_output],
+    ### HPC Agent
+    hpc_tools = [generate_batch_script, read_script, submit_and_monitor_job, read_energy_from_output]
+    hpc_agent = create_react_agent(llm, tools=hpc_tools,
                                    state_modifier=HPC_prompt+'Report to supervisor you have finished the task.')
     hpc_node = functools.partial(agent_node, agent=hpc_agent, name="HPC_Agent")
 
@@ -97,7 +100,7 @@ def create_graph(config: dict) -> StateGraph:
 
 
     save_graph_to_file(dft_agent, config['working_directory'], "dft_agent")
-    # save_graph_to_file(dft_agent, config['working_directory'], "dft_agent")
+    
 
 
     # Create the graph
