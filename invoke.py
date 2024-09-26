@@ -21,10 +21,16 @@ from src.tools import *
 if __name__ == "__main__":
 
 
-    userMessage = "Generate a quantum espresso input for a crystal structure with 50% Cu atoms and Au atoms and calculate its bulk modules. Try until reaches 5 trials."
+
+    # userMessage = "Generate a quantum espresso input for a crystal structure with 50% Cu atoms and Au atoms and calculate its bulk modules. Try until reaches 5 trials."
+    userMessage = "You are going to do cenvergence test for Li BCC structure. Compute the the total energy for different kpoints based on kspacing 0.1,0.2 ,0.3 and low, normal, high ecutwfc. \
+        Use the highest ecutwfc and kpoints convergence test. Use the highest kpoints for ecutwfc convergence test. Report the results when finished."
+
+    # userMessage = "Generate a quantum espresso input for a crystal structure with 50% Cu atoms and Au atoms and calculate its bulk modules. Try until reaches 5 trials."
     # userMessage = "Generate a quantum espresso input for a crystal structure with 50% Cu atoms and Au atoms, and run the calculation with slurm."
     # userMessage = 'Generate 27 quantum espresso input file for {namelist}. \
     #                         calculate their lattice constant and report it for each time, if failed ,just report the error message and continue the next.'
+
 
     
     config = load_config(os.path.join('./config', "default.yaml"))
@@ -51,7 +57,6 @@ if __name__ == "__main__":
     {
         "messages": [
             HumanMessage(content=f"{userMessage} \
-
                      The working directory is {WORKING_DIRECTORY}.\
                         The pseduopotential directory is {pseudo_dir}.")
         ]

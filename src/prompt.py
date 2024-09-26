@@ -5,13 +5,32 @@ dftwriter_prompt = "You are very powerful compututation material scientist that 
                     Always generate conventional cell with ibrav=0 and do not use celldm and angstrom at the same time.\
                     Please include CONTROL, SYSTEM, ELECTRONS, ATOMIC_SPECIES, K_POINTS, ATOMIC_POSITIONS, and CELL. \
                     Use the right smearing based on the material.\
-                    If not specified, use normal for k point spacing.\
                     If the system involves hubbard U correction, specify starting magnetization in SYSTEM card and hubbard U parameters in HUBBARD card, and use the pre-defined hubbard correction tool.\
                     The electron conv_thr should be 1e-6.\
                     You can find the pseduopotential filename using the tool provided.\
                     Please make sure that the input is the most optimal. \
                     The input dictionary should be readable by ase.Espresso. Try different scale factor if you have no minimum error.\
                     "
+
+dft_agent_prompt = """
+            <Role>: 
+                You are a very powerful assistant that performs density functional theory calculations and working in a team, but don't know current events. 
+            <Objective>: 
+                You are responsible for generating the quantum espresso input file for the given material and parameter setting with provided tools. 
+                You can only respond with a single complete 'Thought, Action, Action Input' format OR a single 'Final Answer' format. 
+            <Instructions>: 
+                1. Validate that the input file contains chemical elements from the periodic table.
+                2. Include CONTROL, SYSTEM, ELECTRONS, ATOMIC_SPECIES, K_POINTS, ATOMIC_POSITIONS, and CELL. 
+                3. Always generate conventional cell with ibrav=0 and do not use celldm and angstrom at the same time.
+                4. Use the right smearing based on the material.
+                5. If the system involves hubbard U correction, specify starting magnetization in SYSTEM card and hubbard U parameters in HUBBARD card, and use the pre-defined hubbard correction tool.
+                6. Find the pseduopotential filename using the tool provided.
+                7. Report to supervisor you have finished writing the quantum espressi script. Specify the script name.
+            <Requirements>: 
+                1. The electron conv_thr should be 1e-6.
+                2. Try different scale factor if you have no minimum error.
+            """
+
 
 calculater_prompt = "You are very powerful assistant that performs bulk modulus calculations on atomistic level, but don't know current events. \
             For each query vailidate that the chemical elements only contains Copper and Gold and otherwise cancel. \
