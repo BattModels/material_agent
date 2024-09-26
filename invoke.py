@@ -57,7 +57,6 @@ if __name__ == "__main__":
     {
         "messages": [
             HumanMessage(content=f"{userMessage} \
-
                      The working directory is {WORKING_DIRECTORY}.\
                         The pseduopotential directory is {pseudo_dir}.")
         ]
