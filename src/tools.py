@@ -32,8 +32,8 @@ def get_kpoints(atom_dict: AtomsDict, kspacing: float) -> str:
         return "Too Coarse kspacing, should be less than 0.5"
     ## Calculate the kpoints
     kpoints = [
-        (np.ceil(2 * np.pi / np.linalg.norm(ii) / kspacing).astype(int)) for ii in cell
-    ]
+            2 * ((np.ceil(2 * np.pi / np.linalg.norm(ii) / kspacing).astype(int)) // 2 + 1) for ii in cell
+        ]
     return kpoints
 
 @tool
