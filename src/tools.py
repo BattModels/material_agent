@@ -1,5 +1,6 @@
 
 from fileinput import filename
+from cycler import V
 from matplotlib.pyplot import sca
 from src.utils import *
 from ase import Atoms, Atom
@@ -20,7 +21,8 @@ from ase.io.trajectory import Trajectory
 import subprocess
 import time
 from pysqa import QueueAdapter
-
+import json
+### DFT tools
 @tool
 def get_kpoints(atom_dict: AtomsDict, kspacing: float) -> str:
     """Returns the kpoints of a given ase atoms object and specific kspacing."""
@@ -67,18 +69,6 @@ def write_script(
     with open(path,"w") as file:
         file.write(content)
     return f"Document saved to {path}"
-
-@tool
-def read_script(
-    WORKING_DIRECTORY: Annotated[str, "The working directory."],
-    input_file: Annotated[str, "The input file to be read."]
-) -> Annotated[str, "read content"]:
-    """read the quantum espresso input file from the specified file path"""
-    ## Error when '/' in the content, manually delete
-    path = os.path.join(WORKING_DIRECTORY, input_file)
-    with open(path,"r") as file:
-        content = file.read()
-    return content
 
 @tool
 def find_pseudopotential(element: str,
@@ -154,44 +144,47 @@ def get_lattice_constant(
     with open(os.path.join(working_directory,input_file.split('.')[0]+'.out'),'w') as file:
         file.write(f'\n# {input_file} Lattice constant is {lc}')
     return lc
-   
 
+###TODO
+@tool
+def save_job_list(
+    script_list: Annotated[list[str], "List of scripts to be calculated."],
+    WORKING_DIRECTORY: Annotated[str, "The working directory."],
+) -> Annotated[str, "Path of the saved json file."]:
+    """Save the list of quantum espresso input files to the specified json file path"""
+    os.makedirs(WORKING_DIRECTORY, exist_ok=True)
+    path = os.path.join(WORKING_DIRECTORY, f'job_list.json')
+    job = {'job_list':script_list}
+    with open(path,"w") as file:
+        json.dump(job, file)
+    return f"Job list saved to {path}"
 
-def create_pysqa_prerequisites(WORKING_DIRECTORY: str):
-    '''Create the pysqa prerequisites in the working directory'''
-    with open(os.path.join(WORKING_DIRECTORY, "slurm.sh"), "w") as file:
-        file.write(r"""#!/bin/bash
-#SBATCH -J {{job_name}} # Job name
-#SBATCH -n {{cores_max}} # Number of total cores
-#SBATCH -N {{nodes_max}} # Number of nodes
-#SBATCH --time={{run_time_max | int}}
-#SBATCH -p {{partition}}
-#SBATCH --mem-per-cpu={{memory_max}}M # Memory pool for all cores in MB
-#SBATCH -e sqa.err #change the name of the err file 
-#SBATCH -o sqa.out # File to which STDOUT will be written %j is the job #
-
-{{command}}
-
-                   """)
-        
-    with open(os.path.join(WORKING_DIRECTORY, "queue.yaml"), "w") as file:
-        file.write(r"""queue_type: SLURM
-queue_primary: slurm
-queues:
-  slurm: {
-    job_name: testPysqa,
-    cores_max: 4, 
-    cores_min: 1, 
-    nodes_max: 1,
-    memory_max: 2000,
-    partition: venkvis-cpu,
-    script: slurm.sh
-    }
-                   """)
-
+### HPC tools
+@tool
+def find_job_list(
+    WORKING_DIRECTORY: Annotated[str, "The working directory."],
+) -> Annotated[list[str, str], "List of scripts to be submitted."]:
+    """Find the job list from the specified json file path"""
+    path = os.path.join(WORKING_DIRECTORY, f'job_list.json')
+    with open(path,"r") as file:
+        job_json = json.load(file)
+    job_list = job_json['job_list']
+    return f'The files need to be submitted are {job_list}. Please continue to submit the job.'
 
 @tool
-def generate_submit_and_monitor_job(
+def read_script(
+    WORKING_DIRECTORY: Annotated[str, "The working directory."],
+    input_file: Annotated[str, "The input file to be read."]
+) -> Annotated[str, "read content"]:
+    """read the quantum espresso input file from the specified file path"""
+    ## Error when '/' in the content, manually delete
+    path = os.path.join(WORKING_DIRECTORY, input_file)
+    with open(path,"r") as file:
+        content = file.read()
+    return content
+
+@tool
+def submit_and_monitor_job(
     WORKING_DIRECTORY: str,
     partition: str,
     nnodes: int,
@@ -199,7 +192,7 @@ def generate_submit_and_monitor_job(
     runtime: Annotated[str, "Time limit for the job, in minutes"],
     inputFile: str,
 ) -> str:
-    '''Generate a slurm sbatch submission script for quantum espresso with given parameters, submit the quantum espresso job to HPC, monitor the progress, and return the location of the output file once the job is done'''
+    '''Submit job to supercomputer, return the location of the output file once the job is done'''
     print("checking pysqa prerequisites...")
     # check if slurm.sh and queue.yaml exist in the working directory
     if not os.path.exists(os.path.join(WORKING_DIRECTORY, "slurm.sh")) or not os.path.exists(os.path.join(WORKING_DIRECTORY, "queue.yaml")):
@@ -210,7 +203,7 @@ def generate_submit_and_monitor_job(
     
     job_id = qa.submit_job(
     working_directory=WORKING_DIRECTORY,
-    cores=8,
+    cores=natom,
     memory_max=2000,
     queue="slurm",
     job_name="hh",
