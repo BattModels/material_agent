@@ -25,10 +25,11 @@ dft_agent_prompt = """
                 4. Use the right smearing based on the material.
                 5. If the system involves hubbard U correction, specify starting magnetization in SYSTEM card and hubbard U parameters in HUBBARD card, and use the pre-defined hubbard correction tool.
                 6. Find the pseduopotential filename using the tool provided.
-                7. Report to supervisor you have finished writing the quantum espressi script. Specify the script name.
+                7. Save all the files in to job list and report to supervisor you have finished writing the quantum espressi script. 
             <Requirements>: 
                 1. The electron conv_thr should be 1e-6.
                 2. Try different scale factor if you have no minimum error.
+                3. The final answer should be summarized in a short paragraph.
             """
 
 
@@ -90,7 +91,15 @@ HPC_prompt = f"You are a very powerful high performance computing expert that ru
             Please use the right tool to read the quantum espresso output file and extract the desired quantity. \
             Stop immediately after you give back the result to the supervisor. \
             "
-
-supervisor_prompt = "You are a very powerful supervisor that oversees the work of the powerful assistant and computation material scientist. \
-            You are responsible for ensuring that the assistant and the scientist are working together to achieve the desired bulk modulus. \
-                You should be able to provide feedback to the assistant and the scientist. "
+#### NOT USED(Failed to submit job)
+hpc_agent_prompt =f"""
+            <Role>: 
+                You are a very powerful high performance computing expert that submit jobs to the supercomputer, but don't know current events. 
+            <Objective>: 
+                You are responsible for submitting the job to HPC and monitor the jobs with provided tools. 
+                You can only respond with a complete 'Thought, Action, Action Input' format OR a single 'Final Answer' format. Report to supervisor until you have completed all the task.
+            <Instructions>: 
+                1. Read the job list from the working folder and submit to cluster using appropriate tools.
+                2. Wait for the job to finish and monitor the job status.            
+                3. Read output file and extract the desired quantity.
+            """

@@ -84,16 +84,18 @@ def create_graph(config: dict) -> StateGraph:
         )
         return supervisor_chain.invoke(state)
     ### DFT Agent
-    dft_tools = [get_kpoints, dummy_structure, find_pseudopotential,write_script,get_bulk_modulus,get_lattice_constant]
+    dft_tools = [get_kpoints, dummy_structure, find_pseudopotential,write_script,get_bulk_modulus,get_lattice_constant,save_job_list]
     dft_agent = create_react_agent(llm, tools=dft_tools,
                                    state_modifier=dft_agent_prompt)   
     dft_node = functools.partial(agent_node, agent=dft_agent, name="DFT_Agent")
 
 
     ### HPC Agent
-    hpc_tools = [read_script, generate_submit_and_monitor_job, read_energy_from_output]
+    # hpc_tools = [read_script, submit_and_monitor_job, read_energy_from_output]
+    hpc_tools = [submit_and_monitor_job, read_energy_from_output,find_job_list]
+
     hpc_agent = create_react_agent(llm, tools=hpc_tools,
-                                   state_modifier=HPC_prompt+'Report to supervisor you have finished the task.')
+                                   state_modifier=HPC_prompt)
 
     hpc_node = functools.partial(agent_node, agent=hpc_agent, name="HPC_Agent")
 
