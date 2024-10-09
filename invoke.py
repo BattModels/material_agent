@@ -27,13 +27,18 @@ if __name__ == "__main__":
 
     # userMessage = "Generate a quantum espresso input for a crystal structure with 50% Cu atoms and Au atoms and calculate its bulk modules. Try until reaches 5 trials."
     ## Convergence Test
-    # userMessage = "You are going to do cenvergence test for Li BCC structure. Compute the the total energy for different kpoints based on kspacing 0.1,0.2 ,0.3 and low, normal, high ecutwfc. \
-    #     Use the highest ecutwfc and kpoints convergence test. Use the highest kpoints for ecutwfc convergence test. Report the results when finished."
+    userMessage = '''
+    You are going to do cenvergence test  for Li BCC structure. Compute the the total energy for different kpoints based on kspacing 0.1,0.2 ,0.3 and 40,60,80,100,120 ecutwfc.
+    Use the highest ecutwfc and kpoints convergence test. Use the highest kpoints for ecutwfc convergence test. Run the calculation through slurm and report the result.
+    '''
 
-    # userMessage = "Generate a quantum espresso input for a crystal structure with 50% Cu atoms and Au atoms and calculate its bulk modules. Try until reaches 5 trials."
+    userMessage_2 = '''
+    Based on previous result, choose appropriate kpoints and ecutwfc.
+    Then generate  5 input script with different scale factor to calculate EOS. When the calculation is done, calculate the lattice constant
+    '''
     # userMessage = "Generate a quantum espresso input for a crystal structure with 50% Cu atoms and Au atoms, and run the calculation with slurm to get energy."
-    userMessage = f'Generate 27 quantum espresso input file for {namelist}. \
-                            calculate their lattice constant and report it for each time, if failed ,just report the error message and continue the next.'
+    # userMessage = f'Generate 27 quantum espresso input file for {namelist}. \
+    #                         calculate their lattice constant and report it for each time, if failed ,just report the error message and continue the next.'
 
 
     
@@ -48,6 +53,7 @@ if __name__ == "__main__":
     _set_if_undefined("LANGSIM_MODEL")
 
     graph = create_graph(config)
+    llm_config = {"configurable": {"thread_id": "1", 'recursion_limit': 1000}}
     # llm = ChatAnthropic(model=config["LANGSIM_MODEL"], api_key=config['ANTHROPIC_API_KEY'])
 
     # graph = create_react_agent(llm, tools=[get_kpoints, dummy_structure, find_pseudopotential,write_script,get_bulk_modulus],
@@ -63,8 +69,19 @@ if __name__ == "__main__":
                      The working directory is {WORKING_DIRECTORY}.\
                         The pseduopotential directory is {pseudo_dir}.")
         ]
-    }
-,{"recursion_limit": 1000}):
+    },llm_config):
+        if "__end__" not in s:
+            print(s)
+            print("----")
+
+    for s in graph.stream(
+    {
+        "messages": [
+            HumanMessage(content=f"{userMessage_2} \
+                     The working directory is {WORKING_DIRECTORY}.\
+                        The pseduopotential directory is {pseudo_dir}.")
+        ]
+    },llm_config):
         if "__end__" not in s:
             print(s)
             print("----")

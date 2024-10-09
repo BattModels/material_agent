@@ -2,6 +2,7 @@
 from fileinput import filename
 from cycler import V
 from matplotlib.pyplot import sca
+from networkx import volume
 from src.utils import *
 from ase import Atoms, Atom
 from langchain.agents import tool
@@ -13,7 +14,7 @@ import ast
 import re
 from ase.io import read
 from ase.calculators.espresso import Espresso, EspressoProfile
-from ase.eos import calculate_eos
+from ase.eos import calculate_eos,EquationOfState
 from ase.units import kJ
 from ase.filters import ExpCellFilter
 from ase.optimize import BFGS, FIRE
@@ -145,7 +146,7 @@ def get_lattice_constant(
         file.write(f'\n# {input_file} Lattice constant is {lc}')
     return lc
 
-###TODO
+
 @tool
 def save_job_list(
     script_list: Annotated[list[str], "List of scripts to be calculated."],
@@ -247,3 +248,29 @@ def read_energy_from_output(
     return f"the energy is {atoms.get_potential_energy()} eV"
 
 
+@tool
+def calculate_lc(
+    WORKING_DIRECTORY: Annotated[str, "The working directory."],
+) -> Annotated[str, "Path of the saved json file."]:
+    """Read the output file and calculate the lattice constant"""
+
+    job_list = os.path.join(WORKING_DIRECTORY, f'job_list.json')
+    with open(job_list,"r") as file:
+        job_json = json.load(file)
+
+    volume_list = []
+    energy_list = []
+    for job in job_json['job_list']:
+        atom = read(os.path.join(WORKING_DIRECTORY, job+'.pwo'))
+        volume_list.append(atom.get_volume())
+        energy_list.append(atom.get_potential_energy())
+    eos = EquationOfState(volume_list, energy_list)
+    v0, e0, B = eos.fit()
+    lc = (v0)**(1/3)
+
+    with open(os.path.join(WORKING_DIRECTORY,'lattice_constant.json'),"r") as file:
+        lc_dict = json.load(file)
+    with open(os.path.join(WORKING_DIRECTORY,'lattice_constant.json'),"w") as file:
+        lc_dict[atom.symbols] = lc
+        json.dump(lc_dict, file)
+    return f'The lattice constant is {lc}'
