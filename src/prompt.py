@@ -19,16 +19,16 @@ dft_agent_prompt = """
                 You are responsible for generating the quantum espresso input file for the given material and parameter setting with provided tools. 
                 You can only respond with a single complete 'Thought, Action, Action Input' format OR a single 'Final Answer' format. 
             <Instructions>: 
-                1. Validate that the input file contains chemical elements from the periodic table.
-                2. Include CONTROL, SYSTEM, ELECTRONS, ATOMIC_SPECIES, K_POINTS, ATOMIC_POSITIONS, and CELL. 
-                3. Always generate conventional cell with ibrav=0 and do not use celldm and angstrom at the same time.
-                4. Use the right smearing based on the material.
+                1. Find the correct pseduopotential filename using the tool provided.
+                2. Calculate the k points based on the kspacing and generate the input script.
+                3. Include CONTROL, SYSTEM, ELECTRONS, ATOMIC_SPECIES, K_POINTS, ATOMIC_POSITIONS, and CELL. 
+                4. Always generate conventional cell with ibrav=0 and do not use celldm and angstrom at the same time.
                 5. If the system involves hubbard U correction, specify starting magnetization in SYSTEM card and hubbard U parameters in HUBBARD card, and use the pre-defined hubbard correction tool.
-                6. Find the pseduopotential filename using the tool provided.
+                6. If we need to calculate EOS, write five input script with different scale factor.
                 7. Save all the files in to job list and report to supervisor you have finished writing the quantum espressi script. 
             <Requirements>: 
                 1. The electron conv_thr should be 1e-6.
-                2. Try different scale factor if you have no minimum error.
+                2. Use the right smearing based on the material.
                 3. The final answer should be summarized in a short paragraph.
             """
 

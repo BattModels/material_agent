@@ -13,6 +13,7 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import AIMessage
 from langgraph.graph import END, StateGraph, START
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import ToolNode,create_react_agent
 from pydantic import BaseModel
 
@@ -39,7 +40,7 @@ def router(state) -> Literal["call_tool", "__end__", "continue"]:
         return "__end__"
     return "continue"
 
-members = ["DFT_Agent", "HPC_Agent",'CSS_Agent']
+members = ["DFT_Agent", "HPC_Agent"]
 system_prompt = (
     "You are a supervisor tasked with managing a conversation between the"
     " following workers:  {members}. Given the following user request,"
@@ -75,16 +76,22 @@ def agent_node(state, agent, name):
     return {"messages": [HumanMessage(content=s["messages"][-1].content, name=name)]}
 
 def create_graph(config: dict) -> StateGraph:
+    # Define the model
     if 'claude' in config['LANGSIM_MODEL']:
         llm = ChatAnthropic(model=config["LANGSIM_MODEL"], api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    # System Supervisor
     def supervisor_agent(state):
         supervisor_chain = (
             prompt
             | llm.with_structured_output(routeResponse)
         )
         return supervisor_chain.invoke(state)
+    ## Memory Saver
+    memory = MemorySaver()
+
+
     ### DFT Agent
-    dft_tools = [get_kpoints, dummy_structure, find_pseudopotential,write_script,get_bulk_modulus,get_lattice_constant,save_job_list]
+    dft_tools = [get_kpoints, find_pseudopotential,write_script,calculate_lc,save_job_list]
     dft_agent = create_react_agent(llm, tools=dft_tools,
                                    state_modifier=dft_agent_prompt)   
     dft_node = functools.partial(agent_node, agent=dft_agent, name="DFT_Agent")
@@ -99,8 +106,8 @@ def create_graph(config: dict) -> StateGraph:
 
     hpc_node = functools.partial(agent_node, agent=hpc_agent, name="HPC_Agent")
 
-    css_agent = create_react_agent(llm, tools=[],state_modifier=None)
-    css_node = functools.partial(agent_node, agent=css_agent, name="CSS_Agent")
+    # css_agent = create_react_agent(llm, tools=[],state_modifier=None)
+    # css_node = functools.partial(agent_node, agent=css_agent, name="CSS_Agent")
 
 
     save_graph_to_file(dft_agent, config['working_directory'], "dft_agent")
@@ -111,7 +118,7 @@ def create_graph(config: dict) -> StateGraph:
     graph = StateGraph(AgentState)
     graph.add_node("DFT_Agent", dft_node)
     graph.add_node("HPC_Agent", hpc_node)
-    graph.add_node("CSS_Agent", css_node)
+    # graph.add_node("CSS_Agent", css_node)
 
     graph.add_node("Supervisor", supervisor_agent)
     
@@ -124,6 +131,6 @@ def create_graph(config: dict) -> StateGraph:
     conditional_map["FINISH"] = END
     graph.add_conditional_edges("Supervisor", lambda x: x["next"], conditional_map)
     graph.add_edge(START, "Supervisor") 
-    return graph.compile()
+    return graph.compile(checkpointer=memory)
 
 
