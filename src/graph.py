@@ -1,3 +1,4 @@
+from dis import Instruction
 import operator
 from typing import Annotated, Sequence, TypedDict,Literal
 import functools
@@ -41,13 +42,21 @@ def router(state) -> Literal["call_tool", "__end__", "continue"]:
     return "continue"
 
 members = ["DFT_Agent", "HPC_Agent"]
-system_prompt = (
-    "You are a supervisor tasked with managing a conversation between the"
-    " following workers:  {members}. Given the following user request,"
-    " respond with the worker to act next. Each worker will perform a"
-    " task and respond with their results and status. When finished,"
-    " respond with FINISH."
+instructions = [dft_agent_prompt, HPC_prompt]
+
+membersInstruction = ""
+for member, instruction in zip(members, instructions):
+    membersInstruction += f"{member}'s instruction is: {instruction}\n"
+
+system_prompt = (f'''
+    You are a supervisor tasked with managing a conversation between the
+    following workers:  {members}, based on {membersInstruction}. Given the following user request,
+    respond with the worker to act next. 
+    When finished,respond with FINISH.
+    '''
 )
+# DFT_Agent is responsible for generating scripts and computing lattice constants. HPC_Agent is responsible for submitting jobs and reading output.
+
 # Our team supervisor is an LLM node. It just picks the next agent to process
 # and decides when the work is completed
 options = ["FINISH"] + members
@@ -99,7 +108,7 @@ def create_graph(config: dict) -> StateGraph:
 
     ### HPC Agent
     # hpc_tools = [read_script, submit_and_monitor_job, read_energy_from_output]
-    hpc_tools = [submit_and_monitor_job, read_energy_from_output,find_job_list]
+    hpc_tools = [submit_and_monitor_job,find_job_list,read_energy_from_output]
 
     hpc_agent = create_react_agent(llm, tools=hpc_tools,
                                    state_modifier=HPC_prompt)
