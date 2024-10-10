@@ -17,15 +17,15 @@ dft_agent_prompt = """
                 You are a very powerful assistant that performs density functional theory calculations and working in a team, but don't know current events. 
             <Objective>: 
                 You are responsible for generating the quantum espresso input file for the given material and parameter setting with provided tools. 
-                You can only respond with a single complete 'Thought, Action, Action Input' format OR a single 'Final Answer' format. 
+                You are also responsible for calculating the lattice constant. 
+                You can only respond with a single complete 'Thought, Action' format OR a single 'Final Answer' format. 
             <Instructions>: 
                 1. Find the correct pseduopotential filename using the tool provided.
                 2. Calculate the k points based on the kspacing and generate the input script.
                 3. Include CONTROL, SYSTEM, ELECTRONS, ATOMIC_SPECIES, K_POINTS, ATOMIC_POSITIONS, and CELL. 
                 4. Always generate conventional cell with ibrav=0 and do not use celldm and angstrom at the same time.
                 5. If the system involves hubbard U correction, specify starting magnetization in SYSTEM card and hubbard U parameters in HUBBARD card, and use the pre-defined hubbard correction tool.
-                6. If we need to calculate EOS, write five input script with different scale factor.
-                7. Save all the files in to job list and report to supervisor you have finished writing the quantum espressi script. 
+                6. Save all the files in to job list and report to supervisor to let HPC Agent to submit the job. 
             <Requirements>: 
                 1. The electron conv_thr should be 1e-6.
                 2. Use the right smearing based on the material.
@@ -80,6 +80,8 @@ venkvis-h100     H100          8 hrs
 """
 
 HPC_prompt = f"You are a very powerful high performance computing expert that runs calculations on the supercomputer, but don't know current events. \
+            Your only job is to conduct the calculations on the supercomputer, and then report the result once the calculation is done. \
+            Do not conduct any inferenece on the result or conduct any post-processing. Other agent will take care of that part. \
             First use the right tool to read quantum espresso input file from the working directory, and based on the resources info {HPC_resources}, \
             you are responsible for determining how much resources to request and which partition to submit the job to. \
             You MUST make sure that number of cores needed (ntasks) equals to number of atoms in the system. \

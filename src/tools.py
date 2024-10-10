@@ -25,7 +25,7 @@ from pysqa import QueueAdapter
 import json
 ### DFT tools
 @tool
-def get_kpoints(atom_dict: AtomsDict, kspacing: float) -> str:
+def get_kpoints(atom_dict: AtomsDict, kspacing: float) -> list:
     """Returns the kpoints of a given ase atoms object and specific kspacing."""
     atoms = Atoms(**atom_dict.dict())
     cell = atoms.cell
@@ -199,7 +199,16 @@ def submit_and_monitor_job(
     if not os.path.exists(os.path.join(WORKING_DIRECTORY, "slurm.sh")) or not os.path.exists(os.path.join(WORKING_DIRECTORY, "queue.yaml")):
         print("Creating pysqa prerequisites...")
         create_pysqa_prerequisites(WORKING_DIRECTORY)
+
+    ## Check if the input file exists
+    if not os.path.exists(os.path.join(WORKING_DIRECTORY, inputFile)):
+        return f"Input file {inputFile} does not exist, please use the find job list tool to submit the file in the job list"
     print("Generating batch script...")
+
+    ## Check if the output file exists 
+    if os.path.exists(os.path.join(WORKING_DIRECTORY, f"{inputFile}.pwo")):
+        ## Supervisor sometimes ask to submit the job again, so we need to check if the output file exists
+        return f"Output file {inputFile}.pwo already exists, the calculation is done"
     qa = QueueAdapter(directory=WORKING_DIRECTORY)
     
     job_id = qa.submit_job(
@@ -256,11 +265,13 @@ def calculate_lc(
 
     job_list = os.path.join(WORKING_DIRECTORY, f'job_list.json')
     with open(job_list,"r") as file:
+        print('reading job list')
         job_json = json.load(file)
 
     volume_list = []
     energy_list = []
     for job in job_json['job_list']:
+        print(f'reading {job}')
         atom = read(os.path.join(WORKING_DIRECTORY, job+'.pwo'))
         volume_list.append(atom.get_volume())
         energy_list.append(atom.get_potential_energy())
@@ -268,9 +279,24 @@ def calculate_lc(
     v0, e0, B = eos.fit()
     lc = (v0)**(1/3)
 
-    with open(os.path.join(WORKING_DIRECTORY,'lattice_constant.json'),"r") as file:
-        lc_dict = json.load(file)
-    with open(os.path.join(WORKING_DIRECTORY,'lattice_constant.json'),"w") as file:
-        lc_dict[atom.symbols] = lc
+    # Check if the json file exists
+    json_file = os.path.join(WORKING_DIRECTORY, 'lattice_constant.json')
+    if not os.path.exists(json_file):
+        with open(json_file, "w") as file:
+            json.dump({}, file)
+
+    # Load the existing dictionary from the json file
+    with open(json_file, "r") as file:
+        try:
+            lc_dict = json.load(file)
+        except:
+            lc_dict = {}
+
+    # Update the dictionary with the new lattice constant
+    lc_dict[str(atom.symbols)] = lc
+
+    # Save the updated dictionary back to the json file
+    with open(json_file, "w") as file:
         json.dump(lc_dict, file)
+
     return f'The lattice constant is {lc}'
