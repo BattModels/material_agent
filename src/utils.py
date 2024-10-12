@@ -1,7 +1,7 @@
 import os,yaml
 from xml.dom.minidom import Element
 from typing import Callable, List, Literal
-from langchain_core.pydantic_v1 import BaseModel
+from pydantic import BaseModel
 from IPython.display import Image, display
 from langchain_core.runnables.graph import CurveStyle, MermaidDrawMethod, NodeStyles
 import getpass
