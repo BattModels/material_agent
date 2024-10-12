@@ -1,4 +1,3 @@
-from networkx import draw
 import os,yaml
 from xml.dom.minidom import Element
 from typing import Callable, List, Literal
@@ -11,12 +10,13 @@ def load_config(path: str):
     with open(path) as f:
         config = yaml.load(f, Loader=yaml.FullLoader)
     ## Set up environment variables
-    os.environ['ANTHROPIC_API_KEY'] = config['ANTHROPIC_API_KEY']   
-    os.environ["LANGSIM_PROVIDER"] = config['LANGSIM_PROVIDER']
-    os.environ["LANGSIM_API_KEY"] = config['LANGSIM_API_KEY']
-    os.environ["LANGSIM_MODEL"] = config['LANGSIM_MODEL']
+    for key, value in config.items():
+        os.environ[key] = value
     return config
-
+def check_config(config: dict):
+    for key, value in config.items():
+        _set_if_undefined(key)
+    return 'Loaded config successfully'
 class AtomsDict(BaseModel):
     numbers: List[int]
     positions: List[List[float]]
@@ -152,3 +152,6 @@ queues:
     script: slurm.sh
     }
                    """)
+    
+def print_dir():
+    print(WORKING_DIR)

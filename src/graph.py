@@ -1,4 +1,3 @@
-from dis import Instruction
 import operator
 from typing import Annotated, Sequence, TypedDict,Literal
 import functools
@@ -42,7 +41,7 @@ def router(state) -> Literal["call_tool", "__end__", "continue"]:
     return "continue"
 
 members = ["DFT_Agent", "HPC_Agent"]
-instructions = [dft_agent_prompt, HPC_prompt]
+instructions = [dft_agent_prompt, hpc_agent_prompt]
 
 membersInstruction = ""
 for member, instruction in zip(members, instructions):
@@ -100,7 +99,7 @@ def create_graph(config: dict) -> StateGraph:
 
 
     ### DFT Agent
-    dft_tools = [get_kpoints, find_pseudopotential,write_script,calculate_lc,save_job_list]
+    dft_tools = [find_pseudopotential,write_script,calculate_lc,generate_convergence_test,generate_eos_test]
     dft_agent = create_react_agent(llm, tools=dft_tools,
                                    state_modifier=dft_agent_prompt)   
     dft_node = functools.partial(agent_node, agent=dft_agent, name="DFT_Agent")
@@ -108,18 +107,14 @@ def create_graph(config: dict) -> StateGraph:
 
     ### HPC Agent
     # hpc_tools = [read_script, submit_and_monitor_job, read_energy_from_output]
-    hpc_tools = [submit_and_monitor_job,find_job_list,read_energy_from_output]
+    hpc_tools = [submit_and_monitor_job,find_job_list,read_energy_from_output,add_resource_suggestion]
 
     hpc_agent = create_react_agent(llm, tools=hpc_tools,
-                                   state_modifier=HPC_prompt)
+                                   state_modifier=hpc_agent_prompt)
 
     hpc_node = functools.partial(agent_node, agent=hpc_agent, name="HPC_Agent")
 
-    # css_agent = create_react_agent(llm, tools=[],state_modifier=None)
-    # css_node = functools.partial(agent_node, agent=css_agent, name="CSS_Agent")
-
-
-    save_graph_to_file(dft_agent, config['working_directory'], "dft_agent")
+    # save_graph_to_file(dft_agent, config['working_directory'], "dft_agent")
     
 
 
