@@ -1,4 +1,6 @@
 
+
+from math import e
 from src.utils import *
 from ase import Atoms, Atom
 from langchain.agents import tool
@@ -20,6 +22,7 @@ import time
 from pysqa import QueueAdapter
 import json
 ### DFT tools
+
 @tool
 def get_kpoints(atom_dict: AtomsDict, kspacing: float) -> list:
     """Returns the kpoints of a given ase atoms object and specific kspacing."""
@@ -35,6 +38,7 @@ def get_kpoints(atom_dict: AtomsDict, kspacing: float) -> list:
             2 * ((np.ceil(2 * np.pi / np.linalg.norm(ii) / kspacing).astype(int)) // 2 + 1) for ii in cell
         ]
     return kpoints
+
 
 @tool
 def dummy_structure(concentration: float,
@@ -64,8 +68,15 @@ def write_script(
 
     os.makedirs(WORKING_DIRECTORY, exist_ok=True)
     path = os.path.join(WORKING_DIRECTORY, f'{file_name}')
+
+    ## If content ends with '/' then remove it
+    if content.endswith('/'):
+        content = content[:-1]
+    
     with open(path,"w") as file:
         file.write(content)
+    
+    
     return f"Document saved to {path}"
 
 @tool
@@ -122,7 +133,7 @@ def find_pseudopotential(element: str) -> str:
                 return f'The pseudopotential file for {element} is {file} under {pseudo_dir}'
     return f"Could not find pseudopotential for {element}"
 
-# Not used
+
 @tool
 def get_bulk_modulus(
     working_directory: str,
@@ -158,7 +169,7 @@ def get_bulk_modulus(
 
     return bulk_modulus
 
-# Not used
+
 @tool
 def get_lattice_constant(
     working_directory: str,
@@ -218,6 +229,10 @@ def generate_convergence_test(input_file_name:str,kspacing:list[float], ecutwfc:
         with open(input_file, 'r') as f:
             lines = f.readlines()
             for i, line in enumerate(lines):
+                ## Change the prefix of the output file
+                if 'outdir' in line:
+                    lines[i] = f"    outdir = './out_k_{k}_ecutwfc_{ecutwfc_max}'\n"
+
                 ## Find the ecutwfc line
                 if 'ecutwfc' in line:
                     lines[i] = f'    ecutwfc = {ecutwfc_max},\n'
@@ -241,6 +256,8 @@ def generate_convergence_test(input_file_name:str,kspacing:list[float], ecutwfc:
         with open(input_file, 'r') as f:
             lines = f.readlines()
             for i, line in enumerate(lines):
+                if 'outdir' in line:
+                    lines[i] = f"    outdir = './out_k_{kspacing_min}_ecutwfc_{e}',\n"
                 ## Find the ecutwfc line
                 if 'ecutwfc' in line:
                     lines[i] = f'    ecutwfc = {e},\n'
@@ -294,6 +311,9 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
             lines = f.readlines()
         # Update the scale
         for i, line in enumerate(lines):
+            if 'outdir' in line:
+                lines[i] = f"outdir = '    ./out_{scale}'\n"
+
             if 'ecutwfc' in line:
                 lines[i] = f"    ecutwfc = {ecutwfc},\n"
             if 'CELL_PARAMETERS' in line:
@@ -343,7 +363,7 @@ def find_job_list() -> str:
     job_list = job_json['job_list']
     return f'The files need to be submitted are {job_list}. Please continue to submit the job.'
 
-# Not used
+
 @tool
 def read_script(
     WORKING_DIRECTORY: Annotated[str, "The working directory."],
@@ -382,7 +402,7 @@ def add_resource_suggestion(
     with open(json_file, "w") as file:
         json.dump(resource_dict, file)
         
-    return f"Resource suggestion for {qeInputFileName} saved to {json_file}"
+    return f"Resource suggestion for {qeInputFileName} saved scucessfully"
 
 @tool
 def submit_and_monitor_job() -> str:
@@ -432,7 +452,7 @@ def submit_and_monitor_job() -> str:
         cores=resource_dict[inputFile]['ntasks'],
         memory_max=2000,
         queue="slurm",
-        job_name="hh",
+        job_name="agent_job",
         cores_max=resource_dict[inputFile]['ntasks'],
         nodes_max=resource_dict[inputFile]['nnodes'],
         partition=resource_dict[inputFile]['partition'],
@@ -477,12 +497,104 @@ echo "Job Ended at `date`"
         
     print(f"All job in job_list has finished")
 
-    return f"All job in job_list has finished!"
+    return f"All job in job_list has finished, please check the output file"
+
+@tool
+def submit_single_job(
+    inputFile: str
+) -> str:
+    '''Submit a single job to supercomputer, return the location of the output file once the job is done'''
+    print("checking pysqa prerequisites...")
+    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    # check if slurm.sh and queue.yaml exist in the working directory
+    if not os.path.exists(os.path.join(WORKING_DIRECTORY, "slurm.sh")) or not os.path.exists(os.path.join(WORKING_DIRECTORY, "queue.yaml")):
+        print("Creating pysqa prerequisites...")
+        create_pysqa_prerequisites(WORKING_DIRECTORY)
+    
+    qa = QueueAdapter(directory=WORKING_DIRECTORY)
+        
+    
+    # load reousrce suggestions
+    resource_suggestions = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.json')
+    with open(resource_suggestions, "r") as file:
+        resource_dict = json.load(file)
+    
+    ## Check resource key is valid
+    
+    if inputFile not in resource_dict.keys():
+        return f"Resource suggestion for {inputFile} is not found, please use the add_resource_suggestion tool to add the resource suggestion"
+    
+
+    
+    queueIDList = []
+
+
+    ## Check if the input file exists
+    if not os.path.exists(os.path.join(WORKING_DIRECTORY, inputFile)):
+        return f"Input file {inputFile} does not exist, please use the find job list tool to submit the file in the job list"
+    print("Generating batch script...")
+
+    ## Check if the output file exists 
+    if os.path.exists(os.path.join(WORKING_DIRECTORY, f"{inputFile}.pwo")):
+        ## Supervisor sometimes ask to submit the job again, so we need to check if the output file exists
+        return f"Output file {inputFile}.pwo already exists, the calculation is done"
+        
+        
+    job_id = qa.submit_job(
+        working_directory=WORKING_DIRECTORY,
+        cores=resource_dict[inputFile]['ntasks'],
+        memory_max=2000,
+        queue="slurm",
+        job_name="agent_job",
+        cores_max=resource_dict[inputFile]['ntasks'],
+        nodes_max=resource_dict[inputFile]['nnodes'],
+        partition=resource_dict[inputFile]['partition'],
+        run_time_max=resource_dict[inputFile]['runtime'],
+        command =f"""
+export OMP_NUM_THREADS=1
+
+spack load quantum-espresso@7.2
+
+echo "Job started on `hostname` at `date`"
+
+mpirun pw.x < {inputFile} > {inputFile}.pwo
+
+echo " "
+echo "Job Ended at `date`"
+    """
+        )
+        
+    if job_id is None:
+        return "Job submission failed"
+
+    queueIDList.append(job_id)
+    
+    
+    prevCount = len(queueIDList)
+    while True:
+        count = 0
+        print("waiting for", end=" ")
+        for queueID in queueIDList:
+            if qa.get_status_of_job(process_id=queueID):
+                count += 1
+                print(queueID, end=" ")
+        print("to finish", end="\r")
+        
+        if count < prevCount:
+            print()
+            prevCount = count
+        if count == 0:
+            break
+        time.sleep(1)
+        
+    print(f"Job has finished")
+
+    return f"Job has finished, please check the output file"   
 
 @tool
 def read_energy_from_output(
 ) -> str:
-    '''Read the total energy from the quantum espresso job .pwo file and return it in a string'''
+    '''Read the total energy from the output file in job list and return it in a string'''
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
     # load job_list.jason
     job_list_dir = os.path.join(WORKING_DIRECTORY, f'job_list.json')
@@ -495,13 +607,16 @@ def read_energy_from_output(
         output_file = job + '.pwo'
         # print(f"Reading output file {output_file}")
         file_path = os.path.join(WORKING_DIRECTORY, output_file)
-        print(file_path)
+        # print(file_path)
         # Check if the output file exists
         if not os.path.exists(file_path):
             return f"Output file {output_file} does not exist, please check the job list"
-        atoms = read(file_path)
-        result += f"Energy read from job {job} is {atoms.get_potential_energy()}. "
-        print(result)
+        try:
+            atoms = read(file_path)
+        except:
+            return f"Invalid output file {output_file} or calculation failed, please submit the {job} again."
+        result += f"Energy read from {job} is {atoms.get_potential_energy()}. "
+        # print(result)
         time.sleep(1)
     # check input file in job list
     # file_path = os.path.join(WORKING_DIRECTORY, input_file)
@@ -509,3 +624,23 @@ def read_energy_from_output(
     # return f"Energy read from job {input_file} is {atoms.get_potential_energy()}"
         
     return result
+
+
+@tool
+def read_single_output(
+    input_file: str
+) -> str:
+    '''Read the total energy from the file in job list and return it in a string'''
+    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    # load job_list.jason
+    output_file = input_file + '.pwo'
+    file_path = os.path.join(WORKING_DIRECTORY, output_file)
+    # print(file_path)
+    # Check if the output file exists
+    if not os.path.exists(file_path):
+        return f"Output file {output_file} does not exist, please check the job list"
+    try:
+        atoms = read(file_path)
+    except:
+        return f"Invalid output file {output_file} or calculation failed, please submit the {input_file} again."
+    return f"Energy read from job {input_file} is {atoms.get_potential_energy()}"

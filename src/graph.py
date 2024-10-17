@@ -18,8 +18,9 @@ from langgraph.prebuilt import ToolNode,create_react_agent
 from pydantic import BaseModel
 
 from src.agent import create_agent
-from src.tools import *
-from src.prompt import *
+from src.tools import find_pseudopotential, submit_single_job,write_script,calculate_lc,generate_convergence_test,generate_eos_test,\
+submit_and_monitor_job,find_job_list,read_energy_from_output,add_resource_suggestion
+from src.prompt import dft_agent_prompt,hpc_agent_prompt
 # This defines the object that is passed between each node
 # in the graph. We will create different nodes for each agent and tool
 class AgentState(TypedDict):
@@ -48,12 +49,27 @@ for member, instruction in zip(members, instructions):
     membersInstruction += f"{member}'s instruction is: {instruction}\n"
 
 system_prompt = (f'''
-    You are a supervisor tasked with managing a conversation between the
-    following workers:  {members}, based on {membersInstruction}. Given the following user request,
-    respond with the worker to act next. 
-    When finished,respond with FINISH.
+    <Role>
+        You are a supervisor tasked with managing a conversation for scientific computing between the following workers: {members}.
+    <Objective>
+        Given the following user request, respond with the member to act next. When finished,respond with FINISH.
+    <Member>
+        Here are the ability of each member. 
+        <DFT Agent>:
+            - Find pseudopotential
+            - Write initial script
+            - Calculate lattice constants.
+        <HPC Agent>:
+            - Submit jobs and read output.
     '''
 )
+# system_prompt = (f'''
+#     You are a supervisor tasked with managing a conversation between the
+#     following workers:  {members}, based on {membersInstruction}. Given the following user request,
+#     respond with the worker to act next. 
+#     When finished,respond with FINISH.
+#     '''
+# )
 # DFT_Agent is responsible for generating scripts and computing lattice constants. HPC_Agent is responsible for submitting jobs and reading output.
 
 # Our team supervisor is an LLM node. It just picks the next agent to process
@@ -99,7 +115,7 @@ def create_graph(config: dict) -> StateGraph:
 
 
     ### DFT Agent
-    dft_tools = [find_pseudopotential,write_script,calculate_lc,generate_convergence_test,generate_eos_test]
+    dft_tools = [find_pseudopotential,write_script,calculate_lc,generate_convergence_test,generate_eos_test,read_energy_from_output]
     dft_agent = create_react_agent(llm, tools=dft_tools,
                                    state_modifier=dft_agent_prompt)   
     dft_node = functools.partial(agent_node, agent=dft_agent, name="DFT_Agent")
@@ -107,7 +123,7 @@ def create_graph(config: dict) -> StateGraph:
 
     ### HPC Agent
     # hpc_tools = [read_script, submit_and_monitor_job, read_energy_from_output]
-    hpc_tools = [submit_and_monitor_job,find_job_list,read_energy_from_output,add_resource_suggestion]
+    hpc_tools = [submit_and_monitor_job,submit_single_job,find_job_list,add_resource_suggestion]
 
     hpc_agent = create_react_agent(llm, tools=hpc_tools,
                                    state_modifier=hpc_agent_prompt)

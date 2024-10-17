@@ -152,6 +152,3 @@ queues:
     script: slurm.sh
     }
                    """)
-    
-def print_dir():
-    print(WORKING_DIR)
