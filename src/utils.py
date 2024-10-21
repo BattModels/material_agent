@@ -1,4 +1,5 @@
 import os,yaml
+import pandas as pd
 from xml.dom.minidom import Element
 from typing import Callable, List, Literal
 from pydantic import BaseModel
@@ -152,3 +153,40 @@ queues:
     script: slurm.sh
     }
                    """)
+        
+def select_k_ecut(convergence_data: pd.DataFrame, error_threshold: float, natom: int):
+    """
+    Select the k-point and ecut based on the provided error threshold from DFT convergence test results.
+
+    Parameters:
+    convergence_data (pd.DataFrame): A DataFrame containing the following columns:
+                                     'k_point' (int/float), 'ecut' (int/float), 'total_energy' (float)
+    error_threshold (float): The acceptable energy difference (absolute error threshold) in eV.
+
+    Returns: 
+    (int/float, int/float): The selected k-point and ecut values.
+    """
+    # sorted_data = convergence_data.sort_values(by=['ecutwfc', 'kspacing'],ascending=[False,True])
+    min_kspacing = convergence_data['kspacing'].min()
+    max_ecutwfc = convergence_data['ecutwfc'].max()
+    df_kspacing = convergence_data.loc[convergence_data['kspacing'] == min_kspacing].sort_values(by='ecutwfc',ascending=True)
+    ## convert the energy to meV/atom
+    df_kspacing['error'] = (df_kspacing['energy']-df_kspacing.iloc[-1]['energy']).abs()/natom*1000
+    df_kspacing['Acceptable'] = df_kspacing['error'] < error_threshold  
+    ecutwfc_chosen = df_kspacing[df_kspacing['Acceptable'] == True].iloc[0]['ecutwfc']
+    print(df_kspacing)
+    print(f'Chosen ecutwfc: {ecutwfc_chosen}')
+
+
+    df_ecutwfc = convergence_data.loc[convergence_data['ecutwfc'] == max_ecutwfc].sort_values(by='kspacing',ascending=False)
+    ## convert the energy to meV/atom
+    df_ecutwfc['error'] = (df_ecutwfc['energy']-df_ecutwfc.iloc[-1]['energy']).abs()/natom*1000
+    df_ecutwfc['Acceptable'] = df_ecutwfc['error'] < error_threshold
+    k_chosen = df_ecutwfc[df_ecutwfc['Acceptable'] == True].iloc[0]['kspacing']
+
+    print(df_ecutwfc)
+    print(f'Chosen kspacing: {k_chosen}')
+
+
+    return k_chosen, ecutwfc_chosen
+

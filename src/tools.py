@@ -1,6 +1,8 @@
 
 
 from math import e
+from networkx import predecessor
+import pandas as pd
 from src.utils import *
 from ase import Atoms, Atom
 from langchain.agents import tool
@@ -8,8 +10,6 @@ import os
 from typing import Annotated,Dict, Literal,Optional
 import numpy as np
 from ase.lattice.cubic import FaceCenteredCubic
-import ast
-import re
 from ase.io import read
 from ase.calculators.espresso import Espresso, EspressoProfile
 from ase.eos import calculate_eos,EquationOfState
@@ -39,6 +39,45 @@ def get_kpoints(atom_dict: AtomsDict, kspacing: float) -> list:
         ]
     return kpoints
 
+@tool
+def get_kspacing_ecutwfc(threshold: float = 1.0) -> Dict[str, list]:
+    '''Read the convergen test result and determine the kspacing and ecutwfc used in the production
+    
+    Input:  threshold: float , the threshold mev/atom to determine the convergence
+
+    '''
+    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    job_list = os.path.join(WORKING_DIRECTORY, f'job_list.json')
+    with open(job_list,"r") as file:
+        job_dict = json.load(file)
+        job_list = job_dict['job_list']
+    ### Find the kpoints and ecutwfc from the output file
+    kspacing = []
+    ecutwfc = []
+    energy_list = []
+    Natom = None
+    for job in job_list:
+        ## Read the output file
+        print(f'reading {job}')
+        kspacing.append(job_dict[job]['k'])
+        ecutwfc.append(job_dict[job]['ecutwfc'])
+        
+        atom = read(os.path.join(WORKING_DIRECTORY, job+'.pwo'))
+        energy = atom.get_potential_energy()
+        energy_list.append(energy)
+        Natom = atom.get_number_of_atoms()
+        
+    convergence_df = pd.DataFrame({'job':job_list,'kspacing':kspacing, 'ecutwfc':ecutwfc, 'energy':energy_list})
+    ## Save the convergence test result if file exist then append to it
+    if os.path.exists(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv')):
+        convergence_df.to_csv(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv'), mode='a', header=False)
+    else:
+        convergence_df.to_csv(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv'))
+    
+    ## Determine the kpoints and ecutwfc based on the threshold
+    k_chosen, ecutwfc_chosen = select_k_ecut(convergence_df, threshold, Natom)
+
+    return {'kspacing':k_chosen, 'ecutwfc':ecutwfc_chosen}
 
 @tool
 def dummy_structure(concentration: float,
@@ -76,8 +115,8 @@ def write_script(
     with open(path,"w") as file:
         file.write(content)
     
-    
-    return f"Document saved to {path}"
+    os.environ['INITIAL_FILE'] = file_name
+    return f"Initial file is created named {file_name}"
 
 @tool
 def calculate_lc() -> str:
@@ -214,12 +253,13 @@ def generate_convergence_test(input_file_name:str,kspacing:list[float], ecutwfc:
     try:
         atom = read(input_file)
     except:
-        return "Invalid input file, please check the file name"
+        INITIAL_FILE = os.environ.get("INITIAL_FILE")
+        return f"Invalid input file, do you want to use {INITIAL_FILE} as the input file?"
     
     cell = atom.cell
     ecutwfc_max = max(ecutwfc)
     kspacing_min = min(kspacing)
-    
+    job_list_dict = {}
     job_list = []
     # Generate the input script for highest ecutwfc different kspacing
     for k in kspacing:
@@ -244,6 +284,7 @@ def generate_convergence_test(input_file_name:str,kspacing:list[float], ecutwfc:
             ## Write the new input script
             new_file_name = f'{os.path.splitext(input_file_name)[0]}_k_{k}_ecutwfc_{ecutwfc_max}.in'
             print(new_file_name)
+            job_list_dict[new_file_name] = {'k':k, 'ecutwfc':ecutwfc_max}
             new_input_file = os.path.join(WORKING_DIRECTORY, new_file_name)
             job_list.append(new_file_name)
             with open(new_input_file, 'w') as f:
@@ -268,6 +309,7 @@ def generate_convergence_test(input_file_name:str,kspacing:list[float], ecutwfc:
 
             ## Write the new input script
             new_file_name = f'{os.path.splitext(input_file_name)[0]}_k_{kspacing_min}_ecutwfc_{e}.in'
+            job_list_dict[new_file_name] = {'k':kspacing_min, 'ecutwfc':e}
             new_input_file = os.path.join(WORKING_DIRECTORY, new_file_name)
             job_list.append(new_file_name)
             with open(new_input_file, 'w') as f:
@@ -275,7 +317,7 @@ def generate_convergence_test(input_file_name:str,kspacing:list[float], ecutwfc:
     ## Remove duplicate files
     job_list = list(set(job_list))
     ## Save the job list as json file
-    job_list_dict = {'job_list':job_list}
+    job_list_dict['job_list'] = job_list
     with open(os.path.join(WORKING_DIRECTORY, 'job_list.json'), 'w') as f:
         json.dump(job_list_dict, f)
     
@@ -292,11 +334,13 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
     '''
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
     input_file = os.path.join(WORKING_DIRECTORY, input_file_name)
+    prefix = input_file_name.split('.')[0]
     # Read the atom object from the input script
     try:
         atom = read(input_file)
     except:
-        return "Invalid input file, please check the file name"
+        INITIAL_FILE = os.environ.get("INITIAL_FILE")
+        return f"Invalid input file, try to use {INITIAL_FILE} as the input file?"
     job_list = []
     
     cell = atom.cell
@@ -325,7 +369,7 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
                 lines[i+1] = f"{kpoints[0]} {kpoints[1]} {kpoints[2]} 0 0 0\n"
     
         ## New input file name
-        new_file_name = f"Li_bcc_{scale}.in"
+        new_file_name = f"{prefix}_{scale}.in"
         job_list.append(new_file_name)
         new_file = os.path.join(WORKING_DIRECTORY, new_file_name)
         with open(new_file, 'w') as f:
@@ -377,11 +421,7 @@ def read_script(
     return content
 @tool
 def add_resource_suggestion(
-    qeInputFileName: str,
-    partition: str,
-    nnodes: int,
-    ntasks: int,
-    runtime: Annotated[str, "Time limit for the job, in minutes"],
+    partition: str
 ) -> Annotated[str, "source suggestion saved location"]:
     """
     After agent generate resource suggestions based on the QE input file, add it to the json file "resource_suggestions.json" in the WORKING_DIRECTORY.
@@ -397,12 +437,17 @@ def add_resource_suggestion(
     with open(json_file, "r") as file:
         resource_dict = json.load(file)
     
-    resource_dict[qeInputFileName] = {"partition": partition, "nnodes": 1, "ntasks": 2, "runtime": 60}
+    ## Load job list
+    job_list_dir = os.path.join(WORKING_DIRECTORY, f'job_list.json')
+    with open(job_list_dir,"r") as file:
+        job_list = json.load(file)['job_list']
+    for job in job_list:
+        resource_dict[job] = {"partition": partition, "nnodes": 1, "ntasks": 2, "runtime": 60}
     
     with open(json_file, "w") as file:
         json.dump(resource_dict, file)
         
-    return f"Resource suggestion for {qeInputFileName} saved scucessfully"
+    return f"All Resource suggestion saved scucessfully"
 
 @tool
 def submit_and_monitor_job() -> str:
@@ -476,7 +521,7 @@ echo "Job Ended at `date`"
 
         queueIDList.append(job_id)
         ## Sleep for 1.5 second to avoid the job submission too fast
-        time.sleep(1.5)
+        time.sleep(5)
     
     prevCount = len(queueIDList)
     while True:
