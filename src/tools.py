@@ -401,7 +401,9 @@ def add_resource_suggestion(
     
     with open(json_file, "w") as file:
         json.dump(resource_dict, file)
-        
+    
+    time.sleep(0.2)
+    
     return f"Resource suggestion for {qeInputFileName} saved scucessfully"
 
 @tool
