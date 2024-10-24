@@ -101,7 +101,7 @@ def calculate_lc() -> str:
     lc = (v0)**(1/3)
 
     # Check if the json file exists
-    json_file = os.path.join(WORKING_DIRECTORY, 'lattice_constant.json')
+    json_file = os.path.join(WORKING_DIRECTORY, '../lattice_constant.json')
     if not os.path.exists(json_file):
         with open(json_file, "w") as file:
             json.dump({}, file)
@@ -402,7 +402,7 @@ def add_resource_suggestion(
     with open(json_file, "w") as file:
         json.dump(resource_dict, file)
     
-    time.sleep(0.2)
+    time.sleep(0.5)
     
     return f"Resource suggestion for {qeInputFileName} saved scucessfully"
 
@@ -478,7 +478,7 @@ echo "Job Ended at `date`"
 
         queueIDList.append(job_id)
         ## Sleep for 1.5 second to avoid the job submission too fast
-        time.sleep(1.5)
+        time.sleep(2)
     
     prevCount = len(queueIDList)
     while True:

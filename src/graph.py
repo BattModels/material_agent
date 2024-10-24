@@ -1,5 +1,5 @@
 import operator
-from typing import Annotated, Sequence, TypedDict,Literal
+from typing import Annotated, Sequence, TypedDict,Literal, List, Dict, Tuple
 import functools
 import os
 
