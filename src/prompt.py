@@ -28,6 +28,7 @@ dft_agent_prompt = """
                 1. The electron conv_thr should be 1e-6.
                 2. Use the right smearing based on the material.
                 3. The final answer should be summarized in a short paragraph.
+                4. Include ecutwfc and set ecutrho
             """
 
 

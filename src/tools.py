@@ -276,6 +276,8 @@ def generate_convergence_test(input_file_name:str,kspacing:list[float], ecutwfc:
                 ## Find the ecutwfc line
                 if 'ecutwfc' in line:
                     lines[i] = f'    ecutwfc = {ecutwfc_max},\n'
+                if 'ecutrho' in line:
+                    lines[i] = f"    ecutrho = {ecutwfc_max*8},\n"
                 
                 ## Find the kpoints line
                 if 'K_POINTS' in line:
@@ -302,6 +304,8 @@ def generate_convergence_test(input_file_name:str,kspacing:list[float], ecutwfc:
                 ## Find the ecutwfc line
                 if 'ecutwfc' in line:
                     lines[i] = f'    ecutwfc = {e},\n'
+                if 'ecutrho' in line:
+                    lines[i] = f"    ecutrho = {e*8},\n"
                 
                 ## Find the kpoints line
                 if 'K_POINTS' in line:
@@ -349,17 +353,19 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
             2 * ((np.ceil(2 * np.pi / np.linalg.norm(ii) / kspacing).astype(int)) // 2 + 1) for ii in cell
         ]
     
-    for scale in np.linspace(0.95, 1.05, 5):
+    for scale in np.linspace(0.98, 1.02, 5):
         # Read the input script
         with open(input_file, 'r') as f:
             lines = f.readlines()
         # Update the scale
         for i, line in enumerate(lines):
             if 'outdir' in line:
-                lines[i] = f"outdir = '    ./out_{scale}'\n"
+                lines[i] = f"    outdir = './out_{scale}'\n"
 
             if 'ecutwfc' in line:
                 lines[i] = f"    ecutwfc = {ecutwfc},\n"
+            if 'ecutrho' in line:
+                lines[i] = f"    ecutrho = {ecutwfc*8},\n"
             if 'CELL_PARAMETERS' in line:
                 lines[i+1] = f"{cell[0][0]*scale} {cell[0][1]*scale} {cell[0][2]*scale}\n"
                 lines[i+2] = f"{cell[1][0]*scale} {cell[1][1]*scale} {cell[1][2]*scale}\n"

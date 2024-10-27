@@ -6,7 +6,7 @@ from langchain_community.vectorstores import Chroma
 from langchain_openai import OpenAIEmbeddings
 
 
-key = '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'
+
 # Set embeddings
 embd = OpenAIEmbeddings()
 
