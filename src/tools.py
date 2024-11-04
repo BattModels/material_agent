@@ -9,7 +9,7 @@ from langchain.agents import tool
 import os 
 from typing import Annotated,Dict, Literal,Optional
 import numpy as np
-from ase.lattice.cubic import FaceCenteredCubic
+from ase.lattice.cubic import FaceCenteredCubic, BodyCenteredCubic, SimpleCubic, Diamond
 from ase.io import read
 from ase.calculators.espresso import Espresso, EspressoProfile
 from ase.eos import calculate_eos,EquationOfState
@@ -40,6 +40,27 @@ def get_kpoints(atom_dict: AtomsDict, kspacing: float) -> list:
     return kpoints
 
 @tool
+def create_structure(
+    element: str,
+    lattice: Literal['fcc', 'bcc', 'sc','diamond'],
+    lattice_constant: float
+) -> AtomsDict:
+    """Create a crystal structure with a given element, lattice type, and scale factor.
+    
+    Input:
+        element: str, the element symbol
+        lattice: Literal['fcc', 'bcc', 'sc','diamond'], the lattice type
+        lattice_constant: float, the lattice constant
+    Output:
+        AtomsDict: the dictionary representation of the crystal structure
+    """
+    
+    ## Map lattice to the corresponding ase function
+    lattice_map = {'fcc':FaceCenteredCubic,'bcc':BodyCenteredCubic,'sc':SimpleCubic,'diamond':Diamond}
+    atoms = lattice_map[lattice](element, latticeconstant=lattice_constant)
+    return atoms.todict()
+
+@tool
 def get_kspacing_ecutwfc(threshold: float = 1.0) -> Dict[str, list]:
     '''Read the convergen test result and determine the kspacing and ecutwfc used in the production
     
@@ -56,16 +77,19 @@ def get_kspacing_ecutwfc(threshold: float = 1.0) -> Dict[str, list]:
     ecutwfc = []
     energy_list = []
     Natom = None
-    for job in job_list:
-        ## Read the output file
-        print(f'reading {job}')
-        kspacing.append(job_dict[job]['k'])
-        ecutwfc.append(job_dict[job]['ecutwfc'])
-        
-        atom = read(os.path.join(WORKING_DIRECTORY, job+'.pwo'))
-        energy = atom.get_potential_energy()
-        energy_list.append(energy)
-        Natom = atom.get_number_of_atoms()
+    try:
+        for job in job_list:
+            ## Read the output file
+            print(f'reading {job}')
+            kspacing.append(job_dict[job]['k'])
+            ecutwfc.append(job_dict[job]['ecutwfc'])
+            
+            atom = read(os.path.join(WORKING_DIRECTORY, job+'.pwo'))
+            energy = atom.get_potential_energy()
+            energy_list.append(energy)
+            Natom = atom.get_number_of_atoms()
+    except:
+        return "Error when reading the output file, please stop and let HPC Agent submit the job "
         
     convergence_df = pd.DataFrame({'job':job_list,'kspacing':kspacing, 'ecutwfc':ecutwfc, 'energy':energy_list})
     ## Save the convergence test result if file exist then append to it
@@ -112,7 +136,7 @@ def write_script(
     if content.endswith('/'):
         content = content[:-1]
     
-    with open(path,"w") as file:
+    with open(path,"w",encoding="ascii") as file:
         file.write(content)
     
     os.environ['INITIAL_FILE'] = file_name
@@ -130,11 +154,14 @@ def calculate_lc() -> str:
 
     volume_list = []
     energy_list = []
-    for job in job_json['job_list']:
-        print(f'reading {job}')
-        atom = read(os.path.join(WORKING_DIRECTORY, job+'.pwo'))
-        volume_list.append(atom.get_volume())
-        energy_list.append(atom.get_potential_energy())
+    try:
+        for job in job_json['job_list']:
+            print(f'reading {job}')
+            atom = read(os.path.join(WORKING_DIRECTORY, job+'.pwo'))
+            volume_list.append(atom.get_volume())
+            energy_list.append(atom.get_potential_energy())
+    except:
+        return "Error when reading the output file, please submit the job "
     eos = EquationOfState(volume_list, energy_list)
     v0, e0, B = eos.fit()
     lc = (v0)**(1/3)
@@ -527,6 +554,10 @@ echo "Job Ended at `date`"
 
         queueIDList.append(job_id)
         ## Sleep for 1.5 second to avoid the job submission too fast
+        time.sleep(5)
+        
+        #  Change the bash script name to avoid the job submission too fast
+        os.rename(os.path.join(WORKING_DIRECTORY, "run_queue.sh"), os.path.join(WORKING_DIRECTORY, f"slurm_{inputFile}.sh"))
         time.sleep(5)
     
     prevCount = len(queueIDList)
