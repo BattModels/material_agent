@@ -1,3 +1,4 @@
+import sqlite3
 import os,yaml
 from xml.dom.minidom import Element
 from typing import Callable, List, Literal
@@ -5,6 +6,7 @@ from pydantic import BaseModel
 from IPython.display import Image, display
 from langchain_core.runnables.graph import CurveStyle, MermaidDrawMethod, NodeStyles
 import getpass
+import pandas as pd
 def load_config(path: str):
     ## Load the configuration file
     with open(path) as f:
@@ -30,7 +32,7 @@ def _set_if_undefined(var: str):
 
 def save_graph_to_file(graph, path: str, name: str):
     try:
-        im = graph.get_graph().draw_mermaid_png()
+        im = graph.get_graph(xray=True).draw_mermaid_png()
         # print(graph.get_graph().draw_mermaid())
         with open(os.path.join(path, f"{name}.png"), "wb") as f:
             f.write(im)
@@ -152,3 +154,76 @@ queues:
     script: slurm.sh
     }
                    """)
+
+def select_k_ecut(convergence_data: pd.DataFrame, error_threshold: float, natom: int):
+    """
+    Select the k-point and ecut based on the provided error threshold from DFT convergence test results.
+
+    Parameters:
+    convergence_data (pd.DataFrame): A DataFrame containing the following columns:
+                                     'k_point' (int/float), 'ecut' (int/float), 'total_energy' (float)
+    error_threshold (float): The acceptable energy difference (absolute error threshold) in eV.
+
+    Returns: 
+    (int/float, int/float): The selected k-point and ecut values.
+    """
+    # sorted_data = convergence_data.sort_values(by=['ecutwfc', 'kspacing'],ascending=[False,True])
+    min_kspacing = convergence_data['kspacing'].min()
+    max_ecutwfc = convergence_data['ecutwfc'].max()
+    df_kspacing = convergence_data.loc[convergence_data['kspacing'] == min_kspacing].sort_values(by='ecutwfc',ascending=True)
+    ## convert the energy to meV/atom
+    df_kspacing['error'] = (df_kspacing['energy']-df_kspacing.iloc[-1]['energy']).abs()/natom*1000
+    df_kspacing['Acceptable'] = df_kspacing['error'] < error_threshold  
+    ecutwfc_chosen = df_kspacing[df_kspacing['Acceptable'] == True].iloc[0]['ecutwfc']
+    print(df_kspacing)
+    print(f'Chosen ecutwfc: {ecutwfc_chosen}')
+
+
+    df_ecutwfc = convergence_data.loc[convergence_data['ecutwfc'] == max_ecutwfc].sort_values(by='kspacing',ascending=False)
+    ## convert the energy to meV/atom
+    df_ecutwfc['error'] = (df_ecutwfc['energy']-df_ecutwfc.iloc[-1]['energy']).abs()/natom*1000
+    df_ecutwfc['Acceptable'] = df_ecutwfc['error'] < error_threshold
+    k_chosen = df_ecutwfc[df_ecutwfc['Acceptable'] == True].iloc[0]['kspacing']
+
+    print(df_ecutwfc)
+    print(f'Chosen kspacing: {k_chosen}')
+
+
+    return k_chosen, ecutwfc_chosen
+
+
+def initialize_database(db_file):
+    # Connect to the SQLite database (create it if it doesn't exist)
+    conn = sqlite3.connect(db_file)
+    cursor = conn.cursor()
+    
+    # Create the table if it doesn't exist
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS resources (
+        filename TEXT PRIMARY KEY,
+        partition TEXT,
+        nnodes INTEGER,
+        ntasks INTEGER,
+        runtime INTEGER
+    )
+    ''')
+    
+    # Commit and close the connection for initialization
+    conn.commit()
+    conn.close()
+
+def add_to_database(resource_dict, db_file):
+    # Connect to the SQLite database
+    conn = sqlite3.connect(db_file)
+    cursor = conn.cursor()
+    
+    # Insert or update each item in the resource_dict
+    for filename, resources in resource_dict.items():
+        cursor.execute('''
+        INSERT OR REPLACE INTO resources (filename, partition, nnodes, ntasks, runtime)
+        VALUES (?, ?, ?, ?, ?)
+        ''', (filename, resources['partition'], resources['nnodes'], resources['ntasks'], resources['runtime']))
+    
+    # Commit and close the connection
+    conn.commit()
+    conn.close()

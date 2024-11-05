@@ -21,6 +21,9 @@ import subprocess
 import time
 from pysqa import QueueAdapter
 import json
+import pandas as pd
+import sqlite3
+from filecmp import cmp
 ### DFT tools
 
 @tool
@@ -39,6 +42,44 @@ def get_kpoints(atom_dict: AtomsDict, kspacing: float) -> list:
         ]
     return kpoints
 
+@tool
+def get_kspacing_ecutwfc(threshold: float = 1.0) -> str:
+    '''Read the convergen test result and determine the kspacing and ecutwfc used in the production
+    Input:  threshold: float , the threshold mev/atom to determine the convergence
+    output: str, the kspacing and ecutwfc used in the production
+    '''
+    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    job_list = os.path.join(WORKING_DIRECTORY, f'job_list.json')
+    with open(job_list,"r") as file:
+        job_dict = json.load(file)
+        job_list = job_dict['job_list']
+    ### Find the kpoints and ecutwfc from the output file
+    kspacing = []
+    ecutwfc = []
+    energy_list = []
+    Natom = None
+    for job in job_list:
+        ## Read the output file
+        print(f'reading {job}')
+        kspacing.append(job_dict[job]['k'])
+        ecutwfc.append(job_dict[job]['ecutwfc'])
+        
+        atom = read(os.path.join(WORKING_DIRECTORY, job+'.pwo'))
+        energy = atom.get_potential_energy()
+        energy_list.append(energy)
+        Natom = atom.get_number_of_atoms()
+        
+    convergence_df = pd.DataFrame({'job':job_list,'kspacing':kspacing, 'ecutwfc':ecutwfc, 'energy':energy_list})
+    ## Save the convergence test result if file exist then append to it
+    if os.path.exists(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv')):
+        convergence_df.to_csv(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv'), mode='a', header=False)
+    else:
+        convergence_df.to_csv(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv'))
+    
+    ## Determine the kpoints and ecutwfc based on the threshold
+    k_chosen, ecutwfc_chosen = select_k_ecut(convergence_df, threshold, Natom)
+
+    return f"Please use kspacing {k_chosen} and ecutwfc {ecutwfc_chosen} for the production calculation"
 
 @tool
 def dummy_structure(concentration: float,
@@ -73,11 +114,11 @@ def write_script(
     if content.endswith('/'):
         content = content[:-1]
     
-    with open(path,"w") as file:
+    with open(path,"w",encoding="ascii") as file:
         file.write(content)
     
-    
-    return f"Document saved to {path}"
+    os.environ['INITIAL_FILE'] = file_name
+    return f"Initial file is created named {file_name}"
 
 @tool
 def calculate_lc() -> str:
@@ -96,6 +137,7 @@ def calculate_lc() -> str:
         atom = read(os.path.join(WORKING_DIRECTORY, job+'.pwo'))
         volume_list.append(atom.get_volume())
         energy_list.append(atom.get_potential_energy())
+        print(f'{job} volume is {atom.get_volume()}, energy is {atom.get_potential_energy()}')
     eos = EquationOfState(volume_list, energy_list)
     v0, e0, B = eos.fit()
     lc = (v0)**(1/3)
@@ -214,12 +256,13 @@ def generate_convergence_test(input_file_name:str,kspacing:list[float], ecutwfc:
     try:
         atom = read(input_file)
     except:
-        return "Invalid input file, please check the file name"
+        INITIAL_FILE = os.environ.get("INITIAL_FILE")
+        return f"Invalid input file, do you want to use {INITIAL_FILE} as the input file?"
     
     cell = atom.cell
     ecutwfc_max = max(ecutwfc)
     kspacing_min = min(kspacing)
-    
+    job_list_dict = {}
     job_list = []
     # Generate the input script for highest ecutwfc different kspacing
     for k in kspacing:
@@ -230,12 +273,14 @@ def generate_convergence_test(input_file_name:str,kspacing:list[float], ecutwfc:
             lines = f.readlines()
             for i, line in enumerate(lines):
                 ## Change the prefix of the output file
-                if 'outdir' in line:
-                    lines[i] = f"    outdir = './out_k_{k}_ecutwfc_{ecutwfc_max}'\n"
+                # if 'outdir' in line:
+                #     lines[i] = f"    outdir = './out_k_{k}_ecutwfc_{ecutwfc_max}'\n"
 
                 ## Find the ecutwfc line
                 if 'ecutwfc' in line:
                     lines[i] = f'    ecutwfc = {ecutwfc_max},\n'
+                if 'ecutrho' in line:
+                    lines[i] = f"    ecutrho = {ecutwfc_max*8},\n"
                 
                 ## Find the kpoints line
                 if 'K_POINTS' in line:
@@ -244,6 +289,7 @@ def generate_convergence_test(input_file_name:str,kspacing:list[float], ecutwfc:
             ## Write the new input script
             new_file_name = f'{os.path.splitext(input_file_name)[0]}_k_{k}_ecutwfc_{ecutwfc_max}.in'
             print(new_file_name)
+            job_list_dict[new_file_name] = {'k':k, 'ecutwfc':ecutwfc_max}
             new_input_file = os.path.join(WORKING_DIRECTORY, new_file_name)
             job_list.append(new_file_name)
             with open(new_input_file, 'w') as f:
@@ -256,11 +302,13 @@ def generate_convergence_test(input_file_name:str,kspacing:list[float], ecutwfc:
         with open(input_file, 'r') as f:
             lines = f.readlines()
             for i, line in enumerate(lines):
-                if 'outdir' in line:
-                    lines[i] = f"    outdir = './out_k_{kspacing_min}_ecutwfc_{e}',\n"
+                # if 'outdir' in line:
+                #     lines[i] = f"    outdir = './out_k_{kspacing_min}_ecutwfc_{e}',\n"
                 ## Find the ecutwfc line
                 if 'ecutwfc' in line:
                     lines[i] = f'    ecutwfc = {e},\n'
+                if 'ecutrho' in line:
+                    lines[i] = f"    ecutrho = {e*8},\n"
                 
                 ## Find the kpoints line
                 if 'K_POINTS' in line:
@@ -268,6 +316,7 @@ def generate_convergence_test(input_file_name:str,kspacing:list[float], ecutwfc:
 
             ## Write the new input script
             new_file_name = f'{os.path.splitext(input_file_name)[0]}_k_{kspacing_min}_ecutwfc_{e}.in'
+            job_list_dict[new_file_name] = {'k':kspacing_min, 'ecutwfc':e}
             new_input_file = os.path.join(WORKING_DIRECTORY, new_file_name)
             job_list.append(new_file_name)
             with open(new_input_file, 'w') as f:
@@ -275,11 +324,12 @@ def generate_convergence_test(input_file_name:str,kspacing:list[float], ecutwfc:
     ## Remove duplicate files
     job_list = list(set(job_list))
     ## Save the job list as json file
-    job_list_dict = {'job_list':job_list}
+    job_list_dict['job_list'] = job_list
     with open(os.path.join(WORKING_DIRECTORY, 'job_list.json'), 'w') as f:
         json.dump(job_list_dict, f)
     
     return f"Job list is saved scucessfully, continue to submit the jobs"
+
 
 @tool
 def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
@@ -292,11 +342,13 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
     '''
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
     input_file = os.path.join(WORKING_DIRECTORY, input_file_name)
+    prefix = input_file_name.split('.')[0]
     # Read the atom object from the input script
     try:
         atom = read(input_file)
     except:
-        return "Invalid input file, please check the file name"
+        INITIAL_FILE = os.environ.get("INITIAL_FILE")
+        return f"Invalid input file, try to use {INITIAL_FILE} as the input file?"
     job_list = []
     
     cell = atom.cell
@@ -311,11 +363,13 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
             lines = f.readlines()
         # Update the scale
         for i, line in enumerate(lines):
-            if 'outdir' in line:
-                lines[i] = f"outdir = '    ./out_{scale}'\n"
+            # if 'outdir' in line:
+            #     lines[i] = f"    outdir = './out_{scale}'\n"
 
             if 'ecutwfc' in line:
                 lines[i] = f"    ecutwfc = {ecutwfc},\n"
+            if 'ecutrho' in line:
+                lines[i] = f"    ecutrho = {ecutwfc*8},\n"
             if 'CELL_PARAMETERS' in line:
                 lines[i+1] = f"{cell[0][0]*scale} {cell[0][1]*scale} {cell[0][2]*scale}\n"
                 lines[i+2] = f"{cell[1][0]*scale} {cell[1][1]*scale} {cell[1][2]*scale}\n"
@@ -325,7 +379,7 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
                 lines[i+1] = f"{kpoints[0]} {kpoints[1]} {kpoints[2]} 0 0 0\n"
     
         ## New input file name
-        new_file_name = f"Li_bcc_{scale}.in"
+        new_file_name = f"{prefix}_{scale}.in"
         job_list.append(new_file_name)
         new_file = os.path.join(WORKING_DIRECTORY, new_file_name)
         with open(new_file, 'w') as f:
@@ -338,6 +392,64 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
         json.dump(job_list_dict, f)
     
     return f"Job list is saved scucessfully, continue to submit the jobs"
+
+# @tool
+# def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
+#     '''
+#     Generate the equation of state test input scripts for quantum espresso calculation and save the job list.
+    
+#     Input:  input_file_name: str, the name of the input file
+#             kspacing: float, the kspacing to be tested
+#             ecutwfc: int, the ecutwfc to be tested
+#     '''
+#     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+#     input_file = os.path.join(WORKING_DIRECTORY, input_file_name)
+#     # Read the atom object from the input script
+#     try:
+#         atom = read(input_file)
+#     except:
+#         return "Invalid input file, please check the file name"
+#     job_list = []
+    
+#     cell = atom.cell
+#     ## Calculate the kpoints
+#     kpoints = [
+#             2 * ((np.ceil(2 * np.pi / np.linalg.norm(ii) / kspacing).astype(int)) // 2 + 1) for ii in cell
+#         ]
+    
+#     for scale in np.linspace(0.9, 1.1, 5):
+#         # Read the input script
+#         with open(input_file, 'r') as f:
+#             lines = f.readlines()
+#         # Update the scale
+#         for i, line in enumerate(lines):
+#             if 'outdir' in line:
+#                 lines[i] = f"outdir = '    ./out_{scale}'\n"
+
+#             if 'ecutwfc' in line:
+#                 lines[i] = f"    ecutwfc = {ecutwfc},\n"
+#             if 'CELL_PARAMETERS' in line:
+#                 lines[i+1] = f"{cell[0][0]*scale} {cell[0][1]*scale} {cell[0][2]*scale}\n"
+#                 lines[i+2] = f"{cell[1][0]*scale} {cell[1][1]*scale} {cell[1][2]*scale}\n"
+#                 lines[i+3] = f"{cell[2][0]*scale} {cell[2][1]*scale} {cell[2][2]*scale}\n"
+                
+#             if 'K_POINTS' in line:
+#                 lines[i+1] = f"{kpoints[0]} {kpoints[1]} {kpoints[2]} 0 0 0\n"
+    
+#         ## New input file name
+#         new_file_name = f"Li_bcc_{scale}.in"
+#         job_list.append(new_file_name)
+#         new_file = os.path.join(WORKING_DIRECTORY, new_file_name)
+#         with open(new_file, 'w') as f:
+#             f.writelines(lines)
+#     ## Remove duplicate files
+#     job_list = list(set(job_list))
+#     ## Save the job list as json file
+#     job_list_dict = {'job_list':job_list}
+#     with open(os.path.join(WORKING_DIRECTORY, 'job_list.json'), 'w') as f:
+#         json.dump(job_list_dict, f)
+    
+#     return f"Job list is saved scucessfully, continue to submit the jobs"
 
 @tool
 def save_job_list(
@@ -375,6 +487,7 @@ def read_script(
     with open(path,"r") as file:
         content = file.read()
     return content
+
 @tool
 def add_resource_suggestion(
     qeInputFileName: str,
@@ -387,30 +500,34 @@ def add_resource_suggestion(
     After agent generate resource suggestions based on the QE input file, add it to the json file "resource_suggestions.json" in the WORKING_DIRECTORY.
     For example: {"input1.pwi": {"nnodes": 2, "ntasks": 4, "runtime": 60}, "input2.pwi": {"nnodes": 1, "ntasks": 2, "runtime": 30}}
     """
+    if not isinstance(partition, str) or not isinstance(nnodes, int) or not isinstance(ntasks, int) or not isinstance(runtime, str):
+        return "Invalid input, please check the input format"
     # craete the json file if it does not exist, otherwise load it
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
-    json_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.json')
-    if not os.path.exists(json_file):
-        with open(json_file, "w") as file:
-            json.dump({}, file)
+
+    new_resource_dict = {qeInputFileName: {"partition": partition, "nnodes": 1, "ntasks": 4, "runtime": 30}}
+
     
-    with open(json_file, "r") as file:
-        resource_dict = json.load(file)
+    # check if resource_suggestions.db exist in the working directory
+    db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
+    if not os.path.exists(db_file):
+        initialize_database(db_file)
     
-    resource_dict[qeInputFileName] = {"partition": partition, "nnodes": 1, "ntasks": 2, "runtime": 60}
-    
-    with open(json_file, "w") as file:
-        json.dump(resource_dict, file)
-    
-    time.sleep(0.5)
+    add_to_database(new_resource_dict, db_file)
     
     return f"Resource suggestion for {qeInputFileName} saved scucessfully"
 
 @tool
 def submit_and_monitor_job() -> str:
     '''Submit jobs in the job list to supercomputer, return the location of the output file once the job is done'''
-    print("checking pysqa prerequisites...")
+    
+    # check if resource_suggestions.json exist
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    resource_suggestions = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
+    if not os.path.exists(resource_suggestions):
+        return "Resource suggestion file not found, please use the add_resource_suggestion tool to add the resource suggestion"
+    
+    print("checking pysqa prerequisites...")
     # check if slurm.sh and queue.yaml exist in the working directory
     if not os.path.exists(os.path.join(WORKING_DIRECTORY, "slurm.sh")) or not os.path.exists(os.path.join(WORKING_DIRECTORY, "queue.yaml")):
         print("Creating pysqa prerequisites...")
@@ -424,9 +541,30 @@ def submit_and_monitor_job() -> str:
         job_list = json.load(file)['job_list']
     
     # load reousrce suggestions
-    resource_suggestions = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.json')
-    with open(resource_suggestions, "r") as file:
-        resource_dict = json.load(file)
+    # resource_suggestions = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.json')
+    # with open(resource_suggestions, "r") as file:
+    #     resource_dict = json.load(file)
+    db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
+    conn = sqlite3.connect(db_file)
+    cursor = conn.cursor()
+
+    # Query all rows from the resources table
+    cursor.execute('SELECT * FROM resources')
+    rows = cursor.fetchall()
+
+    # Reconstruct the original dictionary
+    resource_dict = {}
+    for row in rows:
+        filename, partition, nnodes, ntasks, runtime = row
+        resource_dict[filename] = {
+            'partition': partition,
+            'nnodes': nnodes,
+            'ntasks': ntasks,
+            'runtime': runtime
+        }
+        
+    conn.close()
+    print(f"loaded resource suggestions: {json.dumps(resource_dict, indent=4)}")
     
     ## Check resource key is valid
     for job in job_list:
@@ -436,30 +574,39 @@ def submit_and_monitor_job() -> str:
     print(f"loaded {len(job_list)} jobs from job_list.json, and {len(resource_dict)} resource suggestions from resource_suggestions.json")
     
     queueIDList = []
-    for inputFile in job_list:    
-        
-        ## Check if the input file exists
-        if not os.path.exists(os.path.join(WORKING_DIRECTORY, inputFile)):
-            return f"Input file {inputFile} does not exist, please use the find job list tool to submit the file in the job list"
-        print("Generating batch script...")
+    while True:
+        for inputFile in job_list:    
+            
+            ## Check if the input file exists
+            if not os.path.exists(os.path.join(WORKING_DIRECTORY, inputFile)):
+                return f"Input file {inputFile} does not exist, please use the find job list tool to submit the file in the job list"
+            print("Generating batch script...")
 
-        ## Check if the output file exists 
-        if os.path.exists(os.path.join(WORKING_DIRECTORY, f"{inputFile}.pwo")):
-            ## Supervisor sometimes ask to submit the job again, so we need to check if the output file exists
-            return f"Output file {inputFile}.pwo already exists, the calculation is done"
-        
-        
-        job_id = qa.submit_job(
-        working_directory=WORKING_DIRECTORY,
-        cores=resource_dict[inputFile]['ntasks'],
-        memory_max=2000,
-        queue="slurm",
-        job_name="agent_job",
-        cores_max=resource_dict[inputFile]['ntasks'],
-        nodes_max=resource_dict[inputFile]['nnodes'],
-        partition=resource_dict[inputFile]['partition'],
-        run_time_max=resource_dict[inputFile]['runtime'],
-        command =f"""
+            ## Check if the output file exists 
+            outputFile = f"{inputFile}.pwo"
+            if os.path.exists(os.path.join(WORKING_DIRECTORY, outputFile)):
+                ## Supervisor sometimes ask to submit the job again, so we need to check if the output file exists
+                try:
+                    tmp = read(os.path.join(WORKING_DIRECTORY, outputFile))
+                    _ = tmp.get_potential_energy()
+                    print(f"Output file {inputFile}.pwo already exists, the calculation is done")
+                    continue
+                except:
+                    print("output file exists but the calculation is not done, will resubmit the job")
+                    
+            
+            
+            job_id = qa.submit_job(
+            working_directory=WORKING_DIRECTORY,
+            cores=resource_dict[inputFile]['ntasks'],
+            memory_max=2000,
+            queue="slurm",
+            job_name="agent_job",
+            cores_max=resource_dict[inputFile]['ntasks'],
+            nodes_max=resource_dict[inputFile]['nnodes'],
+            partition=resource_dict[inputFile]['partition'],
+            run_time_max=resource_dict[inputFile]['runtime'],
+            command =f"""
 export OMP_NUM_THREADS=1
 
 spack load quantum-espresso@7.2
@@ -470,36 +617,130 @@ mpirun pw.x < {inputFile} > {inputFile}.pwo
 
 echo " "
 echo "Job Ended at `date`"
-    """
-        )
-        
-        if job_id is None:
-            return "Job submission failed"
+        """
+            )
+            
+            if job_id is None:
+                return "Job submission failed"
 
-        queueIDList.append(job_id)
-        ## Sleep for 1.5 second to avoid the job submission too fast
-        time.sleep(2)
-    
-    prevCount = len(queueIDList)
-    while True:
-        count = 0
-        print("waiting for", end=" ")
-        for queueID in queueIDList:
-            if qa.get_status_of_job(process_id=queueID):
-                count += 1
-                print(queueID, end=" ")
-        print("to finish", end="\r")
+            queueIDList.append(job_id)
+            ## Sleep for 1.5 second to avoid the job submission too fast
+            time.sleep(5)
+            
+            #  Change the bash script name to avoid the job submission too fast
+            os.rename(os.path.join(WORKING_DIRECTORY, "run_queue.sh"), os.path.join(WORKING_DIRECTORY, f"slurm_{inputFile}.sh"))
+            time.sleep(5)
         
-        if count < prevCount:
+        prevCount = len(queueIDList)
+        while True:
+            count = 0
+            print("waiting for", end=" ")
+            for queueID in queueIDList:
+                if qa.get_status_of_job(process_id=queueID):
+                    count += 1
+                    print(queueID, end=" ")
+            print("to finish", end="\r")
+            
+            if count < prevCount:
+                print()
+                prevCount = count
+            if count == 0:
+                break
+            time.sleep(1)
+            
+        print(f"All job in job_list has finished")
+        print("waiting for files...")
+        time.sleep(10)
+            
+        print("Checking jobs")
+        
+        checked = set()
+        unchecked = set(job_list)
+        while checked != unchecked:
+            for inputFile in job_list:
+                outputFile = f"{inputFile}.pwo"
+                print(f"Checking job {inputFile}")
+                checked.add(inputFile)
+                try:
+                    atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
+                    print(atoms.get_potential_energy())
+                    # delete inputFile from job_list
+                    job_list.remove(inputFile)
+                    print(f"Job list: {job_list}")
+                    print()
+                except:
+                    # if outputFile exsit remove outputFile
+                    try:
+                        os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
+                        print(f"{outputFile} removed")
+                    except:
+                        print("output file does not exist")
+                    print(f"Job {inputFile} failed, will resubmit the job")
+        
+        
+        # for idx, inputFile in enumerate(job_list):
+        #     outputFile = f"{inputFile}.pwo"
+        #     print(f"Checking job {inputFile}")
+        #     try:
+        #         atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
+        #         print(atoms.get_potential_energy())
+        #         # delete inputFile from job_list
+        #         job_list.remove(inputFile)
+        #         print(f"Job list: {job_list}")
+        #         print()
+        #     except:
+        #         # remove outputFile
+        #         os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
+        #         print(f"Job {inputFile} failed, will resubmit the job")
+                
+        if len(job_list) == 0:
+            # load jobs frm job_list.json
+            job_list_dir = os.path.join(WORKING_DIRECTORY, f'job_list.json')
+            with open(job_list_dir,"r") as file:
+                job_list = json.load(file)['job_list']
+            
+            # read all energies into a dict
+            energies = {}
+            for inputFile in job_list:
+                outputFile = f"{inputFile}.pwo"
+                atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
+                energies[inputFile] = atoms.get_potential_energy()
+            
+            job_list = []
+            
+            # check two or more key has the same value, if so, add the key back to the job_list
+            for key, value in energies.items():
+                if list(energies.values()).count(value) > 1:
+                    print(f"!!!!!!!Job {key} has the same energy as other jobs, may resubmit the job!!!!!!!!")
+                    job_list.append(key)
+            
             print()
-            prevCount = count
-        if count == 0:
-            break
-        time.sleep(1)
+            # check whether job in job_list has the same inputFile content, if so, remove the job from job_list
+            tobeRemoved = np.zeros(len(job_list))
+            for jobIdx in range(len(job_list)):
+                for jobIdx2 in range(jobIdx+1, len(job_list)):
+                    if cmp(os.path.join(WORKING_DIRECTORY, job_list[jobIdx]), os.path.join(WORKING_DIRECTORY, job_list[jobIdx2]), shallow=False):
+                        print(f"!!!!!!!Job {job_list[jobIdx]} has the same content as {job_list[jobIdx2]}, will remove the job!!!!!!!!")
+                        tobeRemoved[jobIdx] = 1
+                        tobeRemoved[jobIdx2] = 1
+            
+            job_list = [job_list[i] for i in range(len(job_list)) if tobeRemoved[i] == 0]
+            
+            print("##########")
+            print(f"Final jobs to be resubmitted: {job_list}")
+            print("##########")
+            
+            # remove outputFile for jobs in job_list
+            for inputFile in job_list:
+                outputFile = f"{inputFile}.pwo"
+                print(f"Removing {outputFile}")
+                os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
         
-    print(f"All job in job_list has finished")
+            if len(job_list) == 0:
+                break
+            
 
-    return f"All job in job_list has finished, please check the output file"
+    return f"All job in job_list has finished, please check the output file in the {WORKING_DIRECTORY}"
 
 @tool
 def submit_single_job(
@@ -620,6 +861,7 @@ def read_energy_from_output(
         result += f"Energy read from {job} is {atoms.get_potential_energy()}. "
         # print(result)
         time.sleep(1)
+    print(result)
     # check input file in job list
     # file_path = os.path.join(WORKING_DIRECTORY, input_file)
     # atoms = read(file_path)

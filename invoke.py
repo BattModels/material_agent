@@ -10,7 +10,9 @@ from langchain_anthropic import ChatAnthropic
 
 from langgraph.prebuilt import create_react_agent
 # from src.prompt import hpc_agent_prompt,dft_agent_prompt
-from src.graph import create_graph
+# from src.graph import create_graph
+# from src.planNexe import create_graph
+from src.planNexeHighPlan import create_planning_graph as create_graph
 
 
 from src.utils import load_config, save_graph_to_file,check_config
@@ -46,9 +48,18 @@ if __name__ == "__main__":
     '''
 
     userMessage_4 = '''
-    You are going to do cenvergence test for Li BCC structure. 
+    You are going to calculate the lattic constant for FCC Ca through DFT, the experiment value is 5.556. 
     1. Compute the the total energy for different kpoints based on kspacing 0.1,0.2 ,0.3 and 40,60,80,100,120 ecutwfc. Run the calculation through slurm and report the result.
-    2. After the first batch calculation, choose appropriate kpoints and ecutwfc. Then generate input script for EOS and submit the job. When the calculation is done, calculate the lattice constant
+    2. After the first batch calculation, choose appropriate kpoints and ecutwfc. Then generate input script for EOS and submit the job.
+    3. When the calculation is done, calculate the lattice constant
+    '''
+    
+    userMessage_5 = '''
+    please calculate the lattic constant for FCC Ir through DFT, the experiment value is 3.831.
+    '''
+    
+    testMessage = '''
+    please generate a single input script for Li BCC structure with kspacing 0.1 and ecutwfc 40
     '''
     
     config = load_config(os.path.join('./config', "default.yaml"))
@@ -60,23 +71,42 @@ if __name__ == "__main__":
     llm_config = {"thread_id": "1", 'recursion_limit': 1000}
     
 
-    # save_graph_to_file(graph, WORKING_DIRECTORY, "super_graph")
+    save_graph_to_file(graph, WORKING_DIRECTORY, "super_graph")
+    # exit()
 
     
-    for s in graph.stream(
-    {
-        "messages": [
-            HumanMessage(content=f"{userMessage_4}")
-        ]
-    },llm_config):
-        if "__end__" not in s:
-            print(s)
-            print("----")
+    # for s in graph.stream(
+    # {
+    #     "messages": [
+    #         HumanMessage(content=f"{userMessage_4}")
+    #     ]
+    # },llm_config):
+    #     if "__end__" not in s:
+    #         print(s)
+    #         print("----")
 
     # for s in graph.stream(
     # {
     #     "messages": [
     #         HumanMessage(content=f"{userMessage_2}")
+    #     ]
+    # },llm_config):
+    #     if "__end__" not in s:
+    #         print(s)
+    #         print("----")
+
+    for s in graph.stream(
+    {
+        "input": f"{userMessage_5}",
+    },llm_config):
+        if "__end__" not in s:
+            print(s)
+            print("----")
+            
+    # for s in graph.stream(
+    # {
+    #     "input": [
+    #         HumanMessage(content=f"{userMessage_5}")
     #     ]
     # },llm_config):
     #     if "__end__" not in s:

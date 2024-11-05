@@ -19,7 +19,7 @@ from pydantic import BaseModel
 
 from src.agent import create_agent
 from src.tools import find_pseudopotential, submit_single_job,write_script,calculate_lc,generate_convergence_test,generate_eos_test,\
-submit_and_monitor_job,find_job_list,read_energy_from_output,add_resource_suggestion
+submit_and_monitor_job,find_job_list,read_energy_from_output,add_resource_suggestion, get_kspacing_ecutwfc
 from src.prompt import dft_agent_prompt,hpc_agent_prompt
 # This defines the object that is passed between each node
 # in the graph. We will create different nodes for each agent and tool
@@ -48,21 +48,34 @@ membersInstruction = ""
 for member, instruction in zip(members, instructions):
     membersInstruction += f"{member}'s instruction is: {instruction}\n"
 
+# system_prompt = (f'''
+#     <Role>
+#         You are a supervisor tasked with managing a conversation for scientific computing between the following workers: {members}.
+#     <Objective>
+#         Given the following user request, respond with the member to act next. When you have the result terminate immediately. When finished,respond with FINISH.
+#     <Member>
+#         Here are the ability of each member. 
+#         <DFT Agent>:
+#             - Find pseudopotential
+#             - Write initial script
+#             - generate convergence test script
+#             - determine kspacing and ecutwfc from convergence test result
+#             - generate EOS script
+#             - read energy from output
+#             - Calculate lattice constants.
+#         <HPC Agent>:
+#             - Suggest resources for each job.
+#             - Submit jobs.
+#     '''
+# )
+
 system_prompt = (f'''
-    <Role>
-        You are a supervisor tasked with managing a conversation for scientific computing between the following workers: {members}.
-    <Objective>
-        Given the following user request, respond with the member to act next. When finished,respond with FINISH.
-    <Member>
-        Here are the ability of each member. 
-        <DFT Agent>:
-            - Find pseudopotential
-            - Write initial script
-            - Calculate lattice constants.
-        <HPC Agent>:
-            - Submit jobs and read output.
+You will be told to use which agent and what to do. Follow the instruction strictly.  i.e. if asked to find pseudopotential, once the agent found the potential, terminate immediately.
+Once you have the result from any agent that achives the task given, respond with FINISH immediately. DO NOT do anything else.
+Once you see 'Final Answer' in the response, respond with FINISH immediately. DO NOT do anything else.
     '''
 )
+
 # system_prompt = (f'''
 #     You are a supervisor tasked with managing a conversation between the
 #     following workers:  {members}, based on {membersInstruction}. Given the following user request,
@@ -95,6 +108,7 @@ def print_stream(s):
         message.pretty_print()
 
 def agent_node(state, agent, name):
+    print(f"Agent {name} is processing!!!!!")
     for s in agent.stream(state, {"recursion_limit": 1000}):
         print_stream(s)
     return {"messages": [HumanMessage(content=s["messages"][-1].content, name=name)]}
@@ -105,6 +119,7 @@ def create_graph(config: dict) -> StateGraph:
         llm = ChatAnthropic(model=config["LANGSIM_MODEL"], api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # System Supervisor
     def supervisor_agent(state):
+        print("Supervisor!!!!!!!!!")
         supervisor_chain = (
             prompt
             | llm.with_structured_output(routeResponse)
@@ -115,7 +130,15 @@ def create_graph(config: dict) -> StateGraph:
 
 
     ### DFT Agent
-    dft_tools = [find_pseudopotential,write_script,calculate_lc,generate_convergence_test,generate_eos_test,read_energy_from_output]
+    dft_tools = [
+        find_pseudopotential,
+        write_script,
+        calculate_lc,
+        generate_convergence_test,
+        get_kspacing_ecutwfc,
+        generate_eos_test,
+        read_energy_from_output
+        ]
     dft_agent = create_react_agent(llm, tools=dft_tools,
                                    state_modifier=dft_agent_prompt)   
     dft_node = functools.partial(agent_node, agent=dft_agent, name="DFT_Agent")
@@ -123,7 +146,11 @@ def create_graph(config: dict) -> StateGraph:
 
     ### HPC Agent
     # hpc_tools = [read_script, submit_and_monitor_job, read_energy_from_output]
-    hpc_tools = [submit_and_monitor_job,submit_single_job,find_job_list,add_resource_suggestion]
+    hpc_tools = [
+        submit_and_monitor_job,
+        find_job_list,
+        add_resource_suggestion
+        ]
 
     hpc_agent = create_react_agent(llm, tools=hpc_tools,
                                    state_modifier=hpc_agent_prompt)
