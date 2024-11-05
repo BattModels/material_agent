@@ -55,7 +55,11 @@ if __name__ == "__main__":
     '''
     
     userMessage_5 = '''
-    please calculate the lattic constant for FCC Ir through DFT, the experiment value is 3.831.
+    please calculate the lattic constant for FCC Pd through DFT, the experiment value is 3.876.
+    '''
+    
+    userMessage_6 = '''
+    please run MD simulation with LAMMPS on BCC Li to find MSD.
     '''
     
     testMessage = '''
