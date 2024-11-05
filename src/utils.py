@@ -3,7 +3,6 @@ import os,yaml
 from xml.dom.minidom import Element
 from typing import Callable, List, Literal
 from pydantic import BaseModel
-from IPython.display import Image, display
 from langchain_core.runnables.graph import CurveStyle, MermaidDrawMethod, NodeStyles
 import getpass
 import pandas as pd
@@ -227,3 +226,35 @@ def add_to_database(resource_dict, db_file):
     # Commit and close the connection
     conn.commit()
     conn.close()
+    
+def get_submission_cmd(software, inputFile):
+    if software.lower() == "qe":
+        submission_cmd = f"""
+export OMP_NUM_THREADS=1
+
+spack load quantum-espresso@7.2
+
+echo "Job started on `hostname` at `date`"
+
+mpirun pw.x -i {inputFile} > {inputFile}.pwo
+
+echo " "
+echo "Job Ended at `date`"
+            """
+    elif software.lower() == "lammps":
+        submission_cmd = f"""
+source /nfs/turbo/coe-venkvis/ziqiw-turbo/.bashrc
+
+module load cuda
+
+conda activate /nfs/turbo/coe-venkvis/ziqiw-turbo/conda/t2
+
+echo "Job started on `hostname` at `date`" 
+
+/nfs/turbo/coe-venkvis/ziqiw-turbo/LAMMPSs/lammps-ASC/build/lmp -in {inputFile} > {inputFile}.log
+
+echo " "
+echo "Job Ended at `date`"
+        """
+        
+    return submission_cmd

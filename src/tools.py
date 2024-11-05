@@ -11,6 +11,8 @@ from ase.lattice.cubic import FaceCenteredCubic
 import ast
 import re
 from ase.io import read
+from ase.io.lammpsdata import write_lammps_data
+from ase.build import bulk
 from ase.calculators.espresso import Espresso, EspressoProfile
 from ase.eos import calculate_eos,EquationOfState
 from ase.units import kJ
@@ -41,6 +43,7 @@ def get_kpoints(atom_dict: AtomsDict, kspacing: float) -> list:
             2 * ((np.ceil(2 * np.pi / np.linalg.norm(ii) / kspacing).astype(int)) // 2 + 1) for ii in cell
         ]
     return kpoints
+
 
 @tool
 def get_kspacing_ecutwfc(threshold: float = 1.0) -> str:
@@ -99,11 +102,32 @@ def dummy_structure(concentration: float,
     return atoms.todict()
 
 @tool
+def init_structure_data(
+    element: Annotated[str, "Element symbol"],
+    lattice: Annotated[str, "Lattice type. Must be one of sc, fcc, bcc, tetragonal, bct, hcp, rhombohedral, orthorhombic, mcl, diamond, zincblende, rocksalt, cesiumchloride, fluorite or wurtzite."],
+    a: Annotated[float, "Lattice constant"],
+    b: Annotated[float, "Lattice constant. If only a and b is given, b will be interpreted as c instead."] = None,
+    c: Annotated[float, "Lattice constant"] = None,
+) -> Annotated[str, "Path of the saved initial structure data file."]:
+    """Create the initial structure based on composite, crystal lattice, lattice info, and save the initial structure data to a LAMMPS input data format."""
+    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    os.makedirs(WORKING_DIRECTORY, exist_ok=True)
+    atoms = bulk(element, lattice, a=a, b=b, c=c)
+    atoms *= (2, 2, 2)
+    
+    atoms.set_cell(atoms.cell * 0.95, scale_atoms=True)
+    
+    write_lammps_data(os.path.join(WORKING_DIRECTORY, f'{element}.data'), atoms, masses=True)
+    return f"Initial structure data is created named {element}.data"
+    
+    
+
+@tool
 def write_script(
     content: Annotated[str, "Text content to be written into the document."],
     file_name: Annotated[str, "Name of the file to be saved."],
 ) -> Annotated[str, "Path of the saved document file."]:
-    """Save the quantum espresso input file to the specified file path"""
+    """Save the quantum espresso input script to the specified file path"""
     ## Error when '/' in the content, manually delete
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
 
@@ -118,6 +142,41 @@ def write_script(
         file.write(content)
     
     os.environ['INITIAL_FILE'] = file_name
+    return f"Initial file is created named {file_name}"
+
+@tool
+def write_LAMMPS_script(
+    content: Annotated[str, "Text content to be written into the document."],
+    file_name: Annotated[str, "Name of the file to be saved."],
+) -> Annotated[str, "Path of the saved document file."]:
+    """Save the LAMMPS input script to the specified file path"""
+    ## Error when '/' in the content, manually delete
+    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    
+    os.makedirs(WORKING_DIRECTORY, exist_ok=True)
+    path = os.path.join(WORKING_DIRECTORY, f'{file_name}')
+    
+    job_list_dict = {}
+    job_list = []
+
+    ## If content ends with '/' then remove it
+    if content.endswith('/'):
+        content = content[:-1]
+    
+    with open(path,"w",encoding="ascii") as file:
+        file.write(content)
+    
+    os.environ['INITIAL_FILE'] = file_name
+    
+    job_list.append(file_name)
+    
+    ## Remove duplicate files
+    # job_list = list(set(job_list))
+    ## Save the job list as json file
+    job_list_dict['job_list'] = job_list
+    with open(os.path.join(WORKING_DIRECTORY, 'job_list.json'), 'w') as f:
+        json.dump(job_list_dict, f)
+    
     return f"Initial file is created named {file_name}"
 
 @tool
@@ -175,6 +234,10 @@ def find_pseudopotential(element: str) -> str:
                 return f'The pseudopotential file for {element} is {file} under {pseudo_dir}'
     return f"Could not find pseudopotential for {element}"
 
+@tool
+def find_classical_potential(element: str) -> str:
+    """Return classical potential file path for given element symbol."""
+    return f'The classcial potential file for {element} is located at /nfs/turbo/coe-venkvis/ziqiw-turbo/mint-PD/PD/EAM/Li_v2.eam.fs'
 
 @tool
 def get_bulk_modulus(
@@ -518,7 +581,9 @@ def add_resource_suggestion(
     return f"Resource suggestion for {qeInputFileName} saved scucessfully"
 
 @tool
-def submit_and_monitor_job() -> str:
+def submit_and_monitor_job(
+    jobType: Literal["qe", "lammps"],
+    ) -> str:
     '''Submit jobs in the job list to supercomputer, return the location of the output file once the job is done'''
     
     # check if resource_suggestions.json exist
@@ -606,18 +671,7 @@ def submit_and_monitor_job() -> str:
             nodes_max=resource_dict[inputFile]['nnodes'],
             partition=resource_dict[inputFile]['partition'],
             run_time_max=resource_dict[inputFile]['runtime'],
-            command =f"""
-export OMP_NUM_THREADS=1
-
-spack load quantum-espresso@7.2
-
-echo "Job started on `hostname` at `date`"
-
-mpirun pw.x < {inputFile} > {inputFile}.pwo
-
-echo " "
-echo "Job Ended at `date`"
-        """
+            command = get_submission_cmd(software=jobType, inputFile=inputFile)
             )
             
             if job_id is None:
@@ -653,6 +707,9 @@ echo "Job Ended at `date`"
         time.sleep(10)
             
         print("Checking jobs")
+        
+        if jobType == "lammps":
+            break
         
         checked = set()
         unchecked = set(job_list)

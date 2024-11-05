@@ -65,6 +65,10 @@ teamCapability = """
     - find job list from the job list file
     - Add resource suggestion base on the DFT input file
     - Submit job to HPC and report back once all jobs are done
+<MD Agent>:
+    - Find classical potential
+    - Generate initial data for MD simulation
+    - Generate input script for MD simulation
 """
 
 teamRestriction = """
@@ -72,6 +76,8 @@ teamRestriction = """
     - Cannot submit job to HPC
 <HPC Agent>:
     - Cannot determine the best parameters from convergence test result
+<MD Agent>:
+    - Cannot submit job to HPC
 """
 
 planner_prompt = ChatPromptTemplate.from_messages(
@@ -79,7 +85,9 @@ planner_prompt = ChatPromptTemplate.from_messages(
         (
             "system",
             f"""For the given objective, come up with a simple, high level plan based on the capability of the team listed here: {teamCapability} and the restrictions listed here: {teamRestriction} \
+You don't have to use all the team members, and all capabilities, but you can use them if needed. \
 This plan should involve individual tasks, that if executed correctly will yield the correct answer. Do not add any superfluous steps. \
+For each step, specify which agent should perform the task.
 The result of the final step should be the final answer. Make sure that each step has all the information needed - do not skip steps.""",
         ),
         ("placeholder", "{messages}"),

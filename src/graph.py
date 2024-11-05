@@ -19,8 +19,9 @@ from pydantic import BaseModel
 
 from src.agent import create_agent
 from src.tools import find_pseudopotential, submit_single_job,write_script,calculate_lc,generate_convergence_test,generate_eos_test,\
-submit_and_monitor_job,find_job_list,read_energy_from_output,add_resource_suggestion, get_kspacing_ecutwfc
-from src.prompt import dft_agent_prompt,hpc_agent_prompt
+submit_and_monitor_job,find_job_list,read_energy_from_output,add_resource_suggestion, get_kspacing_ecutwfc, init_structure_data, write_LAMMPS_script,\
+find_classical_potential
+from src.prompt import dft_agent_prompt,hpc_agent_prompt,md_agent_prompt
 # This defines the object that is passed between each node
 # in the graph. We will create different nodes for each agent and tool
 class AgentState(TypedDict):
@@ -41,7 +42,7 @@ def router(state) -> Literal["call_tool", "__end__", "continue"]:
         return "__end__"
     return "continue"
 
-members = ["DFT_Agent", "HPC_Agent"]
+members = ["DFT_Agent", "HPC_Agent", "MD_Agent"]
 instructions = [dft_agent_prompt, hpc_agent_prompt]
 
 membersInstruction = ""
@@ -139,8 +140,7 @@ def create_graph(config: dict) -> StateGraph:
         generate_eos_test,
         read_energy_from_output
         ]
-    dft_agent = create_react_agent(llm, tools=dft_tools,
-                                   state_modifier=dft_agent_prompt)   
+    dft_agent = create_react_agent(llm, tools=dft_tools, state_modifier=dft_agent_prompt)   
     dft_node = functools.partial(agent_node, agent=dft_agent, name="DFT_Agent")
 
 
@@ -152,10 +152,19 @@ def create_graph(config: dict) -> StateGraph:
         add_resource_suggestion
         ]
 
-    hpc_agent = create_react_agent(llm, tools=hpc_tools,
-                                   state_modifier=hpc_agent_prompt)
-
+    hpc_agent = create_react_agent(llm, tools=hpc_tools, state_modifier=hpc_agent_prompt)
     hpc_node = functools.partial(agent_node, agent=hpc_agent, name="HPC_Agent")
+    
+    
+    ### MD Agent
+    md_tools = [
+        find_classical_potential,
+        init_structure_data,
+        write_LAMMPS_script
+    ]
+    md_agent = create_react_agent(llm, tools=md_tools, state_modifier=md_agent_prompt)
+    md_node = functools.partial(agent_node, agent=md_agent, name="MD_Agent")
+    
 
     # save_graph_to_file(dft_agent, config['working_directory'], "dft_agent")
     
@@ -165,6 +174,7 @@ def create_graph(config: dict) -> StateGraph:
     graph = StateGraph(AgentState)
     graph.add_node("DFT_Agent", dft_node)
     graph.add_node("HPC_Agent", hpc_node)
+    graph.add_node("MD_Agent", md_node)
     # graph.add_node("CSS_Agent", css_node)
 
     graph.add_node("Supervisor", supervisor_agent)
