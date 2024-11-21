@@ -357,7 +357,7 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
             2 * ((np.ceil(2 * np.pi / np.linalg.norm(ii) / kspacing).astype(int)) // 2 + 1) for ii in cell
         ]
     
-    for scale in np.linspace(0.95, 1.05, 5):
+    for scale in np.linspace(0.8, 1.2, 5):
         # Read the input script
         with open(input_file, 'r') as f:
             lines = f.readlines()
@@ -587,8 +587,9 @@ def submit_and_monitor_job() -> str:
             if os.path.exists(os.path.join(WORKING_DIRECTORY, outputFile)):
                 ## Supervisor sometimes ask to submit the job again, so we need to check if the output file exists
                 try:
-                    tmp = read(os.path.join(WORKING_DIRECTORY, outputFile))
-                    _ = tmp.get_potential_energy()
+                    # temporay disable the read function to avoid the calculation
+                    # tmp = read(os.path.join(WORKING_DIRECTORY, outputFile))
+                    # _ = tmp.get_potential_energy()
                     print(f"Output file {inputFile}.pwo already exists, the calculation is done")
                     continue
                 except:
@@ -613,7 +614,7 @@ spack load quantum-espresso@7.2
 
 echo "Job started on `hostname` at `date`"
 
-mpirun pw.x < {inputFile} > {inputFile}.pwo
+mpirun pw.x -i {inputFile} > {inputFile}.pwo
 
 echo " "
 echo "Job Ended at `date`"
@@ -671,7 +672,8 @@ echo "Job Ended at `date`"
                 except:
                     # if outputFile exsit remove outputFile
                     try:
-                        os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
+                        # temporay disable remove to avoid the calculation
+                        # os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
                         print(f"{outputFile} removed")
                     except:
                         print("output file does not exist")
@@ -800,7 +802,7 @@ spack load quantum-espresso@7.2
 
 echo "Job started on `hostname` at `date`"
 
-mpirun pw.x < {inputFile} > {inputFile}.pwo
+mpirun pw.x -i {inputFile} > {inputFile}.pwo
 
 echo " "
 echo "Job Ended at `date`"
