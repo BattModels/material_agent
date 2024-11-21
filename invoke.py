@@ -11,7 +11,7 @@ from langchain_anthropic import ChatAnthropic
 from langgraph.prebuilt import create_react_agent
 # from src.prompt import hpc_agent_prompt,dft_agent_prompt
 # from src.graph import create_graph
-# from src.planNexe import create_graph
+# from src.planNexe2 import create_planning_graph as create_graph
 from src.planNexeHighPlan import create_planning_graph as create_graph
 
 
@@ -55,7 +55,7 @@ if __name__ == "__main__":
     '''
     
     userMessage_5 = '''
-    please calculate the lattic constant for FCC Ir through DFT, the experiment value is 3.831.
+    please calculate the lattic constant for BCC Li through DFT, the experiment value is 3.45.
     '''
     
     testMessage = '''
@@ -69,6 +69,8 @@ if __name__ == "__main__":
 
     graph = create_graph(config)
     llm_config = {"thread_id": "1", 'recursion_limit': 1000}
+    
+    print(graph)
     
 
     save_graph_to_file(graph, WORKING_DIRECTORY, "super_graph")

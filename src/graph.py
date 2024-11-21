@@ -178,6 +178,6 @@ def create_graph(config: dict) -> StateGraph:
     conditional_map["FINISH"] = END
     graph.add_conditional_edges("Supervisor", lambda x: x["next"], conditional_map)
     graph.add_edge(START, "Supervisor") 
-    return graph.compile(checkpointer=memory)
+    return graph.compile(checkpointer=memory).stream
 
 
