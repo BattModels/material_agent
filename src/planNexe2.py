@@ -19,7 +19,8 @@ from pydantic import BaseModel, Field
 
 from src.agent import create_agent
 from src.tools import find_pseudopotential, submit_single_job,write_script,calculate_lc,generate_convergence_test,generate_eos_test,\
-submit_and_monitor_job,find_job_list,read_energy_from_output,add_resource_suggestion, get_kspacing_ecutwfc
+submit_and_monitor_job,find_job_list,read_energy_from_output,add_resource_suggestion, get_kspacing_ecutwfc, init_structure_data, write_LAMMPS_script,\
+find_classical_potential
 from src.prompt import dft_agent_prompt,hpc_agent_prompt,supervisor_prompt
 
 members = ["DFT_Agent", "HPC_Agent"]
@@ -28,13 +29,13 @@ OPTIONS = ["FINISH"] + members
 
 # This defines the object that is passed between each node
 # in the graph. We will create different nodes for each agent and tool
-class AgentState(TypedDict):
-    messages: Annotated[Sequence[BaseMessage], operator.add]
-    next: str
+# class AgentState(TypedDict):
+#     messages: Annotated[Sequence[BaseMessage], operator.add]
+#     next: str
 
 class PlanExecute(TypedDict):
     input: str
-    plan: List[str] = []
+    plan: List[str]
     past_steps: Annotated[List[Tuple], operator.add]
     response: str
     next: str
@@ -85,84 +86,17 @@ teamRestriction = """
 """
 
 
-
-# Either agent can decide to end
-# This is a simple router that used in the first version
-# def router(state) -> Literal["call_tool", "__end__", "continue"]:
-#     # This is the router
-#     messages = state["messages"]
-#     last_message = messages[-1]
-#     if last_message.tool_calls:
-#         # The previous agent is invoking a tool
-#         return "call_tool"
-#     if "FINAL ANSWER" in last_message.content:
-#         # Any agent decided the work is done
-#         return "__end__"
-#     return "continue"
-
-
-# membersInstruction = ""
-# for member, instruction in zip(members, instructions):
-#     membersInstruction += f"{member}'s instruction is: {instruction}\n"
-
-# system_prompt = (f'''
-#     <Role>
-#         You are a supervisor tasked with managing a conversation for scientific computing between the following workers: {members}.
-#     <Objective>
-#         Given the following user request, respond with the member to act next. When you have the result terminate immediately. When finished,respond with FINISH.
-#     <Member>
-#         Here are the ability of each member. 
-#         <DFT Agent>:
-#             - Find pseudopotential
-#             - Write initial script
-#             - generate convergence test script
-#             - determine kspacing and ecutwfc from convergence test result
-#             - generate EOS script
-#             - read energy from output
-#             - Calculate lattice constants.
-#         <HPC Agent>:
-#             - Suggest resources for each job.
-#             - Submit jobs.
-#     '''
-# )
-
-# system_prompt = (f'''
-# You will be told to use which agent and what to do. Follow the instruction strictly.  i.e. if asked to find pseudopotential, once the agent found the potential, terminate immediately.
-# Once you have the result from any agent that achives the task given, respond with FINISH immediately. DO NOT do anything else.
-# Once you see 'Final Answer' in the response, respond with FINISH immediately. DO NOT do anything else.
-#     '''
-# )
-
-# system_prompt = (f'''
-#     You are a supervisor tasked with managing a conversation between the
-#     following workers:  {members}, based on {membersInstruction}. Given the following user request,
-#     respond with the worker to act next. 
-#     When finished,respond with FINISH.
-#     '''
-# )
-# DFT_Agent is responsible for generating scripts and computing lattice constants. HPC_Agent is responsible for submitting jobs and reading output.
-
-# Our team supervisor is an LLM node. It just picks the next agent to process
-# and decides when the work is completed
-# options = ["FINISH"] + members
-
-# class routeResponse(BaseModel):
-#     next: Literal[*options]
-
-# prompt = ChatPromptTemplate.from_messages(
-#     [
-#         ("system", system_prompt+"Given the conversation above, who should act next?\
-#             Or should we FINISH? Select one of: {options}." ),
-#         MessagesPlaceholder(variable_name="messages"),
-#     ]
-# ).partial(options=str(options), members=", ".join(members))
-
 def print_stream(s):
-    message = s["messages"][-1]
-    if isinstance(message, tuple):
-        print(message)
+    if "messages" not in s:
+        print("#################")
+        print(s)
     else:
-        message.pretty_print()
+        message = s["messages"][-1]
+        if isinstance(message, tuple):
+            print(message)
+        else:
+            message.pretty_print()
+    print()
 
 # def agent_node(state, agent, name):
 #     print(f"Agent {name} is processing!!!!!")
@@ -173,9 +107,13 @@ def print_stream(s):
 def supervisor_chain_node(state, chain, name):
     print(f"supervisor is processing!!!!!")
 
+    
+    # for output in chain.stream(state, {"recursion_limit": 1000}):
+    #     print_stream(output)
     output = chain.invoke(state)
+
     if isinstance(output.action, Response):
-        return {"response": output.action.response}
+        return {"response": output.action.response, "next": "FINISH"}
     else:
         return {"plan": output.action.steps, "next": output.action.steps[0][1]}
     
@@ -201,11 +139,20 @@ Here are what has been done so far:
 Now, you are tasked with executing step {1}, {task}.
 """
     
-    # config = {"configurable": {"thread_id": "1"}}
+    print(task_formatted)
+    print(f"Agent {name} is processing!!!!!")
     
-    agent_response = agent.invoke(
-        {"messages": [("user", task_formatted)]},  {"configurable": {"thread_id": "1"}}
-    )
+    
+    for agent_response in agent.stream(
+        {"messages": [("user", task_formatted)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
+    ):
+        # set agent_response to be the value of the first key of the dictionary
+        agent_response = next(iter(agent_response.values()))
+        print_stream(agent_response)
+    
+    # agent_response = agent.invoke(
+    #     {"messages": [("user", task_formatted)]},  {"configurable": {"thread_id": "1"}}
+    # )
     
     past_steps_list.append((task, agent_response["messages"][-1].content))
     
@@ -238,6 +185,7 @@ def create_planning_graph(config: dict) -> StateGraph:
     1.  If the plan is empty, For the given objective, come up with a simple, high level plan based on the capability of the team listed here: {teamCapability} and the restrictions listed here: {teamRestriction} 
         This plan should involve individual tasks, that if executed correctly will yield the correct answer. Do not add any superfluous steps. 
         The result of the final step should be the final answer. Make sure that each step has all the information needed - do not skip steps.
+        If you are given a list of systems, process them one by one: generate plan for one system first, finish that system, then generate plan for the next system.
 
         If the plan is not empty, update the plan:
         Your objective was this:
@@ -304,7 +252,7 @@ def create_planning_graph(config: dict) -> StateGraph:
 
 
     # Create the graph
-    graph = StateGraph(AgentState)
+    graph = StateGraph(PlanExecute)
     graph.add_node("DFT_Agent", dft_node)
     graph.add_node("HPC_Agent", hpc_node)
     # graph.add_node("CSS_Agent", css_node)
@@ -320,6 +268,6 @@ def create_planning_graph(config: dict) -> StateGraph:
     conditional_map["FINISH"] = END
     graph.add_conditional_edges("Supervisor", whos_next, conditional_map)
     graph.add_edge(START, "Supervisor") 
-    return graph.compile(checkpointer=memory).stream
+    return graph.compile(checkpointer=memory)
 
 

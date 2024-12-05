@@ -11,8 +11,8 @@ from langchain_anthropic import ChatAnthropic
 from langgraph.prebuilt import create_react_agent
 # from src.prompt import hpc_agent_prompt,dft_agent_prompt
 # from src.graph import create_graph
-# from src.planNexe2 import create_planning_graph as create_graph
-from src.planNexeHighPlan import create_planning_graph as create_graph
+from src.planNexe2 import create_planning_graph as create_graph
+# from src.planNexeHighPlan import create_planning_graph as create_graph
 
 
 from src.utils import load_config, save_graph_to_file,check_config
@@ -55,7 +55,34 @@ if __name__ == "__main__":
     '''
     
     userMessage_5 = '''
-    please calculate the lattic constant for BCC Li through DFT, the experiment value is 3.45.
+    through DFT, please calculate the lattic constant for for following system listed in the following format: Lattice_structure Species (experimental_value)
+    BCC Li (3.43)
+    BCC Na (4.19)
+    BCC K (5.28)
+    BCC Rb (5.68)
+    FCC Ca (5.53)
+    FCC Sr (6.04)
+    BCC Ba (5.02)
+    BCC V (3.02)
+    BCC Nb (3.30)
+    BCC Ta (3.31)
+    BCC Mo (3.15)
+    BCC W (3.20)
+    BCC Fe (2.87)
+    FCC Rh (3.85)
+    FCC Ir (3.89)
+    FCC Ni (3.52)
+    FCC Pd (3.94)
+    FCC Pt (3.98)
+    FCC Cu (3.65)
+    FCC Ag (4.15)
+    FCC Au (4.17)
+    FCC Al (4.05)
+    FCC Pb (5.04)
+    Diamond C (3.57)
+    Diamond Si (5.47)
+    Diamond Ge (5.76)
+    Diamond Sn (6.65)
     '''
     
     testMessage = '''
@@ -100,6 +127,7 @@ if __name__ == "__main__":
     for s in graph.stream(
     {
         "input": f"{userMessage_5}",
+        "plan": []
     },llm_config):
         if "__end__" not in s:
             print(s)

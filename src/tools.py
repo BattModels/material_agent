@@ -24,6 +24,8 @@ import json
 import pandas as pd
 import sqlite3
 from filecmp import cmp
+from ase.io.lammpsdata import write_lammps_data
+from ase.build import bulk
 ### DFT tools
 
 @tool
@@ -98,12 +100,33 @@ def dummy_structure(concentration: float,
 
     return atoms.todict()
 
+
+@tool
+def init_structure_data(
+    element: Annotated[str, "Element symbol"],
+    lattice: Annotated[str, "Lattice type. Must be one of sc, fcc, bcc, tetragonal, bct, hcp, rhombohedral, orthorhombic, mcl, diamond, zincblende, rocksalt, cesiumchloride, fluorite or wurtzite."],
+    a: Annotated[float, "Lattice constant"],
+    b: Annotated[float, "Lattice constant. If only a and b is given, b will be interpreted as c instead."] = None,
+    c: Annotated[float, "Lattice constant"] = None,
+) -> Annotated[str, "Path of the saved initial structure data file."]:
+    """Create the initial structure based on composite, crystal lattice, lattice info, and save the initial structure data to a LAMMPS input data format."""
+    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    os.makedirs(WORKING_DIRECTORY, exist_ok=True)
+    atoms = bulk(element, lattice, a=a, b=b, c=c)
+    atoms *= (2, 2, 2)
+
+    atoms.set_cell(atoms.cell * 0.95, scale_atoms=True)
+
+    write_lammps_data(os.path.join(WORKING_DIRECTORY, f'{element}.data'), atoms, masses=True)
+    return f"Initial structure data is created named {element}.data"
+
+
 @tool
 def write_script(
     content: Annotated[str, "Text content to be written into the document."],
     file_name: Annotated[str, "Name of the file to be saved."],
 ) -> Annotated[str, "Path of the saved document file."]:
-    """Save the quantum espresso input file to the specified file path"""
+    """Save the quantum espresso input script to the specified file path"""
     ## Error when '/' in the content, manually delete
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
 
@@ -118,6 +141,41 @@ def write_script(
         file.write(content)
     
     os.environ['INITIAL_FILE'] = file_name
+    return f"Initial file is created named {file_name}"
+
+@tool
+def write_LAMMPS_script(
+    content: Annotated[str, "Text content to be written into the document."],
+    file_name: Annotated[str, "Name of the file to be saved."],
+) -> Annotated[str, "Path of the saved document file."]:
+    """Save the LAMMPS input script to the specified file path"""
+    ## Error when '/' in the content, manually delete
+    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    
+    os.makedirs(WORKING_DIRECTORY, exist_ok=True)
+    path = os.path.join(WORKING_DIRECTORY, f'{file_name}')
+    
+    job_list_dict = {}
+    job_list = []
+
+    ## If content ends with '/' then remove it
+    if content.endswith('/'):
+        content = content[:-1]
+    
+    with open(path,"w",encoding="ascii") as file:
+        file.write(content)
+    
+    os.environ['INITIAL_FILE'] = file_name
+    
+    job_list.append(file_name)
+    
+    ## Remove duplicate files
+    # job_list = list(set(job_list))
+    ## Save the job list as json file
+    job_list_dict['job_list'] = job_list
+    with open(os.path.join(WORKING_DIRECTORY, 'job_list.json'), 'w') as f:
+        json.dump(job_list_dict, f)
+    
     return f"Initial file is created named {file_name}"
 
 @tool
@@ -163,6 +221,11 @@ def calculate_lc() -> str:
         json.dump(lc_dict, file)
 
     return f'The lattice constant is {lc}'
+
+@tool
+def find_classical_potential(element: str) -> str:
+    """Return classical potential file path for given element symbol."""
+    return f'The classcial potential file for {element} is located at /nfs/turbo/coe-venkvis/ziqiw-turbo/mint-PD/PD/EAM/Li_v2.eam.fs'
 
 
 @tool
@@ -518,8 +581,41 @@ def add_resource_suggestion(
     return f"Resource suggestion for {qeInputFileName} saved scucessfully"
 
 @tool
-def submit_and_monitor_job() -> str:
-    '''Submit jobs in the job list to supercomputer, return the location of the output file once the job is done'''
+def submit_and_monitor_job(
+    jobType: Annotated[str, "The type of job to be submitted, e.g. QE, LAMMPS"],
+    shScript: Annotated[str, "submission script based on the types of jobs"]
+    ) -> str:
+    '''
+    Submit jobs in the job list to supercomputer, return the location of the output file once the job is done
+    
+    An example Quantum Espresso job submission script is as follows:
+    export OMP_NUM_THREADS=1
+
+    spack load quantum-espresso@7.2
+
+    echo "Job started on `hostname` at `date`"
+
+    mpirun pw.x -i Li_bcc_k_0.1_ecutwfc_40.in > Li_bcc_k_0.1_ecutwfc_40.in.pwo
+
+    echo " "
+    echo "Job Ended at `date`"
+    
+    An example LAMMPS job submission script is as follows:
+    source /nfs/turbo/coe-venkvis/ziqiw-turbo/.bashrc
+
+    module load cuda
+
+    conda activate /nfs/turbo/coe-venkvis/ziqiw-turbo/conda/t2
+
+    echo "Job started on `hostname` at `date`" 
+
+    /nfs/turbo/coe-venkvis/ziqiw-turbo/LAMMPSs/lammps-ASC/build/lmp -in {inputFile} > {inputFile}.log
+
+    echo " "
+    echo "Job Ended at `date`"
+    
+    You should create the script based on the types of jobs you want to submit
+    '''
     
     # check if resource_suggestions.json exist
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
@@ -607,18 +703,7 @@ def submit_and_monitor_job() -> str:
             nodes_max=resource_dict[inputFile]['nnodes'],
             partition=resource_dict[inputFile]['partition'],
             run_time_max=resource_dict[inputFile]['runtime'],
-            command =f"""
-export OMP_NUM_THREADS=1
-
-spack load quantum-espresso@7.2
-
-echo "Job started on `hostname` at `date`"
-
-mpirun pw.x -i {inputFile} > {inputFile}.pwo
-
-echo " "
-echo "Job Ended at `date`"
-        """
+            command=shScript
             )
             
             if job_id is None:
@@ -652,96 +737,96 @@ echo "Job Ended at `date`"
         print(f"All job in job_list has finished")
         print("waiting for files...")
         time.sleep(10)
-            
-        print("Checking jobs")
         
-        checked = set()
-        unchecked = set(job_list)
-        while checked != unchecked:
-            for inputFile in job_list:
-                outputFile = f"{inputFile}.pwo"
-                print(f"Checking job {inputFile}")
-                checked.add(inputFile)
-                try:
-                    atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
-                    print(atoms.get_potential_energy())
-                    # delete inputFile from job_list
-                    job_list.remove(inputFile)
-                    print(f"Job list: {job_list}")
-                    print()
-                except:
-                    # if outputFile exsit remove outputFile
+        if jobType == "QE":
+            print("Checking jobs")
+            
+            checked = set()
+            unchecked = set(job_list)
+            while checked != unchecked:
+                for inputFile in job_list:
+                    outputFile = f"{inputFile}.pwo"
+                    print(f"Checking job {inputFile}")
+                    checked.add(inputFile)
                     try:
-                        # temporay disable remove to avoid the calculation
-                        # os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
-                        print(f"{outputFile} removed")
+                        atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
+                        print(atoms.get_potential_energy())
+                        # delete inputFile from job_list
+                        job_list.remove(inputFile)
+                        print(f"Job list: {job_list}")
+                        print()
                     except:
-                        print("output file does not exist")
-                    print(f"Job {inputFile} failed, will resubmit the job")
-        
-        
-        # for idx, inputFile in enumerate(job_list):
-        #     outputFile = f"{inputFile}.pwo"
-        #     print(f"Checking job {inputFile}")
-        #     try:
-        #         atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
-        #         print(atoms.get_potential_energy())
-        #         # delete inputFile from job_list
-        #         job_list.remove(inputFile)
-        #         print(f"Job list: {job_list}")
-        #         print()
-        #     except:
-        #         # remove outputFile
-        #         os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
-        #         print(f"Job {inputFile} failed, will resubmit the job")
-                
-        if len(job_list) == 0:
-            # load jobs frm job_list.json
-            job_list_dir = os.path.join(WORKING_DIRECTORY, f'job_list.json')
-            with open(job_list_dir,"r") as file:
-                job_list = json.load(file)['job_list']
+                        # if outputFile exsit remove outputFile
+                        try:
+                            # temporay disable remove to avoid the calculation
+                            # os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
+                            print(f"{outputFile} removed")
+                        except:
+                            print("output file does not exist")
+                        print(f"Job {inputFile} failed, will resubmit the job")
             
-            # read all energies into a dict
-            energies = {}
-            for inputFile in job_list:
-                outputFile = f"{inputFile}.pwo"
-                atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
-                energies[inputFile] = atoms.get_potential_energy()
             
-            job_list = []
-            
-            # check two or more key has the same value, if so, add the key back to the job_list
-            for key, value in energies.items():
-                if list(energies.values()).count(value) > 1:
-                    print(f"!!!!!!!Job {key} has the same energy as other jobs, may resubmit the job!!!!!!!!")
-                    job_list.append(key)
-            
-            print()
-            # check whether job in job_list has the same inputFile content, if so, remove the job from job_list
-            tobeRemoved = np.zeros(len(job_list))
-            for jobIdx in range(len(job_list)):
-                for jobIdx2 in range(jobIdx+1, len(job_list)):
-                    if cmp(os.path.join(WORKING_DIRECTORY, job_list[jobIdx]), os.path.join(WORKING_DIRECTORY, job_list[jobIdx2]), shallow=False):
-                        print(f"!!!!!!!Job {job_list[jobIdx]} has the same content as {job_list[jobIdx2]}, will remove the job!!!!!!!!")
-                        tobeRemoved[jobIdx] = 1
-                        tobeRemoved[jobIdx2] = 1
-            
-            job_list = [job_list[i] for i in range(len(job_list)) if tobeRemoved[i] == 0]
-            
-            print("##########")
-            print(f"Final jobs to be resubmitted: {job_list}")
-            print("##########")
-            
-            # remove outputFile for jobs in job_list
-            for inputFile in job_list:
-                outputFile = f"{inputFile}.pwo"
-                print(f"Removing {outputFile}")
-                os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
-        
+            # for idx, inputFile in enumerate(job_list):
+            #     outputFile = f"{inputFile}.pwo"
+            #     print(f"Checking job {inputFile}")
+            #     try:
+            #         atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
+            #         print(atoms.get_potential_energy())
+            #         # delete inputFile from job_list
+            #         job_list.remove(inputFile)
+            #         print(f"Job list: {job_list}")
+            #         print()
+            #     except:
+            #         # remove outputFile
+            #         os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
+            #         print(f"Job {inputFile} failed, will resubmit the job")
+                    
             if len(job_list) == 0:
-                break
+                # load jobs frm job_list.json
+                job_list_dir = os.path.join(WORKING_DIRECTORY, f'job_list.json')
+                with open(job_list_dir,"r") as file:
+                    job_list = json.load(file)['job_list']
+                
+                # read all energies into a dict
+                energies = {}
+                for inputFile in job_list:
+                    outputFile = f"{inputFile}.pwo"
+                    atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
+                    energies[inputFile] = atoms.get_potential_energy()
+                
+                job_list = []
+                
+                # check two or more key has the same value, if so, add the key back to the job_list
+                for key, value in energies.items():
+                    if list(energies.values()).count(value) > 1:
+                        print(f"!!!!!!!Job {key} has the same energy as other jobs, may resubmit the job!!!!!!!!")
+                        job_list.append(key)
+                
+                print()
+                # check whether job in job_list has the same inputFile content, if so, remove the job from job_list
+                tobeRemoved = np.zeros(len(job_list))
+                for jobIdx in range(len(job_list)):
+                    for jobIdx2 in range(jobIdx+1, len(job_list)):
+                        if cmp(os.path.join(WORKING_DIRECTORY, job_list[jobIdx]), os.path.join(WORKING_DIRECTORY, job_list[jobIdx2]), shallow=False):
+                            print(f"!!!!!!!Job {job_list[jobIdx]} has the same content as {job_list[jobIdx2]}, will remove the job!!!!!!!!")
+                            tobeRemoved[jobIdx] = 1
+                            tobeRemoved[jobIdx2] = 1
+                
+                job_list = [job_list[i] for i in range(len(job_list)) if tobeRemoved[i] == 0]
+                
+                print("##########")
+                print(f"Final jobs to be resubmitted: {job_list}")
+                print("##########")
+                
+                # remove outputFile for jobs in job_list
+                for inputFile in job_list:
+                    outputFile = f"{inputFile}.pwo"
+                    print(f"Removing {outputFile}")
+                    os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
             
-
+                if len(job_list) == 0:
+                    break
+            
     return f"All job in job_list has finished, please check the output file in the {WORKING_DIRECTORY}"
 
 @tool

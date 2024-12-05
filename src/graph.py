@@ -105,7 +105,9 @@ def print_stream(s):
     if isinstance(message, tuple):
         print(message)
     else:
-        message.pretty_print()
+        print("##########should've pretty printed##############")
+        print(message)
+        # message.pretty_print()
 
 def agent_node(state, agent, name):
     print(f"Agent {name} is processing!!!!!")
@@ -178,6 +180,6 @@ def create_graph(config: dict) -> StateGraph:
     conditional_map["FINISH"] = END
     graph.add_conditional_edges("Supervisor", lambda x: x["next"], conditional_map)
     graph.add_edge(START, "Supervisor") 
-    return graph.compile(checkpointer=memory).stream
+    return graph.compile(checkpointer=memory)
 
 
