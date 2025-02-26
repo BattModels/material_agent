@@ -9,7 +9,10 @@ from langchain_core.messages import (
     HumanMessage,
     ToolMessage,
 )
-from langchain_anthropic import ChatAnthropic
+# from langchain_anthropic import ChatAnthropic
+from langchain_openai import AzureChatOpenAI
+# from langchain_deepseek import ChatDeepSeek
+
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import AIMessage
 from langgraph.graph import END, StateGraph, START
@@ -33,19 +36,31 @@ OPTIONS = ["FINISH"] + members
 #     messages: Annotated[Sequence[BaseMessage], operator.add]
 #     next: str
 
+class myStep(BaseModel):
+    """Step in the plan."""
+
+    step: str = Field(description="Step to perform.")
+    agent: str = Field(
+        description=f"Agent to perform the step. Should be one of {members}."
+    )
+
 class PlanExecute(TypedDict):
     input: str
-    plan: List[str]
-    past_steps: Annotated[List[Tuple], operator.add]
+    plan: List[myStep]
+    past_steps: Annotated[List[str], operator.add]
     response: str
     next: str
 
 class Plan(BaseModel):
     """Plan to follow in future"""
 
-    steps: List[Tuple[str, Literal[*OPTIONS]]] = Field(
-        description="""different steps to follow (first element of the Tuple), and the agent in charge for each step (second element of the Tuple),
-        should be in sorted order by the order of execution"""
+    steps: List[myStep] = Field(
+        description=f"""
+        Steps to follow in future. Each step is a tuple of (step, agent). agent can only be chosen from {members}.
+        """
+        # description="different steps to follow, should be in sorted order"
+        # description="""different steps to follow (first element of the Tuple), and the agent in charge for each step (second element of the Tuple),
+        # should be in sorted order by the order of execution"""
     )
     
 
@@ -107,7 +122,7 @@ def print_stream(s):
 def supervisor_chain_node(state, chain, name):
     print(f"supervisor is processing!!!!!")
 
-    
+    print(state)
     # for output in chain.stream(state, {"recursion_limit": 1000}):
     #     print_stream(output)
     output = chain.invoke(state)
@@ -115,7 +130,7 @@ def supervisor_chain_node(state, chain, name):
     if isinstance(output.action, Response):
         return {"response": output.action.response, "next": "FINISH"}
     else:
-        return {"plan": output.action.steps, "next": output.action.steps[0][1]}
+        return {"plan": output.action.steps, "next": output.action.steps[0].agent}
     
     
     # for s in agent.stream(state, {"recursion_limit": 1000}):
@@ -126,12 +141,12 @@ def worker_agent_node(state, agent, name, past_steps_list):
     print(f"Agent {name} is processing!!!!!")
     
     plan = state["plan"]
-    plan_str = "\n".join(f"{i+1}. {step}" for i, step in enumerate(plan))
+    plan_str = "\n".join(f"{i+1}. {step.step}" for i, step in enumerate(plan))
     print(plan_str)
     task = plan[0]
 #     task_formatted = f"""For the following plan:
 # {plan_str}\n\nYou are tasked with executing step {1}, {task}."""
-    old_tasks_string = "\n".join(f"{i+1}. {step[0]}: {step[1]}" for i, step in enumerate(past_steps_list))
+    old_tasks_string = "\n".join(f"{i+1}. {step[0].agent}-{step[0].step}: {step[1]}" for i, step in enumerate(past_steps_list))
     task_formatted = f"""
 Here are what has been done so far:
 {old_tasks_string}
@@ -172,7 +187,11 @@ def whos_next(state):
 def create_planning_graph(config: dict) -> StateGraph:
     # Define the model
     if 'claude' in config['LANGSIM_MODEL']:
-        llm = ChatAnthropic(model=config["LANGSIM_MODEL"], api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+        # llm = ChatAnthropic(model=config["LANGSIM_MODEL"], api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+        llm = AzureChatOpenAI(model="gpt-4o", temperature=0.0, api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
+        # llm = AzureChatOpenAI(azure_deployment="gpt-4o", temperature=0.0, api_version="2024-08-01-preview")
+        # llm = AzureChatOpenAI(azure_endpoint = config["OpenAI_BASE_URL"], api_key=config["OpenAI_API_KEY"], model=config["OpenAI_MDL"], api_version="2024-08-01-preview", temperature=0.0)
+        # llm = ChatDeepSeek(model_name=config["DeepSeek_MDL"], api_key=config['DeepSeek_API_KEY'], api_base=config['DeepSeek_BASE_URL'], temperature=0.0)
     
     
     supervisor_prompt = ChatPromptTemplate.from_template(
@@ -198,7 +217,7 @@ def create_planning_graph(config: dict) -> StateGraph:
         {{past_steps}}
 
         Update your plan accordingly. If no more steps are needed and you can return to the user, then respond with that. Otherwise, fill out the plan. Only add steps to the plan that still NEED to be done. Do not return previously done steps as part of the plan.
-    2. Given the conversation above, suggest who should act next or should we FINISH? Select one of: {OPTIONS}.
+    2. Given the conversation above, suggest who should act next or should we FINISH? next could only be selected from: {OPTIONS}.
         """
     )
     
@@ -246,6 +265,18 @@ def create_planning_graph(config: dict) -> StateGraph:
                                    state_modifier=hpc_agent_prompt)
 
     hpc_node = functools.partial(worker_agent_node, agent=hpc_agent, name="HPC_Agent", past_steps_list=PAST_STEPS)
+    
+    ### MD Agent
+    # md_tools = [
+    #     find_classical_potential,
+    #     init_structure_data,
+    #     write_LAMMPS_script
+    # ]
+    
+    # md_agent = create_react_agent(llm, tools=md_tools,
+    #                               state_modifier=md_agent_prompt)
+    
+    # md_node = functools.partial(worker_agent_node, agent=md_agent, name="MD_Agent", past_steps_list=PAST_STEPS)
 
     # save_graph_to_file(dft_agent, config['working_directory'], "dft_agent")
     
@@ -255,6 +286,7 @@ def create_planning_graph(config: dict) -> StateGraph:
     graph = StateGraph(PlanExecute)
     graph.add_node("DFT_Agent", dft_node)
     graph.add_node("HPC_Agent", hpc_node)
+    # graph.add_node("MD_Agent", md_node)
     # graph.add_node("CSS_Agent", css_node)
 
     graph.add_node("Supervisor", supervisor_agent)

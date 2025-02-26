@@ -132,3 +132,136 @@ hpc_agent_prompt = f"""
                 5. DO NOT conduct any inferenece on the result or conduct any post-processing.
                 6. Do not give further suggestions on what to do next.
             """
+
+meam_doc = """
+.. index:: pair_style meam
+.. index:: pair_style meam/kk
+.. index:: pair_style meam/ms
+.. index:: pair_style meam/ms/kk
+pair_style meam command
+=========================
+Accelerator Variants: *meam/kk*
+pair_style meam/ms command
+==========================
+Accelerator Variants: *meam/ms/kk*
+Syntax
+.. code-block:: LAMMPS
+   pair_style style
+* style = *meam* or *meam/ms*
+Examples
+.. code-block:: LAMMPS
+   pair_style meam
+   pair_coeff * * ../potentials/library.meam Si ../potentials/si.meam Si
+   pair_coeff * * ../potentials/library.meam Ni Al NULL Ni Al Ni Ni
+   pair_style meam/ms
+   pair_coeff * * ../potentials/library.msmeam H Ga ../potentials/HGa.meam H Ga
+Description
+.. note::
+   The behavior of the MEAM potential for alloy systems has changed
+   as of November 2010; see description below of the mixture_ref_t
+   parameter
+Pair style *meam* computes non-bonded interactions for a variety of
+materials using the modified embedded-atom method (MEAM) :ref:`(Baskes)
+<Baskes>`.  Conceptually, it is an extension to the original :doc:`EAM
+method <pair_eam>` which adds angular forces.  It is thus suitable for
+modeling metals and alloys with fcc, bcc, hcp and diamond cubic
+structures, as well as materials with covalent interactions like silicon
+and carbon.
+The *meam* pair style is a translation of the original Fortran version
+to C++. It is functionally equivalent but more efficient and has
+additional features. The Fortran version of the *meam* pair style has
+been removed from LAMMPS after the 12 December 2018 release.
+Pair style *meam/ms* uses the multi-state MEAM (MS-MEAM) method
+according to :ref:`(Baskes2) <Baskes2>`, which is an extension to MEAM.
+This pair style is mostly equivalent to *meam* and differs only
+where noted in the documentation below.
+In the MEAM formulation, the total energy E of a system of atoms is
+given by:
+.. math::
+   E = \sum_i \left\{ F_i(\bar{\rho}_i)
+       + \frac{1}{2} \sum_{i \neq j} \phi_{ij} (r_{ij}) \right\}
+where *F* is the embedding energy which is a function of the atomic
+electron density :math:`\rho`, and :math:`\phi` is a pair potential
+interaction.  The pair interaction is summed over all neighbors J of
+atom I within the cutoff distance.  As with EAM, the multi-body nature
+of the MEAM potential is a result of the embedding energy term.  Details
+of the computation of the embedding and pair energies, as implemented in
+LAMMPS, are given in :ref:`(Gullet) <Gullet>` and references therein.
+The various parameters in the MEAM formulas are listed in two files
+which are specified by the :doc:`pair_coeff <pair_coeff>` command.
+These are ASCII text files in a format consistent with other MD codes
+that implement MEAM potentials, such as the serial DYNAMO code and
+Warp.  Several MEAM potential files with parameters for different
+materials are included in the "potentials" directory of the LAMMPS
+distribution with a ".meam" suffix.  All of these are parameterized in
+terms of LAMMPS :doc:`metal units <units>`.
+Note that unlike for other potentials, cutoffs for MEAM potentials are
+not set in the pair_style or pair_coeff command; they are specified in
+the MEAM potential files themselves.
+Only a single pair_coeff command is used with the *meam* style which
+specifies two MEAM files and the element(s) to extract information
+for.  The MEAM elements are mapped to LAMMPS atom types by specifying
+N additional arguments after the second filename in the pair_coeff
+command, where N is the number of LAMMPS atom types:
+* MEAM library file
+* Element1, Element2, ...
+* MEAM parameter file
+* N element names = mapping of MEAM elements to atom types
+See the :doc:`pair_coeff <pair_coeff>` page for alternate ways
+to specify the path for the potential files.
+As an example, the ``potentials/library.meam`` file has generic MEAM
+settings for a variety of elements.  The ``potentials/SiC.meam`` file
+has specific parameter settings for a Si and C alloy system.  If your
+LAMMPS simulation has 4 atoms types and you want the first 3 to be Si,
+and the fourth to be C, you would use the following pair_coeff command:
+.. code-block:: LAMMPS
+   pair_coeff * * library.meam Si C sic.meam Si Si Si C
+The first 2 arguments must be \* \* so as to span all LAMMPS atom types.
+The first filename is the element library file. The list of elements following
+it extracts lines from the library file and assigns numeric indices to these
+elements. The second filename is the alloy parameter file, which refers to
+elements using the numeric indices assigned before.
+The arguments after the parameter file map LAMMPS atom types to elements, i.e.
+LAMMPS atom types 1,2,3 to the MEAM Si element.  The final C argument maps
+LAMMPS atom type 4 to the MEAM C element.
+If the second filename is specified as NULL, no parameter file is read,
+which simply means the generic parameters in the library file are
+used.  Use of the NULL specification for the parameter file is
+discouraged for systems with more than a single element type
+(e.g. alloys), since the parameter file is expected to set element
+interaction terms that are not captured by the information in the
+library file.
+If a mapping value is specified as NULL, the mapping is not performed.
+This can be used when a *meam* potential is used as part of the
+*hybrid* pair style.  The NULL values are placeholders for atom types
+that will be used with other potentials.
+.. note::
+   If the second filename is NULL, the element names between the two
+   filenames can appear in any order, e.g. "Si C" or "C Si" in the
+   example above.  However, if the second filename is **not** NULL (as in the
+   example above), it contains settings that are indexed **by numbers**
+   for the elements that precede it.  Thus you need to ensure that you list
+   the elements between the filenames in an order consistent with how the
+   values in the second filename are indexed.  See details below on the
+   syntax for settings in the second file.
+"""
+
+md_agent_prompt = f"""
+            <Role>:
+                You are a very powerful molecular dynamics expert that runs simulations on the supercomputer, but don't know current events.
+            <Objective>:
+                You are responsible for generating the LAMMPS input file for a givin simulation with provided tools. 
+                You can only respond with a single complete 'Thought, Action' format OR a single 'Final Answer' format.
+            <Instructions>:
+                1. find which potential to use for the simulation.
+                2. Use the right tool to generate initial structure for the simulation
+                3. Generate the input script.
+                4. Save all the files in to job list and report to supervisor to let HPC Agent to submit the job.                 
+            <Requirements>:
+                1. Please follow the tasks strickly, do not do anything else. 
+                2. If everything is good, only response with the tool message and a short summary of what has been done. If you think it's the final answer, prefix 'Final Answer'. Do not say anything else.
+                3. If error occur, only response with 'Job failed' + error message. Do not say anything else.
+                4. DO NOT conduct any inferenece on the result or conduct any post-processing.
+                5. Once you done generating scripts, report back to the supervisor and stop immediately.
+                6. Do not give further suggestions on what to do next.
+            """

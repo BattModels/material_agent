@@ -9,7 +9,9 @@ from langchain_core.messages import (
     HumanMessage,
     ToolMessage,
 )
-from langchain_anthropic import ChatAnthropic
+# from langchain_anthropic import ChatAnthropic
+from langchain_openai import AzureChatOpenAI
+# from langchain_deepseek import ChatDeepSeek
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import AIMessage
 from langgraph.graph import END, StateGraph, START
@@ -118,7 +120,11 @@ def agent_node(state, agent, name):
 def create_graph(config: dict) -> StateGraph:
     # Define the model
     if 'claude' in config['LANGSIM_MODEL']:
-        llm = ChatAnthropic(model=config["LANGSIM_MODEL"], api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+        # llm = ChatAnthropic(model=config["LANGSIM_MODEL"], api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+        llm = AzureChatOpenAI(model="gpt-4o", temperature=0.0, api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
+        # llm = AzureChatOpenAI(azure_deployment="gpt-4o", temperature=0.0, api_version="2024-08-01-preview")
+        # llm = AzureChatOpenAI(azure_endpoint = config["OpenAI_BASE_URL"], api_key=config["OpenAI_API_KEY"], model=config["OpenAI_MDL"], api_version="2024-08-01-preview", temperature=0.0)
+        # llm = ChatDeepSeek(model_name=config["DeepSeek_MDL"], api_key=config['DeepSeek_API_KEY'], api_base=config['DeepSeek_BASE_URL'], temperature=0.0)
     # System Supervisor
     def supervisor_agent(state):
         print("Supervisor!!!!!!!!!")

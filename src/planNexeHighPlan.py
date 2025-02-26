@@ -10,6 +10,9 @@ from langchain_core.messages import (
     ToolMessage,
 )
 from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
+from langchain_deepseek import ChatDeepSeek
+
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import AIMessage
 from langgraph.graph import END, StateGraph, START

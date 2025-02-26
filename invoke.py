@@ -6,7 +6,7 @@ from langchain_core.messages import (
     HumanMessage,
     ToolMessage,
 )
-from langchain_anthropic import ChatAnthropic
+# from langchain_anthropic import ChatAnthropic
 
 from langgraph.prebuilt import create_react_agent
 # from src.prompt import hpc_agent_prompt,dft_agent_prompt
@@ -85,6 +85,8 @@ if __name__ == "__main__":
     Diamond Sn (6.65)
     '''
     
+    userMessage_6 = "You are going to calculate the lattic constant for FCC Ca through DFT, the experiment value is 5.556."
+    
     testMessage = '''
     please generate a single input script for Li BCC structure with kspacing 0.1 and ecutwfc 40
     '''
@@ -92,6 +94,11 @@ if __name__ == "__main__":
     config = load_config(os.path.join('./config', "default.yaml"))
     check_config(config)
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    
+    # check if working directory exists, if so delete it
+    if os.path.exists(WORKING_DIRECTORY):
+        os.system(f"rm -rf {WORKING_DIRECTORY}")
+    
     os.makedirs(WORKING_DIRECTORY, exist_ok=False)
 
     graph = create_graph(config)
@@ -126,7 +133,7 @@ if __name__ == "__main__":
 
     for s in graph.stream(
     {
-        "input": f"{userMessage_5}",
+        "input": f"{userMessage_6}",
         "plan": []
     },llm_config):
         if "__end__" not in s:
