@@ -126,7 +126,7 @@ def write_script(
     content: Annotated[str, "Text content to be written into the document."],
     file_name: Annotated[str, "Name of the file to be saved."],
 ) -> Annotated[str, "Path of the saved document file."]:
-    """Save the quantum espresso input script to the specified file path"""
+    """Save the dft job script to the specified file path"""
     ## Error when '/' in the content, manually delete
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
 

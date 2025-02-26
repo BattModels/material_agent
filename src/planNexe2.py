@@ -81,7 +81,7 @@ class Act(BaseModel):
 teamCapability = """
 <DFT Agent>:
     - Find pseudopotential
-    - Write initial script
+    - Write initial files to dft calculation
     - generate convergence test input files
     - determine the best parameters from convergence test result
     - generate EOS calculation input files using the best parameters

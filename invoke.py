@@ -85,7 +85,7 @@ if __name__ == "__main__":
     Diamond Sn (6.65)
     '''
     
-    userMessage_6 = "You are going to calculate the lattic constant for FCC Ca through DFT, the experiment value is 5.556."
+    userMessage_6 = "You are going to calculate the lattic constant for FCC Ca with gpaw, the experiment value is 5.556."
     
     testMessage = '''
     please generate a single input script for Li BCC structure with kspacing 0.1 and ecutwfc 40
