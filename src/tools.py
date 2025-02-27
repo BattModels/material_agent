@@ -63,8 +63,12 @@ def get_kspacing_ecutwfc(threshold: float = 1.0) -> str:
     for job in job_list:
         ## Read the output file
         print(f'reading {job}')
-        kspacing.append(job_dict[job]['k'])
-        ecutwfc.append(job_dict[job]['ecutwfc'])
+        
+        kspacing.append(float(job.split('_')[-3]))
+        ecutwfc.append(float(job.split('_')[-1].split('.')[0]))
+        
+        # kspacing.append(job_dict[job]['k'])
+        # ecutwfc.append(job_dict[job]['ecutwfc'])
         
         atom = read(os.path.join(WORKING_DIRECTORY, job+'.pwo'))
         energy = atom.get_potential_energy()
@@ -126,7 +130,12 @@ def write_script(
     content: Annotated[str, "Text content to be written into the document."],
     file_name: Annotated[str, "Name of the file to be saved."],
 ) -> Annotated[str, "Path of the saved document file."]:
-    """Save the dft job script to the specified file path"""
+    """
+    Save the dft job script to the specified file path
+    For quantum espresso, the file name should be .pwi
+    For lammps, the file name should be .in
+    for gpaw, the file name should be .py
+    """
     ## Error when '/' in the content, manually delete
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
 
@@ -140,8 +149,33 @@ def write_script(
     with open(path,"w",encoding="ascii") as file:
         file.write(content)
     
-    os.environ['INITIAL_FILE'] = file_name
-    return f"Initial file is created named {file_name}"
+    # os.environ['INITIAL_FILE'] = file_name
+    return f"scrpt file is created named {file_name}"
+
+@tool
+def read_script(
+    filename: Annotated[str, "Name of the file to be read."]
+) -> Annotated[str, "read content"]:
+    """read a file with filename from the default working directory"""
+    ## Error when '/' in the content, manually delete
+    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    path = os.path.join(WORKING_DIRECTORY, filename)
+    with open(path,"r") as file:
+        content = file.read()
+    return content
+
+@tool
+def write_job_list(
+    job_files: Annotated[list[str], "List of scripts to be calculated."],
+) -> Annotated[str, "Path of the saved document file."]:
+    """Add the list of dft calculation files to job_list.json"""
+    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    os.makedirs(WORKING_DIRECTORY, exist_ok=True)
+    path = os.path.join(WORKING_DIRECTORY, f'job_list.json')
+    job = {'job_list':job_files}
+    with open(path,"w") as file:
+        json.dump(job, file, indent=4)
+    return f"Job list saved to {path}"
 
 @tool
 def write_LAMMPS_script(
@@ -230,7 +264,11 @@ def find_classical_potential(element: str) -> str:
 
 @tool
 def find_pseudopotential(element: str) -> str:
-    """Return the pseudopotential file path for given element symbol."""
+    """
+    DO NOT use this tool when using gpaw!
+    ONLY use this tool when using quantum espresso as the dft calculation software!
+    Return the pseudopotential file path for given element symbol
+    """
     pseudo_dir = os.environ.get("PSEUDO_DIR")
     for roots, dirs, files in os.walk(f'{pseudo_dir}'):
         for file in files:
@@ -307,20 +345,35 @@ def get_lattice_constant(
 @tool
 def generate_convergence_test(input_file_name:str,kspacing:list[float], ecutwfc:list[int]):
     '''
-    Generate the convergence test input scripts for quantum espresso calculation and save the job list. 
+    DO NOT use this tool when using gpaw!
+    DO NOT use this tool when using gpaw!
+    DO NOT use this tool when using gpaw!
+    DO NOT use this tool when using gpaw!
+    ONLY use this tool when using quantum espresso as the dft calculation software!
+    DO NOT use this tool when using gpaw!
+    Generate the convergence test input scripts for quantum espresso only and save the job list. 
+    DO NOT use this tool when using gpaw!
 
-    Input:  input_file_name: str, the name of the input file
+    DO NOT use this tool when using gpaw!
+    Input:  input_file_name: str, the name of the input file, for quantum espresso, the file name should be .pwi, for lammps, the file name should be .in, for gpaw, the file name should be .py
             kspacing: list[float], the list of kspacing to be tested
             ecutwfc: list[int], the list of ecutwfc to be tested
+    DO NOT use this tool when using gpaw!
     '''
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
     input_file = os.path.join(WORKING_DIRECTORY, input_file_name)
+    
+    print("waiting for files")
+    time.sleep(3)
+    
     # Read the atom object from the input script
     try:
+        print(f"reading {input_file}")
         atom = read(input_file)
-    except:
-        INITIAL_FILE = os.environ.get("INITIAL_FILE")
-        return f"Invalid input file, do you want to use {INITIAL_FILE} as the input file?"
+    except Exception as e:
+        # INITIAL_FILE = os.environ.get("INITIAL_FILE")
+        # return f"Invalid input file, do you want to use {INITIAL_FILE} as the input file?"
+        return f"Invalid input file, the error is {e}"
     
     cell = atom.cell
     ecutwfc_max = max(ecutwfc)
@@ -350,7 +403,7 @@ def generate_convergence_test(input_file_name:str,kspacing:list[float], ecutwfc:
                     lines[i+1] = ' '.join(map(str,kpoints)) +' 0 0 0' +'\n'
 
             ## Write the new input script
-            new_file_name = f'{os.path.splitext(input_file_name)[0]}_k_{k}_ecutwfc_{ecutwfc_max}.in'
+            new_file_name = f'{os.path.splitext(input_file_name)[0]}_k_{k}_ecutwfc_{ecutwfc_max}.pwi'
             print(new_file_name)
             job_list_dict[new_file_name] = {'k':k, 'ecutwfc':ecutwfc_max}
             new_input_file = os.path.join(WORKING_DIRECTORY, new_file_name)
@@ -378,7 +431,8 @@ def generate_convergence_test(input_file_name:str,kspacing:list[float], ecutwfc:
                     lines[i+1] = ' '.join(map(str,kpoints)) +' 0 0 0' +'\n'
 
             ## Write the new input script
-            new_file_name = f'{os.path.splitext(input_file_name)[0]}_k_{kspacing_min}_ecutwfc_{e}.in'
+            new_file_name = f'{os.path.splitext(input_file_name)[0]}_k_{kspacing_min}_ecutwfc_{e}.pwi'
+            print(new_file_name)
             job_list_dict[new_file_name] = {'k':kspacing_min, 'ecutwfc':e}
             new_input_file = os.path.join(WORKING_DIRECTORY, new_file_name)
             job_list.append(new_file_name)
@@ -387,17 +441,19 @@ def generate_convergence_test(input_file_name:str,kspacing:list[float], ecutwfc:
     ## Remove duplicate files
     job_list = list(set(job_list))
     ## Save the job list as json file
-    job_list_dict['job_list'] = job_list
-    with open(os.path.join(WORKING_DIRECTORY, 'job_list.json'), 'w') as f:
-        json.dump(job_list_dict, f)
-    
-    return f"Job list is saved scucessfully, continue to submit the jobs"
+    # job_list_dict['job_list'] = job_list
+    # with open(os.path.join(WORKING_DIRECTORY, 'job_list.json'), 'w') as f:
+    #     json.dump(job_list_dict, f)
+    # return f"Job list is saved scucessfully, continue to submit the jobs"
+    return f"files are created named {job_list}, continue to submit the jobs"
 
 
 @tool
 def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
     '''
-    Generate the equation of state test input scripts for quantum espresso calculation and save the job list.
+    DO NOT use this tool when using gpaw!
+    ONLY use this tool when using quantum espresso as the dft calculation software!
+    Generate the equation of state test input scripts and save the job list.
     
     Input:  input_file_name: str, the name of the input file
             kspacing: float, the kspacing to be tested
@@ -409,9 +465,8 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
     # Read the atom object from the input script
     try:
         atom = read(input_file)
-    except:
-        INITIAL_FILE = os.environ.get("INITIAL_FILE")
-        return f"Invalid input file, try to use {INITIAL_FILE} as the input file?"
+    except Exception as e:
+        return f"Invalid input file, the error is {e}"
     job_list = []
     
     cell = atom.cell
@@ -442,7 +497,7 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
                 lines[i+1] = f"{kpoints[0]} {kpoints[1]} {kpoints[2]} 0 0 0\n"
     
         ## New input file name
-        new_file_name = f"{prefix}_{scale}.in"
+        new_file_name = f"{prefix}_{scale}.pwi"
         job_list.append(new_file_name)
         new_file = os.path.join(WORKING_DIRECTORY, new_file_name)
         with open(new_file, 'w') as f:
@@ -450,11 +505,11 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
     ## Remove duplicate files
     job_list = list(set(job_list))
     ## Save the job list as json file
-    job_list_dict = {'job_list':job_list}
-    with open(os.path.join(WORKING_DIRECTORY, 'job_list.json'), 'w') as f:
-        json.dump(job_list_dict, f)
+    # job_list_dict = {'job_list':job_list}
+    # with open(os.path.join(WORKING_DIRECTORY, 'job_list.json'), 'w') as f:
+    #     json.dump(job_list_dict, f)
     
-    return f"Job list is saved scucessfully, continue to submit the jobs"
+    return f"files created for EOS calculations are {job_list}, continue to submit the jobs"
 
 # @tool
 # def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
@@ -518,7 +573,7 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
 def save_job_list(
     script_list: Annotated[list[str], "List of scripts to be calculated."]
 ) -> Annotated[str, "Path of the saved json file."]:
-    """Save the list of quantum espresso input files to the specified json file path"""
+    """Save the list of dft input files to the specified json file path"""
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
     os.makedirs(WORKING_DIRECTORY, exist_ok=True)
     path = os.path.join(WORKING_DIRECTORY, f'job_list.json')
@@ -536,20 +591,25 @@ def find_job_list() -> str:
     with open(path,"r") as file:
         job_json = json.load(file)
     job_list = job_json['job_list']
+    
+    db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
+    if not os.path.exists(db_file):
+        initialize_database(db_file)
+    
     return f'The files need to be submitted are {job_list}. Please continue to submit the job.'
 
 
-@tool
-def read_script(
-    WORKING_DIRECTORY: Annotated[str, "The working directory."],
-    input_file: Annotated[str, "The input file to be read."]
-) -> Annotated[str, "read content"]:
-    """read the quantum espresso input file from the specified file path"""
-    ## Error when '/' in the content, manually delete
-    path = os.path.join(WORKING_DIRECTORY, input_file)
-    with open(path,"r") as file:
-        content = file.read()
-    return content
+# @tool
+# def read_script(
+#     WORKING_DIRECTORY: Annotated[str, "The working directory."],
+#     input_file: Annotated[str, "The input file to be read."]
+# ) -> Annotated[str, "read content"]:
+#     """read the dft input file from the specified file path"""
+#     ## Error when '/' in the content, manually delete
+#     path = os.path.join(WORKING_DIRECTORY, input_file)
+#     with open(path,"r") as file:
+#         content = file.read()
+#     return content
 
 @tool
 def add_resource_suggestion(
@@ -558,18 +618,38 @@ def add_resource_suggestion(
     nnodes: int,
     ntasks: int,
     runtime: Annotated[str, "Time limit for the job, in minutes"],
+    submissionScript: Annotated[str, "submission script based on the types of jobs. output filename must be <full input filename with extension>.<output_file_type>"],
+    outputFilename: Annotated[str, "the output filename of the job"],
 ) -> Annotated[str, "source suggestion saved location"]:
     """
-    After agent generate resource suggestions based on the QE input file, add it to the json file "resource_suggestions.json" in the WORKING_DIRECTORY.
-    For example: {"input1.pwi": {"nnodes": 2, "ntasks": 4, "runtime": 60}, "input2.pwi": {"nnodes": 1, "ntasks": 2, "runtime": 30}}
+    After agent generate resource suggestions and submission script based on the DFT input file, add it to the json file "resource_suggestions.json" in the WORKING_DIRECTORY.
+    output filename must be <full input filename with extension>.<output_file_type>, 
+    For example: {"input1.pwi": {"nnodes": 2, "ntasks": 4, "runtime": 60, "submissionScript": "
+spack load quantum-espresso@7.2\n \
+\n \
+echo "Job started on `hostname` at `date`"\n \
+\n \
+mpirun pw.x -i input1.pwi > input1.pwi.pwo\n \
+\n \
+echo " "\n \
+echo "Job Ended at `date`"
+    ", "outputFilename": "input1.pwi.pwo"}, "gpawScript.py": {"nnodes": 1, "ntasks": 1, "runtime": 30, "submissionScript": "
+echo "Job started on `hostname` at `date`"\n \
+\n \
+export GPAW_SETUP_PATH=/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/gpaw-setups-24.11.0\n \
+spack load py-gpaw\n \
+\n \
+python gpawScript.py\n \
+echo " "\n \
+echo "Job Ended at `date`"\n \
+    ", "outputFilename": ""}}
     """
     if not isinstance(partition, str) or not isinstance(nnodes, int) or not isinstance(ntasks, int) or not isinstance(runtime, str):
         return "Invalid input, please check the input format"
     # craete the json file if it does not exist, otherwise load it
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
 
-    new_resource_dict = {qeInputFileName: {"partition": partition, "nnodes": 1, "ntasks": 4, "runtime": 30}}
-
+    new_resource_dict = {qeInputFileName: {"partition": partition, "nnodes": 1, "ntasks": 4, "runtime": 30, "submissionScript": submissionScript, "outputFilename": outputFilename}}
     
     # check if resource_suggestions.db exist in the working directory
     db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
@@ -582,39 +662,10 @@ def add_resource_suggestion(
 
 @tool
 def submit_and_monitor_job(
-    jobType: Annotated[str, "The type of job to be submitted, e.g. QE, LAMMPS"],
-    shScript: Annotated[str, "submission script based on the types of jobs"]
+    jobType: Annotated[str, "The type of job to be submitted, e.g. DFT, LAMMPS"]
     ) -> str:
     '''
     Submit jobs in the job list to supercomputer, return the location of the output file once the job is done
-    
-    An example Quantum Espresso job submission script is as follows:
-    export OMP_NUM_THREADS=1
-
-    spack load quantum-espresso@7.2
-
-    echo "Job started on `hostname` at `date`"
-
-    mpirun pw.x -i Li_bcc_k_0.1_ecutwfc_40.in > Li_bcc_k_0.1_ecutwfc_40.in.pwo
-
-    echo " "
-    echo "Job Ended at `date`"
-    
-    An example LAMMPS job submission script is as follows:
-    source /nfs/turbo/coe-venkvis/ziqiw-turbo/.bashrc
-
-    module load cuda
-
-    conda activate /nfs/turbo/coe-venkvis/ziqiw-turbo/conda/t2
-
-    echo "Job started on `hostname` at `date`" 
-
-    /nfs/turbo/coe-venkvis/ziqiw-turbo/LAMMPSs/lammps-ASC/build/lmp -in {inputFile} > {inputFile}.log
-
-    echo " "
-    echo "Job Ended at `date`"
-    
-    You should create the script based on the types of jobs you want to submit
     '''
     
     # check if resource_suggestions.json exist
@@ -651,14 +702,16 @@ def submit_and_monitor_job(
     # Reconstruct the original dictionary
     resource_dict = {}
     for row in rows:
-        filename, partition, nnodes, ntasks, runtime = row
+        filename, partition, nnodes, ntasks, runtime, submissionScript, outputFilename = row
         resource_dict[filename] = {
             'partition': partition,
             'nnodes': nnodes,
             'ntasks': ntasks,
-            'runtime': runtime
+            'runtime': runtime,
+            'submissionScript': submissionScript,
+            'outputFilename': outputFilename
         }
-        
+    
     conn.close()
     print(f"loaded resource suggestions: {json.dumps(resource_dict, indent=4)}")
     
@@ -679,7 +732,7 @@ def submit_and_monitor_job(
             print("Generating batch script...")
 
             ## Check if the output file exists 
-            outputFile = f"{inputFile}.pwo"
+            outputFile = resource_dict[inputFile]['outputFilename']
             if os.path.exists(os.path.join(WORKING_DIRECTORY, outputFile)):
                 ## Supervisor sometimes ask to submit the job again, so we need to check if the output file exists
                 try:
@@ -703,7 +756,7 @@ def submit_and_monitor_job(
             nodes_max=resource_dict[inputFile]['nnodes'],
             partition=resource_dict[inputFile]['partition'],
             run_time_max=resource_dict[inputFile]['runtime'],
-            command=shScript
+            command=resource_dict[inputFile]['submissionScript']
             )
             
             if job_id is None:
@@ -738,14 +791,14 @@ def submit_and_monitor_job(
         print("waiting for files...")
         time.sleep(10)
         
-        if jobType == "QE":
+        if jobType == "DFT":
             print("Checking jobs")
             
             checked = set()
             unchecked = set(job_list)
             while checked != unchecked:
                 for inputFile in job_list:
-                    outputFile = f"{inputFile}.pwo"
+                    outputFile = resource_dict[inputFile]['outputFilename']
                     print(f"Checking job {inputFile}")
                     checked.add(inputFile)
                     try:
@@ -767,7 +820,7 @@ def submit_and_monitor_job(
             
             
             # for idx, inputFile in enumerate(job_list):
-            #     outputFile = f"{inputFile}.pwo"
+            #     outputFile = resource_dict[inputFile]['outputFilename']
             #     print(f"Checking job {inputFile}")
             #     try:
             #         atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
@@ -790,7 +843,7 @@ def submit_and_monitor_job(
                 # read all energies into a dict
                 energies = {}
                 for inputFile in job_list:
-                    outputFile = f"{inputFile}.pwo"
+                    outputFile = resource_dict[inputFile]['outputFilename']
                     atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
                     energies[inputFile] = atoms.get_potential_energy()
                 
@@ -820,7 +873,7 @@ def submit_and_monitor_job(
                 
                 # remove outputFile for jobs in job_list
                 for inputFile in job_list:
-                    outputFile = f"{inputFile}.pwo"
+                    outputFile = resource_dict[inputFile]['outputFilename']
                     print(f"Removing {outputFile}")
                     os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
             

@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 from src.agent import create_agent
 from src.tools import find_pseudopotential, submit_single_job,write_script,calculate_lc,generate_convergence_test,generate_eos_test,\
 submit_and_monitor_job,find_job_list,read_energy_from_output,add_resource_suggestion, get_kspacing_ecutwfc, init_structure_data, write_LAMMPS_script,\
-find_classical_potential
+find_classical_potential, write_job_list, read_script
 from src.prompt import dft_agent_prompt,hpc_agent_prompt,supervisor_prompt
 
 members = ["DFT_Agent", "HPC_Agent"]
@@ -80,9 +80,11 @@ class Act(BaseModel):
 
 teamCapability = """
 <DFT Agent>:
+    - write job list
     - Find pseudopotential
     - Write initial files to dft calculation
-    - generate convergence test input files
+    - read file contents
+    - generate convergence test files
     - determine the best parameters from convergence test result
     - generate EOS calculation input files using the best parameters
     - Read output file to get energy
@@ -148,10 +150,12 @@ def worker_agent_node(state, agent, name, past_steps_list):
 # {plan_str}\n\nYou are tasked with executing step {1}, {task}."""
     old_tasks_string = "\n".join(f"{i+1}. {step[0].agent}-{step[0].step}: {step[1]}" for i, step in enumerate(past_steps_list))
     task_formatted = f"""
+Here is the main goal: {state["input"]}
+
 Here are what has been done so far:
 {old_tasks_string}
 
-Now, you are tasked with executing step {1}, {task}.
+Now, your task is: {task}.
 """
     
     print(task_formatted)
@@ -202,6 +206,7 @@ def create_planning_graph(config: dict) -> StateGraph:
     Given the following user request, respond with the member to act next. When finished,respond with FINISH.
 <Instructions>:
     1.  If the plan is empty, For the given objective, come up with a simple, high level plan based on the capability of the team listed here: {teamCapability} and the restrictions listed here: {teamRestriction} 
+        You don't have to use all the team members, nor all the capabilities of each team member.
         This plan should involve individual tasks, that if executed correctly will yield the correct answer. Do not add any superfluous steps. 
         The result of the final step should be the final answer. Make sure that each step has all the information needed - do not skip steps.
         If you are given a list of systems, process them one by one: generate plan for one system first, finish that system, then generate plan for the next system.
@@ -217,7 +222,8 @@ def create_planning_graph(config: dict) -> StateGraph:
         {{past_steps}}
 
         Update your plan accordingly. If no more steps are needed and you can return to the user, then respond with that. Otherwise, fill out the plan. Only add steps to the plan that still NEED to be done. Do not return previously done steps as part of the plan.
-    2. Given the conversation above, suggest who should act next or should we FINISH? next could only be selected from: {OPTIONS}.
+    2. Given the conversation above, suggest who should act next? next could only be selected from: {OPTIONS}.
+    3. ONLY respond FINISH when the plan is empty and you have a final answer for the user.
         """
     )
     
@@ -240,8 +246,10 @@ def create_planning_graph(config: dict) -> StateGraph:
     
     ### DFT Agent
     dft_tools = [
+        write_job_list,
         find_pseudopotential,
         write_script,
+        read_script,
         calculate_lc,
         generate_convergence_test,
         get_kspacing_ecutwfc,
