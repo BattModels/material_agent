@@ -204,7 +204,9 @@ def initialize_database(db_file):
         partition TEXT,
         nnodes INTEGER,
         ntasks INTEGER,
-        runtime INTEGER
+        runtime INTEGER,
+        submissionScript TEXT,
+        outputFilename TEXT
     )
     ''')
     
@@ -220,9 +222,15 @@ def add_to_database(resource_dict, db_file):
     # Insert or update each item in the resource_dict
     for filename, resources in resource_dict.items():
         cursor.execute('''
-        INSERT OR REPLACE INTO resources (filename, partition, nnodes, ntasks, runtime)
-        VALUES (?, ?, ?, ?, ?)
-        ''', (filename, resources['partition'], resources['nnodes'], resources['ntasks'], resources['runtime']))
+        INSERT OR REPLACE INTO resources (filename, partition, nnodes, ntasks, runtime, submissionScript, outputFilename)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (filename,
+              resources['partition'],
+              resources['nnodes'],
+              resources['ntasks'],
+              resources['runtime'],
+              resources['submissionScript'],
+              resources['outputFilename']))
     
     # Commit and close the connection
     conn.commit()

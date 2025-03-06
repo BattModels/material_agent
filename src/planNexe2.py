@@ -28,7 +28,7 @@ from src.prompt import dft_agent_prompt,hpc_agent_prompt,supervisor_prompt
 
 members = ["DFT_Agent", "HPC_Agent"]
 instructions = [dft_agent_prompt, hpc_agent_prompt]
-OPTIONS = ["FINISH"] + members
+OPTIONS = members
 
 # This defines the object that is passed between each node
 # in the graph. We will create different nodes for each agent and tool
@@ -47,7 +47,7 @@ class myStep(BaseModel):
 class PlanExecute(TypedDict):
     input: str
     plan: List[myStep]
-    past_steps: Annotated[List[str], operator.add]
+    past_steps: List[str]
     response: str
     next: str
 
@@ -65,7 +65,7 @@ class Plan(BaseModel):
     
 
 class Response(BaseModel):
-    """Response to user."""
+    """End everything and response to the user."""
 
     response: str
 
@@ -73,9 +73,9 @@ class Response(BaseModel):
 class Act(BaseModel):
     """Action to perform."""
 
-    action: Union[Response, Plan] = Field(
-        description="Action to perform. If you want to respond to user, use Response. "
-        "If you need to further use tools to get the answer, use Plan."
+    action: Union[Plan, Response] = Field(
+        description="Action to perform. If you need to further use tools to get the answer, use Plan."
+        "DO NOT EVER use response."
     )
 
 teamCapability = """
@@ -199,7 +199,7 @@ def create_planning_graph(config: dict) -> StateGraph:
 <Role>
     You are a supervisor tasked with managing a conversation for scientific computing between the following workers: {members}.
 <Objective>
-    Given the following user request, respond with the member to act next. When finished,respond with FINISH.
+    Given the following user request, decide which the member to act next, and do what
 <Instructions>:
     1.  If the plan is empty, For the given objective, come up with a simple, high level plan based on the capability of the team listed here: {teamCapability} and the restrictions listed here: {teamRestriction} 
         This plan should involve individual tasks, that if executed correctly will yield the correct answer. Do not add any superfluous steps. 
@@ -213,11 +213,12 @@ def create_planning_graph(config: dict) -> StateGraph:
         Your original plan was this:
         {{plan}}
 
-        You have currently done the follow steps:
+        Your last step is:
         {{past_steps}}
 
-        Update your plan accordingly. If no more steps are needed and you can return to the user, then respond with that. Otherwise, fill out the plan. Only add steps to the plan that still NEED to be done. Do not return previously done steps as part of the plan.
-    2. Given the conversation above, suggest who should act next or should we FINISH? next could only be selected from: {OPTIONS}.
+        Update your plan accordingly, and fill out the plan. Only add steps to the plan that still NEED to be done. Do not return previously done steps as part of the plan. 
+        choose plan if there are still steps to be done, or response if everything is done.
+    2.  Given the conversation above, suggest who should act next. next could only be selected from: {OPTIONS}.
         """
     )
     

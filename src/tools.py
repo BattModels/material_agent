@@ -536,6 +536,12 @@ def find_job_list() -> str:
     with open(path,"r") as file:
         job_json = json.load(file)
     job_list = job_json['job_list']
+    
+    # check if resource_suggestions.db exist in the working directory
+    db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
+    if not os.path.exists(db_file):
+        initialize_database(db_file)
+    
     return f'The files need to be submitted are {job_list}. Please continue to submit the job.'
 
 
@@ -551,6 +557,35 @@ def read_script(
         content = file.read()
     return content
 
+# @tool
+# def add_resource_suggestion(
+#     qeInputFileName: str,
+#     partition: str,
+#     nnodes: int,
+#     ntasks: int,
+#     runtime: Annotated[str, "Time limit for the job, in minutes"],
+# ) -> Annotated[str, "source suggestion saved location"]:
+#     """
+#     After agent generate resource suggestions based on the QE input file, add it to the json file "resource_suggestions.json" in the WORKING_DIRECTORY.
+#     For example: {"input1.pwi": {"nnodes": 2, "ntasks": 4, "runtime": 60}, "input2.pwi": {"nnodes": 1, "ntasks": 2, "runtime": 30}}
+#     """
+#     if not isinstance(partition, str) or not isinstance(nnodes, int) or not isinstance(ntasks, int) or not isinstance(runtime, str):
+#         return "Invalid input, please check the input format"
+#     # craete the json file if it does not exist, otherwise load it
+#     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+
+#     new_resource_dict = {qeInputFileName: {"partition": partition, "nnodes": 1, "ntasks": 4, "runtime": 30}}
+
+    
+#     # check if resource_suggestions.db exist in the working directory
+#     db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
+#     if not os.path.exists(db_file):
+#         initialize_database(db_file)
+    
+#     add_to_database(new_resource_dict, db_file)
+    
+#     return f"Resource suggestion for {qeInputFileName} saved scucessfully"
+
 @tool
 def add_resource_suggestion(
     qeInputFileName: str,
@@ -558,18 +593,38 @@ def add_resource_suggestion(
     nnodes: int,
     ntasks: int,
     runtime: Annotated[str, "Time limit for the job, in minutes"],
+    submissionScript: Annotated[str, "submission script based on the types of jobs. output filename must be <full input filename with extension>.<output_file_type>"],
+    outputFilename: Annotated[str, "the output filename of the job"],
 ) -> Annotated[str, "source suggestion saved location"]:
     """
-    After agent generate resource suggestions based on the QE input file, add it to the json file "resource_suggestions.json" in the WORKING_DIRECTORY.
-    For example: {"input1.pwi": {"nnodes": 2, "ntasks": 4, "runtime": 60}, "input2.pwi": {"nnodes": 1, "ntasks": 2, "runtime": 30}}
+    After agent generate resource suggestions and submission script based on the DFT input file, add it to the json file "resource_suggestions.json" in the WORKING_DIRECTORY.
+    output filename must be <full input filename with extension>.<output_file_type>, 
+    For example: {"input1.pwi": {"nnodes": 2, "ntasks": 4, "runtime": 60, "submissionScript": "
+spack load quantum-espresso@7.2\n \
+\n \
+echo "Job started on `hostname` at `date`"\n \
+\n \
+mpirun pw.x -i input1.pwi > input1.pwi.pwo\n \
+\n \
+echo " "\n \
+echo "Job Ended at `date`"
+    ", "outputFilename": "input1.pwi.pwo"}, "gpawScript.py": {"nnodes": 1, "ntasks": 1, "runtime": 30, "submissionScript": "
+echo "Job started on `hostname` at `date`"\n \
+\n \
+export GPAW_SETUP_PATH=/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/gpaw-setups-24.11.0\n \
+spack load py-gpaw\n \
+\n \
+python gpawScript.py\n \
+echo " "\n \
+echo "Job Ended at `date`"\n \
+    ", "outputFilename": ""}}
     """
     if not isinstance(partition, str) or not isinstance(nnodes, int) or not isinstance(ntasks, int) or not isinstance(runtime, str):
         return "Invalid input, please check the input format"
     # craete the json file if it does not exist, otherwise load it
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
 
-    new_resource_dict = {qeInputFileName: {"partition": partition, "nnodes": 1, "ntasks": 4, "runtime": 30}}
-
+    new_resource_dict = {qeInputFileName: {"partition": partition, "nnodes": 1, "ntasks": 4, "runtime": 30, "submissionScript": submissionScript, "outputFilename": outputFilename}}
     
     # check if resource_suggestions.db exist in the working directory
     db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
@@ -580,41 +635,261 @@ def add_resource_suggestion(
     
     return f"Resource suggestion for {qeInputFileName} saved scucessfully"
 
+# @tool
+# def submit_and_monitor_job(
+#     jobType: Annotated[str, "The type of job to be submitted, e.g. QE, LAMMPS"],
+#     shScript: Annotated[str, "submission script based on the types of jobs"]
+#     ) -> str:
+#     '''
+#     Submit jobs in the job list to supercomputer, return the location of the output file once the job is done
+    
+#     An example Quantum Espresso job submission script is as follows:
+#     export OMP_NUM_THREADS=1
+
+#     spack load quantum-espresso@7.2
+
+#     echo "Job started on `hostname` at `date`"
+
+#     mpirun pw.x -i [input_script_name.in] > [input_script_name.in].out
+
+#     echo " "
+#     echo "Job Ended at `date`"
+    
+#     An example LAMMPS job submission script is as follows:
+#     source /nfs/turbo/coe-venkvis/ziqiw-turbo/.bashrc
+
+#     module load cuda
+
+#     conda activate /nfs/turbo/coe-venkvis/ziqiw-turbo/conda/t2
+
+#     echo "Job started on `hostname` at `date`" 
+
+#     /nfs/turbo/coe-venkvis/ziqiw-turbo/LAMMPSs/lammps-ASC/build/lmp -in {inputFile} > {inputFile}.log
+
+#     echo " "
+#     echo "Job Ended at `date`"
+    
+#     You should create the script based on the types of jobs you want to submit
+#     '''
+    
+#     # check if resource_suggestions.json exist
+#     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+#     resource_suggestions = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
+#     if not os.path.exists(resource_suggestions):
+#         return "Resource suggestion file not found, please use the add_resource_suggestion tool to add the resource suggestion"
+    
+#     print("checking pysqa prerequisites...")
+#     # check if slurm.sh and queue.yaml exist in the working directory
+#     if not os.path.exists(os.path.join(WORKING_DIRECTORY, "slurm.sh")) or not os.path.exists(os.path.join(WORKING_DIRECTORY, "queue.yaml")):
+#         print("Creating pysqa prerequisites...")
+#         create_pysqa_prerequisites(WORKING_DIRECTORY)
+    
+#     qa = QueueAdapter(directory=WORKING_DIRECTORY)
+        
+#     # load jobs frm job_list.json
+#     job_list_dir = os.path.join(WORKING_DIRECTORY, f'job_list.json')
+#     with open(job_list_dir,"r") as file:
+#         job_list = json.load(file)['job_list']
+    
+#     # load reousrce suggestions
+#     # resource_suggestions = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.json')
+#     # with open(resource_suggestions, "r") as file:
+#     #     resource_dict = json.load(file)
+#     db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
+#     conn = sqlite3.connect(db_file)
+#     cursor = conn.cursor()
+
+#     # Query all rows from the resources table
+#     cursor.execute('SELECT * FROM resources')
+#     rows = cursor.fetchall()
+
+#     # Reconstruct the original dictionary
+#     resource_dict = {}
+#     for row in rows:
+#         filename, partition, nnodes, ntasks, runtime = row
+#         resource_dict[filename] = {
+#             'partition': partition,
+#             'nnodes': nnodes,
+#             'ntasks': ntasks,
+#             'runtime': runtime
+#         }
+        
+#     conn.close()
+#     print(f"loaded resource suggestions: {json.dumps(resource_dict, indent=4)}")
+    
+#     ## Check resource key is valid
+#     for job in job_list:
+#         if job not in resource_dict.keys():
+#             return f"Resource suggestion for {job} is not found, please use the add_resource_suggestion tool to add the resource suggestion"
+    
+#     print(f"loaded {len(job_list)} jobs from job_list.json, and {len(resource_dict)} resource suggestions from resource_suggestions.json")
+    
+#     queueIDList = []
+#     while True:
+#         for inputFile in job_list:    
+            
+#             ## Check if the input file exists
+#             if not os.path.exists(os.path.join(WORKING_DIRECTORY, inputFile)):
+#                 return f"Input file {inputFile} does not exist, please use the find job list tool to submit the file in the job list"
+#             print("Generating batch script...")
+
+#             ## Check if the output file exists 
+#             outputFile = f"{inputFile}.pwo"
+#             if os.path.exists(os.path.join(WORKING_DIRECTORY, outputFile)):
+#                 ## Supervisor sometimes ask to submit the job again, so we need to check if the output file exists
+#                 try:
+#                     # temporay disable the read function to avoid the calculation
+#                     # tmp = read(os.path.join(WORKING_DIRECTORY, outputFile))
+#                     # _ = tmp.get_potential_energy()
+#                     print(f"Output file {inputFile}.pwo already exists, the calculation is done")
+#                     continue
+#                 except:
+#                     print("output file exists but the calculation is not done, will resubmit the job")
+                    
+            
+            
+#             job_id = qa.submit_job(
+#             working_directory=WORKING_DIRECTORY,
+#             cores=resource_dict[inputFile]['ntasks'],
+#             memory_max=2000,
+#             queue="slurm",
+#             job_name="agent_job",
+#             cores_max=resource_dict[inputFile]['ntasks'],
+#             nodes_max=resource_dict[inputFile]['nnodes'],
+#             partition=resource_dict[inputFile]['partition'],
+#             run_time_max=resource_dict[inputFile]['runtime'],
+#             command=shScript
+#             )
+            
+#             if job_id is None:
+#                 return "Job submission failed"
+
+#             queueIDList.append(job_id)
+#             ## Sleep for 1.5 second to avoid the job submission too fast
+#             time.sleep(5)
+            
+#             #  Change the bash script name to avoid the job submission too fast
+#             os.rename(os.path.join(WORKING_DIRECTORY, "run_queue.sh"), os.path.join(WORKING_DIRECTORY, f"slurm_{inputFile}.sh"))
+#             time.sleep(5)
+        
+#         prevCount = len(queueIDList)
+#         while True:
+#             count = 0
+#             print("waiting for", end=" ")
+#             for queueID in queueIDList:
+#                 if qa.get_status_of_job(process_id=queueID):
+#                     count += 1
+#                     print(queueID, end=" ")
+#             print("to finish", end="\r")
+            
+#             if count < prevCount:
+#                 print()
+#                 prevCount = count
+#             if count == 0:
+#                 break
+#             time.sleep(1)
+            
+#         print(f"All job in job_list has finished")
+#         print("waiting for files...")
+#         time.sleep(10)
+        
+#         if jobType == "QE":
+#             print("Checking jobs")
+            
+#             checked = set()
+#             unchecked = set(job_list)
+#             while checked != unchecked:
+#                 for inputFile in job_list:
+#                     outputFile = f"{inputFile}.pwo"
+#                     print(f"Checking job {inputFile}")
+#                     checked.add(inputFile)
+#                     try:
+#                         atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
+#                         print(atoms.get_potential_energy())
+#                         # delete inputFile from job_list
+#                         job_list.remove(inputFile)
+#                         print(f"Job list: {job_list}")
+#                         print()
+#                     except:
+#                         # if outputFile exsit remove outputFile
+#                         try:
+#                             # temporay disable remove to avoid the calculation
+#                             # os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
+#                             print(f"{outputFile} removed")
+#                         except:
+#                             print("output file does not exist")
+#                         print(f"Job {inputFile} failed, will resubmit the job")
+            
+            
+#             # for idx, inputFile in enumerate(job_list):
+#             #     outputFile = f"{inputFile}.pwo"
+#             #     print(f"Checking job {inputFile}")
+#             #     try:
+#             #         atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
+#             #         print(atoms.get_potential_energy())
+#             #         # delete inputFile from job_list
+#             #         job_list.remove(inputFile)
+#             #         print(f"Job list: {job_list}")
+#             #         print()
+#             #     except:
+#             #         # remove outputFile
+#             #         os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
+#             #         print(f"Job {inputFile} failed, will resubmit the job")
+                    
+#             if len(job_list) == 0:
+#                 # load jobs frm job_list.json
+#                 job_list_dir = os.path.join(WORKING_DIRECTORY, f'job_list.json')
+#                 with open(job_list_dir,"r") as file:
+#                     job_list = json.load(file)['job_list']
+                
+#                 # read all energies into a dict
+#                 energies = {}
+#                 for inputFile in job_list:
+#                     outputFile = f"{inputFile}.pwo"
+#                     atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
+#                     energies[inputFile] = atoms.get_potential_energy()
+                
+#                 job_list = []
+                
+#                 # check two or more key has the same value, if so, add the key back to the job_list
+#                 for key, value in energies.items():
+#                     if list(energies.values()).count(value) > 1:
+#                         print(f"!!!!!!!Job {key} has the same energy as other jobs, may resubmit the job!!!!!!!!")
+#                         job_list.append(key)
+                
+#                 print()
+#                 # check whether job in job_list has the same inputFile content, if so, remove the job from job_list
+#                 tobeRemoved = np.zeros(len(job_list))
+#                 for jobIdx in range(len(job_list)):
+#                     for jobIdx2 in range(jobIdx+1, len(job_list)):
+#                         if cmp(os.path.join(WORKING_DIRECTORY, job_list[jobIdx]), os.path.join(WORKING_DIRECTORY, job_list[jobIdx2]), shallow=False):
+#                             print(f"!!!!!!!Job {job_list[jobIdx]} has the same content as {job_list[jobIdx2]}, will remove the job!!!!!!!!")
+#                             tobeRemoved[jobIdx] = 1
+#                             tobeRemoved[jobIdx2] = 1
+                
+#                 job_list = [job_list[i] for i in range(len(job_list)) if tobeRemoved[i] == 0]
+                
+#                 print("##########")
+#                 print(f"Final jobs to be resubmitted: {job_list}")
+#                 print("##########")
+                
+#                 # remove outputFile for jobs in job_list
+#                 for inputFile in job_list:
+#                     outputFile = f"{inputFile}.pwo"
+#                     print(f"Removing {outputFile}")
+#                     os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
+            
+#                 if len(job_list) == 0:
+#                     break
+            
+#     return f"All job in job_list has finished, please check the output file in the {WORKING_DIRECTORY}"
+
 @tool
 def submit_and_monitor_job(
-    jobType: Annotated[str, "The type of job to be submitted, e.g. QE, LAMMPS"],
-    shScript: Annotated[str, "submission script based on the types of jobs"]
+    jobType: Annotated[str, "The type of job to be submitted, e.g. DFT, LAMMPS"]
     ) -> str:
     '''
     Submit jobs in the job list to supercomputer, return the location of the output file once the job is done
-    
-    An example Quantum Espresso job submission script is as follows:
-    export OMP_NUM_THREADS=1
-
-    spack load quantum-espresso@7.2
-
-    echo "Job started on `hostname` at `date`"
-
-    mpirun pw.x -i Li_bcc_k_0.1_ecutwfc_40.in > Li_bcc_k_0.1_ecutwfc_40.in.pwo
-
-    echo " "
-    echo "Job Ended at `date`"
-    
-    An example LAMMPS job submission script is as follows:
-    source /nfs/turbo/coe-venkvis/ziqiw-turbo/.bashrc
-
-    module load cuda
-
-    conda activate /nfs/turbo/coe-venkvis/ziqiw-turbo/conda/t2
-
-    echo "Job started on `hostname` at `date`" 
-
-    /nfs/turbo/coe-venkvis/ziqiw-turbo/LAMMPSs/lammps-ASC/build/lmp -in {inputFile} > {inputFile}.log
-
-    echo " "
-    echo "Job Ended at `date`"
-    
-    You should create the script based on the types of jobs you want to submit
     '''
     
     # check if resource_suggestions.json exist
@@ -651,14 +926,16 @@ def submit_and_monitor_job(
     # Reconstruct the original dictionary
     resource_dict = {}
     for row in rows:
-        filename, partition, nnodes, ntasks, runtime = row
+        filename, partition, nnodes, ntasks, runtime, submissionScript, outputFilename = row
         resource_dict[filename] = {
             'partition': partition,
             'nnodes': nnodes,
             'ntasks': ntasks,
-            'runtime': runtime
+            'runtime': runtime,
+            'submissionScript': submissionScript,
+            'outputFilename': outputFilename
         }
-        
+    
     conn.close()
     print(f"loaded resource suggestions: {json.dumps(resource_dict, indent=4)}")
     
@@ -679,7 +956,7 @@ def submit_and_monitor_job(
             print("Generating batch script...")
 
             ## Check if the output file exists 
-            outputFile = f"{inputFile}.pwo"
+            outputFile = resource_dict[inputFile]['outputFilename']
             if os.path.exists(os.path.join(WORKING_DIRECTORY, outputFile)):
                 ## Supervisor sometimes ask to submit the job again, so we need to check if the output file exists
                 try:
@@ -703,7 +980,7 @@ def submit_and_monitor_job(
             nodes_max=resource_dict[inputFile]['nnodes'],
             partition=resource_dict[inputFile]['partition'],
             run_time_max=resource_dict[inputFile]['runtime'],
-            command=shScript
+            command=resource_dict[inputFile]['submissionScript']
             )
             
             if job_id is None:
@@ -738,14 +1015,14 @@ def submit_and_monitor_job(
         print("waiting for files...")
         time.sleep(10)
         
-        if jobType == "QE":
+        if jobType == "DFT":
             print("Checking jobs")
             
             checked = set()
             unchecked = set(job_list)
             while checked != unchecked:
                 for inputFile in job_list:
-                    outputFile = f"{inputFile}.pwo"
+                    outputFile = resource_dict[inputFile]['outputFilename']
                     print(f"Checking job {inputFile}")
                     checked.add(inputFile)
                     try:
@@ -767,7 +1044,7 @@ def submit_and_monitor_job(
             
             
             # for idx, inputFile in enumerate(job_list):
-            #     outputFile = f"{inputFile}.pwo"
+            #     outputFile = resource_dict[inputFile]['outputFilename']
             #     print(f"Checking job {inputFile}")
             #     try:
             #         atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
@@ -790,7 +1067,7 @@ def submit_and_monitor_job(
                 # read all energies into a dict
                 energies = {}
                 for inputFile in job_list:
-                    outputFile = f"{inputFile}.pwo"
+                    outputFile = resource_dict[inputFile]['outputFilename']
                     atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
                     energies[inputFile] = atoms.get_potential_energy()
                 
@@ -820,7 +1097,7 @@ def submit_and_monitor_job(
                 
                 # remove outputFile for jobs in job_list
                 for inputFile in job_list:
-                    outputFile = f"{inputFile}.pwo"
+                    outputFile = resource_dict[inputFile]['outputFilename']
                     print(f"Removing {outputFile}")
                     os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
             
