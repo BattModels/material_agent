@@ -5,12 +5,12 @@ from src.utils import *
 from ase import Atoms, Atom
 from langchain.agents import tool
 import os 
-from typing import Annotated,Dict, Literal,Optional
+from typing import Annotated, Dict, Literal, Optional, Sequence, Tuple
 import numpy as np
 from ase.lattice.cubic import FaceCenteredCubic
 import ast
 import re
-from ase.io import read
+from ase.io import read, write
 from ase.calculators.espresso import Espresso, EspressoProfile
 from ase.eos import calculate_eos,EquationOfState
 from ase.units import kJ
@@ -109,16 +109,23 @@ def init_structure_data(
     b: Annotated[float, "Lattice constant. If only a and b is given, b will be interpreted as c instead."] = None,
     c: Annotated[float, "Lattice constant"] = None,
 ) -> Annotated[str, "Path of the saved initial structure data file."]:
-    """Create the initial structure based on composite, crystal lattice, lattice info, and save the initial structure data to a LAMMPS input data format."""
+    """Create the initial structure based on composite, crystal lattice, lattice info, save to the working dir, and return filename."""
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
     os.makedirs(WORKING_DIRECTORY, exist_ok=True)
-    atoms = bulk(element, lattice, a=a, b=b, c=c)
-    atoms *= (2, 2, 2)
+    atoms = bulk(element, lattice, a=a, b=b, c=c, cubic=True)
+    # atoms *= (2, 2, 2)
 
-    atoms.set_cell(atoms.cell * 0.95, scale_atoms=True)
+    # atoms.set_cell(atoms.cell * 0.95, scale_atoms=True)
 
-    write_lammps_data(os.path.join(WORKING_DIRECTORY, f'{element}.data'), atoms, masses=True)
-    return f"Initial structure data is created named {element}.data"
+    # write_lammps_data(os.path.join(WORKING_DIRECTORY, f'{element}.data'), atoms, masses=True)
+    
+    # return f"Initial structure data is created named {element}.data"
+    
+    # save the atoms into working dir
+    saveDir = os.path.join(WORKING_DIRECTORY, f"{element}-{lattice}.xyz")
+    write(saveDir, atoms)
+    
+    return f"Created atoms saved in {saveDir}"
 
 
 @tool
@@ -142,6 +149,75 @@ def write_script(
     
     os.environ['INITIAL_FILE'] = file_name
     return f"Initial file is created named {file_name}"
+
+
+@tool
+def write_QE_script_w_ASE(
+    listofElements: Annotated[List[str], "List of element symbols in the unit cell"],
+    ppfiles: Annotated[List[str], "List of pseudopotential files in the order of the elements"],
+    pseudo_dir: Annotated[str, "Path to the directory containing the pseudopotentials"],
+    filename: Annotated[str, "Name of the Quantum Espresso input file, end with .pwi"],
+    inputAtomsDir: Annotated[str, "Directory of the input Atoms object"],
+    calculation: Annotated[str, "Type of calculation to perform, e.g. 'scf' or 'relax'"],
+    restart_mode: Annotated[Literal['from_scratch', 'restart'], "Restart mode"],
+    prefix: Annotated[str, "Prefix for the output files"],
+    outdir: Annotated[str, "Path to the directory where the output files are written"],
+    disk_io: Annotated[Literal['none', 'minimal', 'nowf', 'low', 'medium', 'high'], "Disk I/O level"],
+    ibrav: Annotated[int, "Bravais-lattice index. Optional only if space_group is set."],
+    nat: Annotated[int, "Number of atoms in the unit cell"],
+    ntyp: Annotated[int, "Number of atom types in the unit cell"],
+    ecutwfc: Annotated[float, "kinetic energy cutoff (Ry) for wavefunctions"],
+    ecutrho: Annotated[float, "Kinetic energy cutoff (Ry) for charge density and potential"],
+    occupations: Annotated[Literal['smearing', 'tetrahedra', 'tetrahedra_lin', 'tetrahedra_opt', 'fixed', 'from_input'], "Occupation type"],
+    smearing: Annotated[Literal['gaussian', 'methfessel-paxton', 'marzari-vanderbilt', 'fermi-dirac'], "Smearing type"],
+    degauss: Annotated[float, "value of the gaussian spreading (Ry) for brillouin-zone integration in metals."],
+    conv_thr: Annotated[float, "Convergence threshold for self-consistent loop"],
+    kpts: Annotated[List[int], "Number of k-points along each reciprocal lattice vector. it would be a list of int: [int, int, int]"]
+):
+    """Write a Quantum Espresso input script using ASE."""
+
+    # assemble the pseudopotentials dict from the list of elements and pseudopotentials
+    pseudopotentials = {}
+    for element, pseudo in zip(listofElements, ppfiles):
+        pseudopotentials[element] = pseudo
+    
+    # Create a dummy Atoms object
+    atoms = read(inputAtomsDir)
+    
+    filenameWDir = os.path.join(os.environ.get("WORKING_DIR"), filename)
+
+    # Write the input script
+    write(filenameWDir,
+          atoms,
+          input_data={
+              'control': {
+                  'calculation': calculation,
+                  'restart_mode': restart_mode,
+                  'prefix': prefix,
+                  'pseudo_dir': pseudo_dir,
+                  'outdir': outdir,
+                  'disk_io': disk_io,
+              },
+              'system': {
+                  'ibrav': ibrav,
+                  'nat': nat,
+                  'ntyp': ntyp,
+                  'ecutwfc': ecutwfc,
+                  'ecutrho': ecutrho,
+                  'occupations': occupations,
+                  'smearing': smearing,
+                  'degauss': degauss,
+              },
+              'electrons': {
+                  'conv_thr': conv_thr,
+              }
+          },
+          format='espresso-in',
+          pseudopotentials=pseudopotentials,
+          kpts=tuple(kpts)
+          )
+    
+    return f"Quantum Espresso input script is written to {filename}"
 
 @tool
 def write_LAMMPS_script(
@@ -350,7 +426,7 @@ def generate_convergence_test(input_file_name:str,kspacing:list[float], ecutwfc:
                     lines[i+1] = ' '.join(map(str,kpoints)) +' 0 0 0' +'\n'
 
             ## Write the new input script
-            new_file_name = f'{os.path.splitext(input_file_name)[0]}_k_{k}_ecutwfc_{ecutwfc_max}.in'
+            new_file_name = f'{os.path.splitext(input_file_name)[0]}_k_{k}_ecutwfc_{ecutwfc_max}.pwi'
             print(new_file_name)
             job_list_dict[new_file_name] = {'k':k, 'ecutwfc':ecutwfc_max}
             new_input_file = os.path.join(WORKING_DIRECTORY, new_file_name)
@@ -378,7 +454,7 @@ def generate_convergence_test(input_file_name:str,kspacing:list[float], ecutwfc:
                     lines[i+1] = ' '.join(map(str,kpoints)) +' 0 0 0' +'\n'
 
             ## Write the new input script
-            new_file_name = f'{os.path.splitext(input_file_name)[0]}_k_{kspacing_min}_ecutwfc_{e}.in'
+            new_file_name = f'{os.path.splitext(input_file_name)[0]}_k_{kspacing_min}_ecutwfc_{e}.pwi'
             job_list_dict[new_file_name] = {'k':kspacing_min, 'ecutwfc':e}
             new_input_file = os.path.join(WORKING_DIRECTORY, new_file_name)
             job_list.append(new_file_name)

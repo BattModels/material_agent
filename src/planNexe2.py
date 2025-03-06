@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 from src.agent import create_agent
 from src.tools import find_pseudopotential, submit_single_job,write_script,calculate_lc,generate_convergence_test,generate_eos_test,\
 submit_and_monitor_job,find_job_list,read_energy_from_output,add_resource_suggestion, get_kspacing_ecutwfc, init_structure_data, write_LAMMPS_script,\
-find_classical_potential
+find_classical_potential, write_QE_script_w_ASE
 from src.prompt import dft_agent_prompt,hpc_agent_prompt,supervisor_prompt
 
 members = ["DFT_Agent", "HPC_Agent"]
@@ -80,6 +80,7 @@ class Act(BaseModel):
 
 teamCapability = """
 <DFT Agent>:
+    - Create intial structure of the system
     - Find pseudopotential
     - Write initial script
     - generate convergence test input files
@@ -241,8 +242,9 @@ def create_planning_graph(config: dict) -> StateGraph:
     
     ### DFT Agent
     dft_tools = [
+        init_structure_data,
         find_pseudopotential,
-        write_script,
+        write_QE_script_w_ASE,
         calculate_lc,
         generate_convergence_test,
         get_kspacing_ecutwfc,
