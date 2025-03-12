@@ -47,6 +47,7 @@ dft_agent_prompt = """
                 9. The final answer should be summarized in a short paragraph.
                 10. disk_io should be none
                 11. Do not give further suggestions on what to do next.
+                12. You don't have to use all the tools provided, only use the tools that are necessary.
             """
 
 

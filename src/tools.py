@@ -10,6 +10,7 @@ import numpy as np
 from ase.lattice.cubic import FaceCenteredCubic
 import ast
 import re
+import io
 from ase.io import read, write
 from ase.calculators.espresso import Espresso, EspressoProfile
 from ase.eos import calculate_eos,EquationOfState
@@ -17,6 +18,9 @@ from ase.units import kJ
 from ase.filters import ExpCellFilter
 from ase.optimize import BFGS, FIRE
 from ase.io.trajectory import Trajectory
+from ase.io.lammpsdata import write_lammps_data
+from ase.build import bulk, surface, add_adsorbate
+from ase import Atoms
 import subprocess
 import time
 from pysqa import QueueAdapter
@@ -24,8 +28,9 @@ import json
 import pandas as pd
 import sqlite3
 from filecmp import cmp
-from ase.io.lammpsdata import write_lammps_data
-from ase.build import bulk
+import contextlib
+from autocat.surface import generate_surface_structures
+from autocat.adsorption import get_adsorption_sites, get_adsorbate_height_estimate
 ### DFT tools
 
 @tool
@@ -109,7 +114,7 @@ def init_structure_data(
     b: Annotated[float, "Lattice constant. If only a and b is given, b will be interpreted as c instead."] = None,
     c: Annotated[float, "Lattice constant"] = None,
 ) -> Annotated[str, "Path of the saved initial structure data file."]:
-    """Create the initial structure based on composite, crystal lattice, lattice info, save to the working dir, and return filename."""
+    """Create single element bulk initial structure based on composite, crystal lattice, lattice info, save to the working dir, and return filename."""
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
     os.makedirs(WORKING_DIRECTORY, exist_ok=True)
     atoms = bulk(element, lattice, a=a, b=b, c=c, cubic=True)
@@ -127,6 +132,69 @@ def init_structure_data(
     
     return f"Created atoms saved in {saveDir}"
 
+@tool
+def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"],
+                                        crystal_structures: Annotated[str, "Crystal structure. Must be one of sc, fcc, bcc, tetragonal, bct, hcp, rhombohedral, orthorhombic, mcl, diamond, zincblende, rocksalt, cesiumchloride, fluorite or wurtzite."],
+                                        facets: Annotated[str, "Facet of the surface. Must be one of 100, 110, 111, 210, 211, 310, 311, 320, 321, 410, 411, 420, 421, 510, 511, 520, 521, 530, 531, 540, 541, 610, 611, 620, 621, 630, 631, 640, 641, 650, 651, 660, 661"],
+                                        supercell_dim: Annotated[List[int], "Supercell dimension, how many times do you want to repeat the primitive cell in each direction: [int, int, int]"],
+                                        n_fixed_layers: Annotated[int, "Number of fixed layers in the slab. typically 2"] = 2
+                                        ):
+    """Generate a surface structure and get the available adsorption sites."""
+    surface_dict = generate_surface_structures(
+        species_list=[species],
+        crystal_structures={species: crystal_structures},
+        facets={species: [facets]},
+        supercell_dim=supercell_dim,
+        n_fixed_layers=n_fixed_layers,
+        dirs_exist_ok=True,
+        write_to_disk=True,
+        write_location=os.environ.get("WORKING_DIR"),
+    )
+    
+    mySurface = surface_dict[species][f'{crystal_structures}{facets}']["structure"]
+    mySites = get_adsorption_sites(mySurface, symm_reduce=0)
+    
+    output_capture = io.StringIO()
+    with contextlib.redirect_stdout(output_capture):
+        print(mySites)
+    
+    mySites_str = output_capture.getvalue()
+    
+    return f"the surface generated is saved at {surface_dict[species][f'{crystal_structures}{facets}']['traj_file_path']}, available adsorbate sites are: {mySites_str}"
+
+@tool
+def generate_myAdsorbate(symbols: Annotated[str, "Element symbols of the adsorbate (Do not use any delimiters)"],
+                         positions: Annotated[List[List[float]], "Positions of the atoms in the adsorbate, e.g. [[x1, y1, z1], [x2, y2, z2], ...], following the same order as the symbols."]
+                         ):
+    """Generate an adsorbate structure and save it."""
+    os.makedirs("adsorbates", exist_ok=True)
+    tmpAtoms = Atoms(symbols=symbols, positions=positions)
+    write(os.path.join("adsorbates", f"Adsorbate_{symbols}.traj"), tmpAtoms)
+    
+    return f"Adsorbate saved at adsorbates/Adsorbate_{symbols}.traj"
+
+def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure"],
+                    adsorbatePath: Annotated[str, "Path to the adsorbate structure"],
+                    mySites: Annotated[List[List[float]], "List of adsorption sites you want to put adsorbates on, e.g. [[x1, y1], [x2, y2], ...]"]
+                    ):
+    """Add adsorbate to the surface structure and save it. The third argument must be in the form of [[x1, y1], [x2, y2], ...], where x and y are the coordinates of the adsorption sites."""
+    # Load the surface structure
+    mySurface = read(mySurfacePath)
+    
+    # Load the adsorbate structure
+    myAdsorbate = read(adsorbatePath)
+    
+    for oneSites in mySites:
+        myHeight = get_adsorbate_height_estimate(mySurface, myAdsorbate, (oneSites[0], oneSites[1]))
+        add_adsorbate(mySurface, myAdsorbate, height=myHeight, position=(oneSites[0], oneSites[1]))
+    
+    # get the parent path of mySurfacePath
+    parentPath = os.path.dirname(mySurfacePath)
+    
+    # save the new structure
+    write(os.path.join(parentPath, "Surface_with_adsorbate.traj"), mySurface)
+    
+    return f"Surface with adsorbate saved at {parentPath}/Surface_with_adsorbate.traj"
 
 @tool
 def write_script(
@@ -700,7 +768,7 @@ echo "Job Ended at `date`"\n \
     # craete the json file if it does not exist, otherwise load it
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
 
-    new_resource_dict = {qeInputFileName: {"partition": partition, "nnodes": 1, "ntasks": 4, "runtime": 30, "submissionScript": submissionScript, "outputFilename": outputFilename}}
+    new_resource_dict = {qeInputFileName: {"partition": partition, "nnodes": 1, "ntasks": 64, "runtime": 1440, "submissionScript": submissionScript, "outputFilename": outputFilename}}
     
     # check if resource_suggestions.db exist in the working directory
     db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
