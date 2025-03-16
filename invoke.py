@@ -14,7 +14,7 @@ from langgraph.prebuilt import create_react_agent
 from src.planNexe2 import create_planning_graph as create_graph
 # from src.planNexeHighPlan import create_planning_graph as create_graph
 
-
+import time
 from src.utils import load_config, save_graph_to_file,check_config
 # from src.tools import 
 
@@ -56,37 +56,37 @@ if __name__ == "__main__":
     
     userMessage_5 = '''
     through DFT, please calculate the lattic constant for for following system listed in the following format: Lattice_structure Species (experimental_value)
-    BCC Li (3.43)
-    BCC Na (4.19)
-    BCC K (5.28)
-    BCC Rb (5.68)
-    FCC Ca (5.53)
-    FCC Sr (6.04)
-    BCC Ba (5.02)
-    BCC V (3.02)
-    BCC Nb (3.30)
-    BCC Ta (3.31)
-    BCC Mo (3.15)
-    BCC W (3.20)
-    BCC Fe (2.87)
-    FCC Rh (3.85)
-    FCC Ir (3.89)
-    FCC Ni (3.52)
-    FCC Pd (3.94)
-    FCC Pt (3.98)
-    FCC Cu (3.65)
-    FCC Ag (4.15)
-    FCC Au (4.17)
-    FCC Al (4.05)
-    FCC Pb (5.04)
-    Diamond C (3.57)
-    Diamond Si (5.47)
-    Diamond Ge (5.76)
-    Diamond Sn (6.65)
+    Li (bcc)	3.451
+    Na (bcc)	4.209
+    K (bcc)	5.212
+    Rb (bcc)	5.577
+    Ca (fcc)	5.556
+    Sr (fcc)	6.04
+    Ba (bcc)	5.002
+    V (bcc)	3.024
+    Nb (bcc)	3.294
+    Ta (bcc)	3.299
+    Mo (bcc)	3.141
+    W (bcc)	3.16
+    Fe (bcc)	2.853
+    Rh (fcc)	3.793
+    Ir (fcc)	3.831
+    Ni (fcc)	3.508
+    Pd (fcc)	3.876
+    Pt (fcc)	3.913
+    Cu (fcc)	3.596
+    Ag (fcc)	4.062
+    Au (fcc)	4.062
+    Al (fcc)	4.019
+    Pb (fcc)	4.912
+    C (dia)	3.544
+    Si (dia)	5.415
+    Ge (dia)	5.639
+    Sn (dia)	6.474
     '''
     
-    userMessage_6 = "You are going to calculate the lattic constant for FCC Ca through DFT, the experiment value is 5.556."
-    
+    userMessage_6 = "You are going to calculate the lattic constant for BCC Rb through DFT, the experiment value is 5.577, use this to create the initial structure."
+    userMessage_7 = "You are going to generat a Pt surface structure with 2x2x4 supercell, then do a convergence test, use maximum ecutwfc = 160. Get the optimal kspacing and ecutwfc."
     testMessage = '''
     please generate a single input script for Li BCC structure with kspacing 0.1 and ecutwfc 40
     '''
@@ -104,7 +104,7 @@ if __name__ == "__main__":
     graph = create_graph(config)
     llm_config = {"thread_id": "1", 'recursion_limit': 1000}
     
-    print(graph)
+    # print(graph)
     
 
     save_graph_to_file(graph, WORKING_DIRECTORY, "super_graph")
@@ -131,14 +131,15 @@ if __name__ == "__main__":
     #         print(s)
     #         print("----")
 
-    for s in graph.stream(
-    {
-        "input": f"{userMessage_6}",
-        "plan": []
-    },llm_config):
-        if "__end__" not in s:
-            print(s)
-            print("----")
+    # for s in graph.stream(
+    # {
+    #     "input": f"{userMessage_6}",
+    #     "plan": [],
+    #     "past_steps": []
+    # },llm_config):
+    #     if "__end__" not in s:
+    #         print(s)
+    #         print("----")
             
     # for s in graph.stream(
     # {
@@ -149,3 +150,22 @@ if __name__ == "__main__":
     #     if "__end__" not in s:
     #         print(s)
     #         print("----")
+
+    print("Start, check the log file for details")
+    log_filename = f"./log/agent_stream_{int(time.time())}.log"  # Add timestamp to filename
+    with open(log_filename, "a") as log_file:
+        log_file.write(f"=== Session started at {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n\n")
+        
+        for s in graph.stream(
+            {
+                "input": f"{userMessage_6}",
+                "plan": [],
+                "past_steps": []
+            }, llm_config):
+            
+            if "__end__" not in s:
+                # Print to console
+                log_file.write(f"{s}\n")
+                log_file.write("----\n")
+                log_file.flush()
+    print("End, check the log file for details")
