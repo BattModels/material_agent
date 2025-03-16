@@ -84,7 +84,18 @@ def get_kspacing_ecutwfc(threshold: float = 1.0) -> str:
         convergence_df.to_csv(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv'))
     
     ## Determine the kpoints and ecutwfc based on the threshold
-    k_chosen, ecutwfc_chosen = select_k_ecut(convergence_df, threshold, Natom)
+    k_chosen, ecutwfc_chosen,df_kspacing, df_ecutwfc = select_k_ecut(convergence_df, threshold, Natom)
+    
+    ## Save the chosen kspacing and ecutwfc
+    if os.path.exists(os.path.join(WORKING_DIRECTORY, 'df_k.csv')):
+        df_kspacing.to_csv(os.path.join(WORKING_DIRECTORY, 'df_k.csv'), mode='a', header=False)
+    else:
+        df_kspacing.to_csv(os.path.join(WORKING_DIRECTORY, 'df_k.csv'))
+    
+    if os.path.exists(os.path.join(WORKING_DIRECTORY, 'df_e.csv')):
+        df_ecutwfc.to_csv(os.path.join(WORKING_DIRECTORY, 'df_e.csv'), mode='a', header=False)
+    else:
+        df_ecutwfc.to_csv(os.path.join(WORKING_DIRECTORY, 'df_e.csv'))
 
     return f"Please use kspacing {k_chosen} and ecutwfc {ecutwfc_chosen} for the production calculation"
 
@@ -564,7 +575,7 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
             2 * ((np.ceil(2 * np.pi / np.linalg.norm(ii) / kspacing).astype(int)) // 2 + 1) for ii in cell
         ]
     
-    for scale in np.linspace(0.8, 1.2, 5):
+    for scale in np.linspace(0.98, 1.02, 5):
         # Read the input script
         with open(input_file, 'r') as f:
             lines = f.readlines()
@@ -1375,7 +1386,7 @@ def read_energy_from_output(
     # atoms = read(file_path)
     # return f"Energy read from job {input_file} is {atoms.get_potential_energy()}"
         
-    return result
+    return "All energies are read successfully"
 
 
 @tool

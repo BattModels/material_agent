@@ -189,7 +189,7 @@ def select_k_ecut(convergence_data: pd.DataFrame, error_threshold: float, natom:
     print(f'Chosen kspacing: {k_chosen}')
 
 
-    return k_chosen, ecutwfc_chosen
+    return k_chosen, ecutwfc_chosen, df_kspacing, df_ecutwfc
 
 
 def initialize_database(db_file):
