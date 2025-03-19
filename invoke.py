@@ -15,9 +15,8 @@ from src.planNexe2 import create_planning_graph as create_graph
 # from src.planNexeHighPlan import create_planning_graph as create_graph
 
 import time
-from src.utils import load_config, save_graph_to_file,check_config
-# from src.tools import 
-
+from src.utils import load_config, save_graph_to_file,check_config,initialize_database
+from src.myCANVAS import CANVAS
 
 
 if __name__ == "__main__":
@@ -87,6 +86,24 @@ if __name__ == "__main__":
     
     userMessage_6 = "You are going to calculate the lattic constant for BCC Rb through DFT, the experiment value is 5.577, use this to create the initial structure."
     userMessage_7 = "You are going to generat a Pt surface structure with 2x2x4 supercell, then do a convergence test, use maximum ecutwfc = 160. Get the optimal kspacing and ecutwfc."
+    userMessage_8 = """Please generate intial structures required to calculate CO adsorbtion on Pt(111) surface with 1/4 coverage, and calculate the adsorbtion energy. The plan should roughly be:
+1. Create initial structure of Pt(111) surface
+2. Create initial structure of CO molecule
+3. Create initial structure of CO adsorbed on Pt(111) surface
+4. Find appropriate pseudopotentials for Pt and C, O atoms
+5. Write initial DFT script for convergence testing
+6. Generate convergence test input files for energy cutoff and k-points
+7. Add resource requirements to convergence test jobs
+8. Submit convergence test jobs to HPC and monitor completion
+9. Analyze convergence test results and determine optimal parameters
+10. Generate input files for Pt(111) surface energy calculation using optimal parameters
+11. Generate input files for CO molecule energy calculation using optimal parameters
+12. Generate input files for CO adsorbed on Pt(111) surface energy calculation using optimal parameters
+13. Add resource requirements to energy calculation jobs
+14. Submit energy calculation jobs to HPC and monitor completion
+15. Extract energies from output files for all three systems
+16. Calculate CO adsorption energy on Pt(111) surface
+"""
     testMessage = '''
     please generate a single input script for Li BCC structure with kspacing 0.1 and ecutwfc 40
     '''
@@ -94,6 +111,13 @@ if __name__ == "__main__":
     config = load_config(os.path.join('./config', "default.yaml"))
     check_config(config)
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    
+    CANVAS.set_working_directory(WORKING_DIRECTORY)
+    
+    # check if resource_suggestions.db exist in the working directory
+    db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
+    if not os.path.exists(db_file):
+        initialize_database(db_file)
     
     # check if working directory exists, if so delete it
     if os.path.exists(WORKING_DIRECTORY):
@@ -107,7 +131,7 @@ if __name__ == "__main__":
     # print(graph)
     
 
-    save_graph_to_file(graph, WORKING_DIRECTORY, "super_graph")
+    # save_graph_to_file(graph, WORKING_DIRECTORY, "super_graph")
     # exit()
 
     

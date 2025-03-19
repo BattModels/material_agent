@@ -133,8 +133,8 @@ def create_pysqa_prerequisites(WORKING_DIRECTORY: str):
 #SBATCH --time={{run_time_max | int}}
 #SBATCH -p {{partition}}
 #SBATCH --mem-per-cpu={{memory_max}}M # Memory pool for all cores in MB
-#SBATCH -e sqa.err #change the name of the err file 
-#SBATCH -o sqa.out # File to which STDOUT will be written %j is the job #
+#SBATCH -e {{errNoutName}}.err #change the name of the err file 
+#SBATCH -o {{errNoutName}}.out # File to which STDOUT will be written %j is the job #
 
 {{command}}
 

@@ -9,7 +9,7 @@ from langchain_core.messages import (
     HumanMessage,
     ToolMessage,
 )
-# from langchain_anthropic import ChatAnthropic
+from langchain_anthropic import ChatAnthropic
 from langchain_openai import AzureChatOpenAI
 # from langchain_deepseek import ChatDeepSeek
 
@@ -73,7 +73,8 @@ class Act(BaseModel):
 
     action: Union[Plan, Response] = Field(
         description="Action to perform. If you need to further use tools to get the answer, use Plan."
-        "DO NOT EVER use response."
+        "If you want to end the conversation, use Response."
+        # "DO NOT use response unless absolutly necessary."
     )
 
 teamCapability = """
@@ -86,6 +87,7 @@ teamCapability = """
     - generate EOS calculation input files using the best parameters
     - Read output file to get energy
     - Calculate lattice constant
+    - Calculate formation energy using DFT result
 <HPC Agent>:
     - find job list from the job list file
     - Add resource suggestion base on the DFT input file
@@ -176,31 +178,26 @@ Now, you are tasked with executing step {1}, {task}.
         "past_steps": [past_steps_list[-1]],
     }
 
-    # for s in agent.stream(state, {"recursion_limit": 1000}):
-    #     print_stream(s)
-    # return {"messages": [HumanMessage(content=s["messages"][-1].content, name=name)]}
     
 def whos_next(state):
     return state["next"]
 
 def create_planning_graph(config: dict) -> StateGraph:
     # Define the model
-    if 'claude' in config['LANGSIM_MODEL']:
-        # llm = ChatAnthropic(model=config["LANGSIM_MODEL"], api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-        llm = AzureChatOpenAI(model="gpt-4o", temperature=0.0, api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
-        # llm = AzureChatOpenAI(azure_deployment="gpt-4o", temperature=0.0, api_version="2024-08-01-preview")
-        # llm = AzureChatOpenAI(azure_endpoint = config["OpenAI_BASE_URL"], api_key=config["OpenAI_API_KEY"], model=config["OpenAI_MDL"], api_version="2024-08-01-preview", temperature=0.0)
-        # llm = ChatDeepSeek(model_name=config["DeepSeek_MDL"], api_key=config['DeepSeek_API_KEY'], api_base=config['DeepSeek_BASE_URL'], temperature=0.0)
+    # llm = ChatAnthropic(model=config["ANTHROPIC_MODEL"], api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    llm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
+    # llm = ChatDeepSeek(model_name=config["DeepSeek_MDL"], api_key=config['DeepSeek_API_KEY'], api_base=config['DeepSeek_BASE_URL'], temperature=0.0)
     
     
     supervisor_prompt = ChatPromptTemplate.from_template(
         f"""
 <Role>
-    You are a supervisor tasked with managing a conversation for scientific computing between the following workers: {members}.
+    You are a supervisor tasked with managing a conversation for scientific computing between the following workers: {members}. You don't have to use all the members, nor all the capabilities of the members.
 <Objective>
     Given the following user request, decide which the member to act next, and do what
 <Instructions>:
     1.  If the plan is empty, For the given objective, come up with a simple, high level plan based on the capability of the team listed here: {teamCapability} and the restrictions listed here: {teamRestriction} 
+        You don't have to use all the members, nor all the capabilities of the members.
         This plan should involve individual tasks, that if executed correctly will yield the correct answer. Do not add any superfluous steps. 
         The result of the final step should be the final answer. Make sure that each step has all the information needed - do not skip steps.
         If you are given a list of systems, process them one by one: generate plan for one system first, finish that system, then generate plan for the next system.
@@ -237,9 +234,14 @@ def create_planning_graph(config: dict) -> StateGraph:
     memory = MemorySaver()
 
     PAST_STEPS = []
+    myCANVAS = {}
     
     ### DFT Agent
     dft_tools = [
+        inspect_my_canvas,
+        write_my_canvas,
+        read_my_canvas,
+        calculate_formation_E,
         generateSurface_and_getPossibleSite,
         generate_myAdsorbate,
         add_myAdsorbate,
@@ -250,7 +252,8 @@ def create_planning_graph(config: dict) -> StateGraph:
         generate_convergence_test,
         get_kspacing_ecutwfc,
         generate_eos_test,
-        read_energy_from_output
+        read_energy_from_output,
+        
         ]
     dft_agent = create_react_agent(llm, tools=dft_tools,
                                    state_modifier=dft_agent_prompt)   
@@ -260,8 +263,10 @@ def create_planning_graph(config: dict) -> StateGraph:
     ### HPC Agent
     # hpc_tools = [read_script, submit_and_monitor_job, read_energy_from_output]
     hpc_tools = [
+        inspect_my_canvas,
+        write_my_canvas,
+        read_my_canvas,
         submit_and_monitor_job,
-        find_job_list,
         add_resource_suggestion
         ]
 

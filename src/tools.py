@@ -2,10 +2,11 @@
 
 from math import e
 from src.utils import *
+from src.myCANVAS import CANVAS
 from ase import Atoms, Atom
 from langchain.agents import tool
 import os 
-from typing import Annotated, Dict, Literal, Optional, Sequence, Tuple
+from typing import Annotated, Dict, Literal, Optional, Sequence, Tuple, Any
 import numpy as np
 from ase.lattice.cubic import FaceCenteredCubic
 import ast
@@ -31,6 +32,28 @@ from filecmp import cmp
 import contextlib
 from autocat.surface import generate_surface_structures
 from autocat.adsorption import get_adsorption_sites, get_adsorbate_height_estimate
+
+### Common tools
+@tool
+def inspect_my_canvas():
+    """Inspect the working canvas to get available keys"""
+    # get all keys in myCANVAS and return them as a list [key1, key2, ...]
+    return CANVAS.inspect()
+
+@tool
+def read_my_canvas(key: str):
+    """Read a value from the working canvas"""
+    # read a value from myCANVAS given a key
+    return CANVAS.read(key)
+
+@tool
+def write_my_canvas(key: Annotated[str, "key"],
+                    value: Annotated[Any, "value"],
+                    overwrite: Annotated[bool, "True to overwrite if key already exist. only set to True if you are certain you want to overwrite the existing value"] = False):
+    """Write a value to the working canvas. If the key already exists, it will not overwrite unless specified."""
+    # write a value to myCANVAS given a key and a value
+    return CANVAS.write(key, value, overwrite)
+
 ### DFT tools
 
 @tool
@@ -56,10 +79,16 @@ def get_kspacing_ecutwfc(threshold: float = 1.0) -> str:
     output: str, the kspacing and ecutwfc used in the production
     '''
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
-    job_list = os.path.join(WORKING_DIRECTORY, f'job_list.json')
-    with open(job_list,"r") as file:
-        job_dict = json.load(file)
-        job_list = job_dict['job_list']
+    
+    print(CANVAS.canvas['job_list'])
+    
+    job_dict = CANVAS.canvas.get('jobs_K_and_ecut', {})
+    job_list = CANVAS.canvas.get('job_list', []).copy()
+    print(job_list)
+    assert len(job_list) > 0, "job list 0"
+    
+    print(f"successfully read {len(job_list)} jobs, and {len(job_dict)} job_dict")
+
     ### Find the kpoints and ecutwfc from the output file
     kspacing = []
     ecutwfc = []
@@ -75,6 +104,8 @@ def get_kspacing_ecutwfc(threshold: float = 1.0) -> str:
         energy = atom.get_potential_energy()
         energy_list.append(energy)
         Natom = atom.get_number_of_atoms()
+    
+    print(f"successfully read {len(kspacing)} kspacing and {len(ecutwfc)} ecutwfc")
         
     convergence_df = pd.DataFrame({'job':job_list,'kspacing':kspacing, 'ecutwfc':ecutwfc, 'energy':energy_list})
     ## Save the convergence test result if file exist then append to it
@@ -86,6 +117,8 @@ def get_kspacing_ecutwfc(threshold: float = 1.0) -> str:
     ## Determine the kpoints and ecutwfc based on the threshold
     k_chosen, ecutwfc_chosen,df_kspacing, df_ecutwfc = select_k_ecut(convergence_df, threshold, Natom)
     
+    print(f"Chosen kspacing: {k_chosen}, Chosen ecutwfc: {ecutwfc_chosen}")
+    
     ## Save the chosen kspacing and ecutwfc
     if os.path.exists(os.path.join(WORKING_DIRECTORY, 'df_k.csv')):
         df_kspacing.to_csv(os.path.join(WORKING_DIRECTORY, 'df_k.csv'), mode='a', header=False)
@@ -95,8 +128,10 @@ def get_kspacing_ecutwfc(threshold: float = 1.0) -> str:
     if os.path.exists(os.path.join(WORKING_DIRECTORY, 'df_e.csv')):
         df_ecutwfc.to_csv(os.path.join(WORKING_DIRECTORY, 'df_e.csv'), mode='a', header=False)
     else:
-        df_ecutwfc.to_csv(os.path.join(WORKING_DIRECTORY, 'df_e.csv'))
-
+        df_ecutwfc.to_csv(os.path.join(WORKING_DIRECTORY, 'df_e.csv'))  
+        
+    print("saved the chosen kspacing and ecutwfc")
+    
     return f"Please use kspacing {k_chosen} and ecutwfc {ecutwfc_chosen} for the production calculation"
 
 @tool
@@ -147,8 +182,8 @@ def init_structure_data(
 def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"],
                                         crystal_structures: Annotated[str, "Crystal structure. Must be one of sc, fcc, bcc, tetragonal, bct, hcp, rhombohedral, orthorhombic, mcl, diamond, zincblende, rocksalt, cesiumchloride, fluorite or wurtzite."],
                                         facets: Annotated[str, "Facet of the surface. Must be one of 100, 110, 111, 210, 211, 310, 311, 320, 321, 410, 411, 420, 421, 510, 511, 520, 521, 530, 531, 540, 541, 610, 611, 620, 621, 630, 631, 640, 641, 650, 651, 660, 661"],
-                                        supercell_dim: Annotated[List[int], "Supercell dimension, how many times do you want to repeat the primitive cell in each direction: [int, int, int]"],
-                                        n_fixed_layers: Annotated[int, "Number of fixed layers in the slab. typically 2"] = 2
+                                        supercell_dim: Annotated[List[int], "typically [int, int, 4]. Supercell dimension, how many times do you want to repeat the primitive cell in each direction: [int, int, int]"],
+                                        n_fixed_layers: Annotated[int, "typically 2. Number of fixed layers in the slab"] = 2
                                         ):
     """Generate a surface structure and get the available adsorption sites."""
     surface_dict = generate_surface_structures(
@@ -184,6 +219,7 @@ def generate_myAdsorbate(symbols: Annotated[str, "Element symbols of the adsorba
     
     return f"Adsorbate saved at adsorbates/Adsorbate_{symbols}.traj"
 
+@tool
 def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure"],
                     adsorbatePath: Annotated[str, "Path to the adsorbate structure"],
                     mySites: Annotated[List[List[float]], "List of adsorption sites you want to put adsorbates on, e.g. [[x1, y1], [x2, y2], ...]"]
@@ -206,6 +242,30 @@ def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure
     write(os.path.join(parentPath, "Surface_with_adsorbate.traj"), mySurface)
     
     return f"Surface with adsorbate saved at {parentPath}/Surface_with_adsorbate.traj"
+
+@tool
+def calculate_formation_E(slabFilePath: Annotated[str, "If I use ase.io.read on this path, I'll get the energy of the slab"],
+                          adsorbateFilePath: Annotated[str, "If I use ase.io.read on this path, I'll get the energy of the adsorbate"],
+                          systemFilePath: Annotated[str, "If I use ase.io.read on this path, I'll get the energy of the slab with adsorbate"]
+                          ):
+    """using the energies of the slab, adsorbate, and slab with adsorbate, calculate the formation energy of the adsorbate on the slab. """
+    # Load the energies
+    slab = read(slabFilePath)
+    adsorbate = read(adsorbateFilePath)
+    system = read(systemFilePath)
+    
+    slabEnergy = slab.get_potential_energy()/len(slab)
+    adsorbateEnergy = read(adsorbateFilePath).get_potential_energy()
+    systemEnergy = read(systemFilePath).get_potential_energy()
+    
+    # assume slab only have one species
+    slabSpecies = slab.numbers[0]
+    NslabInSystem = system.numbers.tolist().count(slabSpecies)
+    NadsorbateInSystem = (len(system) - NslabInSystem)/len(adsorbate)
+    
+    formationEnergy = systemEnergy - slabEnergy * NslabInSystem - adsorbateEnergy * NadsorbateInSystem
+    
+    return f"The formation energy of the adsorbate on the slab is {formationEnergy} eV"
 
 @tool
 def write_script(
@@ -274,7 +334,7 @@ def write_QE_script_w_ASE(
                   'restart_mode': restart_mode,
                   'prefix': prefix,
                   'pseudo_dir': pseudo_dir,
-                  'outdir': outdir,
+                  'outdir': './out',
                   'disk_io': disk_io,
               },
               'system': {
@@ -327,9 +387,9 @@ def write_LAMMPS_script(
     ## Remove duplicate files
     # job_list = list(set(job_list))
     ## Save the job list as json file
-    job_list_dict['job_list'] = job_list
-    with open(os.path.join(WORKING_DIRECTORY, 'job_list.json'), 'w') as f:
-        json.dump(job_list_dict, f)
+    old_job_list = CANVAS.canvas.get('job_list', []).copy()
+    job_list = list(set(old_job_list + job_list))
+    CANVAS.write('job_list',job_list)
     
     return f"Initial file is created named {file_name}"
 
@@ -338,14 +398,11 @@ def calculate_lc() -> str:
     """Read the output file and calculate the lattice constant"""
     
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
-    job_list = os.path.join(WORKING_DIRECTORY, f'job_list.json')
-    with open(job_list,"r") as file:
-        print('reading job list')
-        job_json = json.load(file)
+    job_list = CANVAS.canvas.get('job_list', []).copy()
 
     volume_list = []
     energy_list = []
-    for job in job_json['job_list']:
+    for job in job_list:
         print(f'reading {job}')
         atom = read(os.path.join(WORKING_DIRECTORY, job+'.pwo'))
         volume_list.append(atom.get_volume())
@@ -541,11 +598,11 @@ def generate_convergence_test(input_file_name:str,kspacing:list[float], ecutwfc:
                 f.writelines(lines)
     ## Remove duplicate files
     job_list = list(set(job_list))
-    ## Save the job list as json file
-    job_list_dict['job_list'] = job_list
-    with open(os.path.join(WORKING_DIRECTORY, 'job_list.json'), 'w') as f:
-        json.dump(job_list_dict, f)
-    
+    ## Save the job list
+    old_job_list = CANVAS.canvas.get('job_list', []).copy()
+    job_list = list(set(old_job_list + job_list))
+    CANVAS.write('job_list',job_list)
+    CANVAS.write('jobs_K_and_ecut',job_list_dict)
     return f"Job list is saved scucessfully, continue to submit the jobs"
 
 
@@ -558,6 +615,9 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
             kspacing: float, the kspacing to be tested
             ecutwfc: int, the ecutwfc to be tested
     '''
+    CANVAS.write('job_list', [], overwrite=True)
+    CANVAS.canvas['jobs_K_and_ecut'] = {}
+    
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
     input_file = os.path.join(WORKING_DIRECTORY, input_file_name)
     prefix = input_file_name.split('.')[0]
@@ -604,98 +664,35 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
             f.writelines(lines)
     ## Remove duplicate files
     job_list = list(set(job_list))
+    print(job_list)
     ## Save the job list as json file
-    job_list_dict = {'job_list':job_list}
-    with open(os.path.join(WORKING_DIRECTORY, 'job_list.json'), 'w') as f:
-        json.dump(job_list_dict, f)
+    old_job_list = CANVAS.canvas.get('job_list', []).copy()
+    job_list = list(set(old_job_list + job_list))
+    print(job_list)
+    CANVAS.write('job_list',job_list, overwrite=True)
     
     return f"Job list is saved scucessfully, continue to submit the jobs"
 
 # @tool
-# def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
-#     '''
-#     Generate the equation of state test input scripts for quantum espresso calculation and save the job list.
-    
-#     Input:  input_file_name: str, the name of the input file
-#             kspacing: float, the kspacing to be tested
-#             ecutwfc: int, the ecutwfc to be tested
-#     '''
+# def save_job_list(
+#     script_list: Annotated[list[str], "List of scripts to be calculated."]
+# ) -> Annotated[str, "Path of the saved json file."]:
+#     """Save the list of quantum espresso input files to the specified json file path"""
 #     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
-#     input_file = os.path.join(WORKING_DIRECTORY, input_file_name)
-#     # Read the atom object from the input script
-#     try:
-#         atom = read(input_file)
-#     except:
-#         return "Invalid input file, please check the file name"
-#     job_list = []
-    
-#     cell = atom.cell
-#     ## Calculate the kpoints
-#     kpoints = [
-#             2 * ((np.ceil(2 * np.pi / np.linalg.norm(ii) / kspacing).astype(int)) // 2 + 1) for ii in cell
-#         ]
-    
-#     for scale in np.linspace(0.9, 1.1, 5):
-#         # Read the input script
-#         with open(input_file, 'r') as f:
-#             lines = f.readlines()
-#         # Update the scale
-#         for i, line in enumerate(lines):
-#             if 'outdir' in line:
-#                 lines[i] = f"outdir = '    ./out_{scale}'\n"
-
-#             if 'ecutwfc' in line:
-#                 lines[i] = f"    ecutwfc = {ecutwfc},\n"
-#             if 'CELL_PARAMETERS' in line:
-#                 lines[i+1] = f"{cell[0][0]*scale} {cell[0][1]*scale} {cell[0][2]*scale}\n"
-#                 lines[i+2] = f"{cell[1][0]*scale} {cell[1][1]*scale} {cell[1][2]*scale}\n"
-#                 lines[i+3] = f"{cell[2][0]*scale} {cell[2][1]*scale} {cell[2][2]*scale}\n"
-                
-#             if 'K_POINTS' in line:
-#                 lines[i+1] = f"{kpoints[0]} {kpoints[1]} {kpoints[2]} 0 0 0\n"
-    
-#         ## New input file name
-#         new_file_name = f"Li_bcc_{scale}.in"
-#         job_list.append(new_file_name)
-#         new_file = os.path.join(WORKING_DIRECTORY, new_file_name)
-#         with open(new_file, 'w') as f:
-#             f.writelines(lines)
-#     ## Remove duplicate files
-#     job_list = list(set(job_list))
-#     ## Save the job list as json file
-#     job_list_dict = {'job_list':job_list}
-#     with open(os.path.join(WORKING_DIRECTORY, 'job_list.json'), 'w') as f:
-#         json.dump(job_list_dict, f)
-    
-#     return f"Job list is saved scucessfully, continue to submit the jobs"
-
-@tool
-def save_job_list(
-    script_list: Annotated[list[str], "List of scripts to be calculated."]
-) -> Annotated[str, "Path of the saved json file."]:
-    """Save the list of quantum espresso input files to the specified json file path"""
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
-    os.makedirs(WORKING_DIRECTORY, exist_ok=True)
-    path = os.path.join(WORKING_DIRECTORY, f'job_list.json')
-    job = {'job_list':script_list}
-    with open(path,"w") as file:
-        json.dump(job, file)
-    return f"Job list saved to {path}"
+#     os.makedirs(WORKING_DIRECTORY, exist_ok=True)
+#     path = os.path.join(WORKING_DIRECTORY, 'job_list.json')
+#     job = {'job_list':script_list}
+#     with open(path,"w") as file:
+#         json.dump(job, file)
+#     return f"Job list saved to {path}"
 
 ### HPC tools
 @tool
 def find_job_list() -> str:
-    """Find the job list from the specified json file path"""
+    """Return the list of job files to be submitted."""
+
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
-    path = os.path.join(WORKING_DIRECTORY, f'job_list.json')
-    with open(path,"r") as file:
-        job_json = json.load(file)
-    job_list = job_json['job_list']
-    
-    # check if resource_suggestions.db exist in the working directory
-    db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
-    if not os.path.exists(db_file):
-        initialize_database(db_file)
+    job_list = CANVAS.canvas.get('job_list', []).copy()
     
     return f'The files need to be submitted are {job_list}. Please continue to submit the job.'
 
@@ -779,7 +776,7 @@ echo "Job Ended at `date`"\n \
     # craete the json file if it does not exist, otherwise load it
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
 
-    new_resource_dict = {qeInputFileName: {"partition": partition, "nnodes": 1, "ntasks": 64, "runtime": 1440, "submissionScript": submissionScript, "outputFilename": outputFilename}}
+    new_resource_dict = {qeInputFileName: {"partition": partition, "nnodes": 1, "ntasks": 8, "runtime": 30, "submissionScript": submissionScript, "outputFilename": outputFilename}}
     
     # check if resource_suggestions.db exist in the working directory
     db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
@@ -790,254 +787,6 @@ echo "Job Ended at `date`"\n \
     
     return f"Resource suggestion for {qeInputFileName} saved scucessfully"
 
-# @tool
-# def submit_and_monitor_job(
-#     jobType: Annotated[str, "The type of job to be submitted, e.g. QE, LAMMPS"],
-#     shScript: Annotated[str, "submission script based on the types of jobs"]
-#     ) -> str:
-#     '''
-#     Submit jobs in the job list to supercomputer, return the location of the output file once the job is done
-    
-#     An example Quantum Espresso job submission script is as follows:
-#     export OMP_NUM_THREADS=1
-
-#     spack load quantum-espresso@7.2
-
-#     echo "Job started on `hostname` at `date`"
-
-#     mpirun pw.x -i [input_script_name.in] > [input_script_name.in].out
-
-#     echo " "
-#     echo "Job Ended at `date`"
-    
-#     An example LAMMPS job submission script is as follows:
-#     source /nfs/turbo/coe-venkvis/ziqiw-turbo/.bashrc
-
-#     module load cuda
-
-#     conda activate /nfs/turbo/coe-venkvis/ziqiw-turbo/conda/t2
-
-#     echo "Job started on `hostname` at `date`" 
-
-#     /nfs/turbo/coe-venkvis/ziqiw-turbo/LAMMPSs/lammps-ASC/build/lmp -in {inputFile} > {inputFile}.log
-
-#     echo " "
-#     echo "Job Ended at `date`"
-    
-#     You should create the script based on the types of jobs you want to submit
-#     '''
-    
-#     # check if resource_suggestions.json exist
-#     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
-#     resource_suggestions = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
-#     if not os.path.exists(resource_suggestions):
-#         return "Resource suggestion file not found, please use the add_resource_suggestion tool to add the resource suggestion"
-    
-#     print("checking pysqa prerequisites...")
-#     # check if slurm.sh and queue.yaml exist in the working directory
-#     if not os.path.exists(os.path.join(WORKING_DIRECTORY, "slurm.sh")) or not os.path.exists(os.path.join(WORKING_DIRECTORY, "queue.yaml")):
-#         print("Creating pysqa prerequisites...")
-#         create_pysqa_prerequisites(WORKING_DIRECTORY)
-    
-#     qa = QueueAdapter(directory=WORKING_DIRECTORY)
-        
-#     # load jobs frm job_list.json
-#     job_list_dir = os.path.join(WORKING_DIRECTORY, f'job_list.json')
-#     with open(job_list_dir,"r") as file:
-#         job_list = json.load(file)['job_list']
-    
-#     # load reousrce suggestions
-#     # resource_suggestions = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.json')
-#     # with open(resource_suggestions, "r") as file:
-#     #     resource_dict = json.load(file)
-#     db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
-#     conn = sqlite3.connect(db_file)
-#     cursor = conn.cursor()
-
-#     # Query all rows from the resources table
-#     cursor.execute('SELECT * FROM resources')
-#     rows = cursor.fetchall()
-
-#     # Reconstruct the original dictionary
-#     resource_dict = {}
-#     for row in rows:
-#         filename, partition, nnodes, ntasks, runtime = row
-#         resource_dict[filename] = {
-#             'partition': partition,
-#             'nnodes': nnodes,
-#             'ntasks': ntasks,
-#             'runtime': runtime
-#         }
-        
-#     conn.close()
-#     print(f"loaded resource suggestions: {json.dumps(resource_dict, indent=4)}")
-    
-#     ## Check resource key is valid
-#     for job in job_list:
-#         if job not in resource_dict.keys():
-#             return f"Resource suggestion for {job} is not found, please use the add_resource_suggestion tool to add the resource suggestion"
-    
-#     print(f"loaded {len(job_list)} jobs from job_list.json, and {len(resource_dict)} resource suggestions from resource_suggestions.json")
-    
-#     queueIDList = []
-#     while True:
-#         for inputFile in job_list:    
-            
-#             ## Check if the input file exists
-#             if not os.path.exists(os.path.join(WORKING_DIRECTORY, inputFile)):
-#                 return f"Input file {inputFile} does not exist, please use the find job list tool to submit the file in the job list"
-#             print("Generating batch script...")
-
-#             ## Check if the output file exists 
-#             outputFile = f"{inputFile}.pwo"
-#             if os.path.exists(os.path.join(WORKING_DIRECTORY, outputFile)):
-#                 ## Supervisor sometimes ask to submit the job again, so we need to check if the output file exists
-#                 try:
-#                     # temporay disable the read function to avoid the calculation
-#                     # tmp = read(os.path.join(WORKING_DIRECTORY, outputFile))
-#                     # _ = tmp.get_potential_energy()
-#                     print(f"Output file {inputFile}.pwo already exists, the calculation is done")
-#                     continue
-#                 except:
-#                     print("output file exists but the calculation is not done, will resubmit the job")
-                    
-            
-            
-#             job_id = qa.submit_job(
-#             working_directory=WORKING_DIRECTORY,
-#             cores=resource_dict[inputFile]['ntasks'],
-#             memory_max=2000,
-#             queue="slurm",
-#             job_name="agent_job",
-#             cores_max=resource_dict[inputFile]['ntasks'],
-#             nodes_max=resource_dict[inputFile]['nnodes'],
-#             partition=resource_dict[inputFile]['partition'],
-#             run_time_max=resource_dict[inputFile]['runtime'],
-#             command=shScript
-#             )
-            
-#             if job_id is None:
-#                 return "Job submission failed"
-
-#             queueIDList.append(job_id)
-#             ## Sleep for 1.5 second to avoid the job submission too fast
-#             time.sleep(5)
-            
-#             #  Change the bash script name to avoid the job submission too fast
-#             os.rename(os.path.join(WORKING_DIRECTORY, "run_queue.sh"), os.path.join(WORKING_DIRECTORY, f"slurm_{inputFile}.sh"))
-#             time.sleep(5)
-        
-#         prevCount = len(queueIDList)
-#         while True:
-#             count = 0
-#             print("waiting for", end=" ")
-#             for queueID in queueIDList:
-#                 if qa.get_status_of_job(process_id=queueID):
-#                     count += 1
-#                     print(queueID, end=" ")
-#             print("to finish", end="\r")
-            
-#             if count < prevCount:
-#                 print()
-#                 prevCount = count
-#             if count == 0:
-#                 break
-#             time.sleep(1)
-            
-#         print(f"All job in job_list has finished")
-#         print("waiting for files...")
-#         time.sleep(10)
-        
-#         if jobType == "QE":
-#             print("Checking jobs")
-            
-#             checked = set()
-#             unchecked = set(job_list)
-#             while checked != unchecked:
-#                 for inputFile in job_list:
-#                     outputFile = f"{inputFile}.pwo"
-#                     print(f"Checking job {inputFile}")
-#                     checked.add(inputFile)
-#                     try:
-#                         atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
-#                         print(atoms.get_potential_energy())
-#                         # delete inputFile from job_list
-#                         job_list.remove(inputFile)
-#                         print(f"Job list: {job_list}")
-#                         print()
-#                     except:
-#                         # if outputFile exsit remove outputFile
-#                         try:
-#                             # temporay disable remove to avoid the calculation
-#                             # os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
-#                             print(f"{outputFile} removed")
-#                         except:
-#                             print("output file does not exist")
-#                         print(f"Job {inputFile} failed, will resubmit the job")
-            
-            
-#             # for idx, inputFile in enumerate(job_list):
-#             #     outputFile = f"{inputFile}.pwo"
-#             #     print(f"Checking job {inputFile}")
-#             #     try:
-#             #         atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
-#             #         print(atoms.get_potential_energy())
-#             #         # delete inputFile from job_list
-#             #         job_list.remove(inputFile)
-#             #         print(f"Job list: {job_list}")
-#             #         print()
-#             #     except:
-#             #         # remove outputFile
-#             #         os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
-#             #         print(f"Job {inputFile} failed, will resubmit the job")
-                    
-#             if len(job_list) == 0:
-#                 # load jobs frm job_list.json
-#                 job_list_dir = os.path.join(WORKING_DIRECTORY, f'job_list.json')
-#                 with open(job_list_dir,"r") as file:
-#                     job_list = json.load(file)['job_list']
-                
-#                 # read all energies into a dict
-#                 energies = {}
-#                 for inputFile in job_list:
-#                     outputFile = f"{inputFile}.pwo"
-#                     atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
-#                     energies[inputFile] = atoms.get_potential_energy()
-                
-#                 job_list = []
-                
-#                 # check two or more key has the same value, if so, add the key back to the job_list
-#                 for key, value in energies.items():
-#                     if list(energies.values()).count(value) > 1:
-#                         print(f"!!!!!!!Job {key} has the same energy as other jobs, may resubmit the job!!!!!!!!")
-#                         job_list.append(key)
-                
-#                 print()
-#                 # check whether job in job_list has the same inputFile content, if so, remove the job from job_list
-#                 tobeRemoved = np.zeros(len(job_list))
-#                 for jobIdx in range(len(job_list)):
-#                     for jobIdx2 in range(jobIdx+1, len(job_list)):
-#                         if cmp(os.path.join(WORKING_DIRECTORY, job_list[jobIdx]), os.path.join(WORKING_DIRECTORY, job_list[jobIdx2]), shallow=False):
-#                             print(f"!!!!!!!Job {job_list[jobIdx]} has the same content as {job_list[jobIdx2]}, will remove the job!!!!!!!!")
-#                             tobeRemoved[jobIdx] = 1
-#                             tobeRemoved[jobIdx2] = 1
-                
-#                 job_list = [job_list[i] for i in range(len(job_list)) if tobeRemoved[i] == 0]
-                
-#                 print("##########")
-#                 print(f"Final jobs to be resubmitted: {job_list}")
-#                 print("##########")
-                
-#                 # remove outputFile for jobs in job_list
-#                 for inputFile in job_list:
-#                     outputFile = f"{inputFile}.pwo"
-#                     print(f"Removing {outputFile}")
-#                     os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
-            
-#                 if len(job_list) == 0:
-#                     break
-            
-#     return f"All job in job_list has finished, please check the output file in the {WORKING_DIRECTORY}"
 
 @tool
 def submit_and_monitor_job(
@@ -1061,10 +810,7 @@ def submit_and_monitor_job(
     
     qa = QueueAdapter(directory=WORKING_DIRECTORY)
         
-    # load jobs frm job_list.json
-    job_list_dir = os.path.join(WORKING_DIRECTORY, f'job_list.json')
-    with open(job_list_dir,"r") as file:
-        job_list = json.load(file)['job_list']
+    job_list = CANVAS.canvas.get('job_list', []).copy()
     
     # load reousrce suggestions
     # resource_suggestions = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.json')
@@ -1124,7 +870,6 @@ def submit_and_monitor_job(
                     print("output file exists but the calculation is not done, will resubmit the job")
                     
             
-            
             job_id = qa.submit_job(
             working_directory=WORKING_DIRECTORY,
             cores=resource_dict[inputFile]['ntasks'],
@@ -1135,7 +880,8 @@ def submit_and_monitor_job(
             nodes_max=resource_dict[inputFile]['nnodes'],
             partition=resource_dict[inputFile]['partition'],
             run_time_max=resource_dict[inputFile]['runtime'],
-            command=resource_dict[inputFile]['submissionScript']
+            command=resource_dict[inputFile]['submissionScript'],
+            errNoutName=inputFile
             )
             
             if job_id is None:
@@ -1143,11 +889,11 @@ def submit_and_monitor_job(
 
             queueIDList.append(job_id)
             ## Sleep for 1.5 second to avoid the job submission too fast
-            time.sleep(5)
+            time.sleep(1)
             
             #  Change the bash script name to avoid the job submission too fast
             os.rename(os.path.join(WORKING_DIRECTORY, "run_queue.sh"), os.path.join(WORKING_DIRECTORY, f"slurm_{inputFile}.sh"))
-            time.sleep(5)
+            time.sleep(1)
         
         prevCount = len(queueIDList)
         while True:
@@ -1165,7 +911,6 @@ def submit_and_monitor_job(
             if count == 0:
                 break
             time.sleep(1)
-            
         print(f"All job in job_list has finished")
         print("waiting for files...")
         time.sleep(10)
@@ -1212,12 +957,9 @@ def submit_and_monitor_job(
             #         # remove outputFile
             #         os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
             #         print(f"Job {inputFile} failed, will resubmit the job")
-                    
             if len(job_list) == 0:
                 # load jobs frm job_list.json
-                job_list_dir = os.path.join(WORKING_DIRECTORY, f'job_list.json')
-                with open(job_list_dir,"r") as file:
-                    job_list = json.load(file)['job_list']
+                job_list = CANVAS.canvas.get('job_list', []).copy()
                 
                 # read all energies into a dict
                 energies = {}
@@ -1249,7 +991,6 @@ def submit_and_monitor_job(
                 print("##########")
                 print(f"Final jobs to be resubmitted: {job_list}")
                 print("##########")
-                
                 # remove outputFile for jobs in job_list
                 for inputFile in job_list:
                     outputFile = resource_dict[inputFile]['outputFilename']
@@ -1258,7 +999,13 @@ def submit_and_monitor_job(
             
                 if len(job_list) == 0:
                     break
-            
+    
+    # reset resource_suggestions.db
+    db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
+    os.remove(db_file)
+    time.sleep(1)
+    initialize_database(db_file)
+    time.sleep(1)
     return f"All job in job_list has finished, please check the output file in the {WORKING_DIRECTORY}"
 
 @tool
@@ -1359,9 +1106,7 @@ def read_energy_from_output(
     '''Read the total energy from the output file in job list and return it in a string'''
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
     # load job_list.jason
-    job_list_dir = os.path.join(WORKING_DIRECTORY, f'job_list.json')
-    with open(job_list_dir,"r") as file:
-        job_list = json.load(file)['job_list']
+    job_list = CANVAS.canvas.get('job_list', []).copy()
         
     result = ""
     for job in job_list:

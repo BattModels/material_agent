@@ -1,8 +1,15 @@
 ## Environment variables
-ANTHROPIC_API_KEY:  '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'
-LANGSIM_PROVIDER: "anthropic" 
-LANGSIM_API_KEY: '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'
-LANGSIM_MODEL: "claude-3-5-sonnet-20240620"
+ANTHROPIC_API_KEY: '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'
+ANTHROPIC_MODEL: "claude-3-7-sonnet-20250219"
+
+OpenAI_API_KEY: 'DyCi96iYOkjngoL3s7DADttMI4ebknxgNiyLugne0JaQR0kV9En2JQQJ99BBACHYHv6XJ3w3AAAAACOGkOHG'
+OpenAI_BASE_URL: "https://ai-awadell6407ai595196234123.services.ai.azure.com/"
+OpenAI_MDL: "gpt-4o"
+
+DeepSeek_API_KEY: 'aVtbzLs42hQ6a44XhFp4R9wkEQ3hpvzw'
+DeepSeek_BASE_URL: "https://DeepSeek-R1-bglig.eastus2.models.ai.azure.com"
+DeepSeek_MDL: "DeepSeek-R1"
+
 
 
 # Pseudo potential path
