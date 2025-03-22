@@ -128,8 +128,12 @@ def supervisor_chain_node(state, chain, name):
     #     print_stream(output)
     output = chain.invoke(state)
 
-    if isinstance(output.action, Response):
+    if isinstance(output.action, Response) and len(state["plan"]) == 0:
         return {"response": output.action.response, "next": "FINISH"}
+    elif isinstance(output.action, Response) and state["plan"][-1] == state["past_steps"][-1]:
+        return {"response": output.action.response, "next": "FINISH"}
+    elif isinstance(output.action, Response):
+        return {"response": "Plan is not finished! Do not use response!", "next": "Supervisor"}
     else:
         return {"plan": output.action.steps, "next": output.action.steps[0].agent}
     
@@ -186,6 +190,7 @@ def create_planning_graph(config: dict) -> StateGraph:
     # Define the model
     # llm = ChatAnthropic(model=config["ANTHROPIC_MODEL"], api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     llm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
+    workerllm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"], model_kwargs={'parallel_tool_calls': False})
     # llm = ChatDeepSeek(model_name=config["DeepSeek_MDL"], api_key=config['DeepSeek_API_KEY'], api_base=config['DeepSeek_BASE_URL'], temperature=0.0)
     
     
@@ -255,7 +260,7 @@ def create_planning_graph(config: dict) -> StateGraph:
         read_energy_from_output,
         
         ]
-    dft_agent = create_react_agent(llm, tools=dft_tools,
+    dft_agent = create_react_agent(workerllm, tools=dft_tools,
                                    state_modifier=dft_agent_prompt)   
     dft_node = functools.partial(worker_agent_node, agent=dft_agent, name="DFT_Agent", past_steps_list=PAST_STEPS)
 
@@ -270,7 +275,7 @@ def create_planning_graph(config: dict) -> StateGraph:
         add_resource_suggestion
         ]
 
-    hpc_agent = create_react_agent(llm, tools=hpc_tools,
+    hpc_agent = create_react_agent(workerllm, tools=hpc_tools,
                                    state_modifier=hpc_agent_prompt)
 
     hpc_node = functools.partial(worker_agent_node, agent=hpc_agent, name="HPC_Agent", past_steps_list=PAST_STEPS)
@@ -307,6 +312,7 @@ def create_planning_graph(config: dict) -> StateGraph:
     # which routes to a node or finishes
     conditional_map = {k: k for k in members}
     conditional_map["FINISH"] = END
+    conditional_map["Supervisor"] = "Supervisor" 
     graph.add_conditional_edges("Supervisor", whos_next, conditional_map)
     graph.add_edge(START, "Supervisor") 
     return graph.compile(checkpointer=memory)

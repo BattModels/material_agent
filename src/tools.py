@@ -1,5 +1,5 @@
 
-
+from matplotlib import pyplot as plt
 from math import e
 from src.utils import *
 from src.myCANVAS import CANVAS
@@ -33,7 +33,9 @@ import contextlib
 from autocat.surface import generate_surface_structures
 from autocat.adsorption import get_adsorption_sites, get_adsorbate_height_estimate
 
-### Common tools
+##################################################################################################
+##                                        Common tools                                          ##
+##################################################################################################
 @tool
 def inspect_my_canvas():
     """Inspect the working canvas to get available keys"""
@@ -54,7 +56,9 @@ def write_my_canvas(key: Annotated[str, "key"],
     # write a value to myCANVAS given a key and a value
     return CANVAS.write(key, value, overwrite)
 
-### DFT tools
+##################################################################################################
+##                                          DFT tools                                           ##
+##################################################################################################
 
 @tool
 def get_kpoints(atom_dict: AtomsDict, kspacing: float) -> list:
@@ -71,68 +75,6 @@ def get_kpoints(atom_dict: AtomsDict, kspacing: float) -> list:
             2 * ((np.ceil(2 * np.pi / np.linalg.norm(ii) / kspacing).astype(int)) // 2 + 1) for ii in cell
         ]
     return kpoints
-
-@tool
-def get_kspacing_ecutwfc(threshold: float = 1.0) -> str:
-    '''Read the convergen test result and determine the kspacing and ecutwfc used in the production
-    Input:  threshold: float , the threshold mev/atom to determine the convergence
-    output: str, the kspacing and ecutwfc used in the production
-    '''
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
-    
-    print(CANVAS.canvas['job_list'])
-    
-    job_dict = CANVAS.canvas.get('jobs_K_and_ecut', {})
-    job_list = CANVAS.canvas.get('job_list', []).copy()
-    print(job_list)
-    assert len(job_list) > 0, "job list 0"
-    
-    print(f"successfully read {len(job_list)} jobs, and {len(job_dict)} job_dict")
-
-    ### Find the kpoints and ecutwfc from the output file
-    kspacing = []
-    ecutwfc = []
-    energy_list = []
-    Natom = None
-    for job in job_list:
-        ## Read the output file
-        print(f'reading {job}')
-        kspacing.append(job_dict[job]['k'])
-        ecutwfc.append(job_dict[job]['ecutwfc'])
-        
-        atom = read(os.path.join(WORKING_DIRECTORY, job+'.pwo'))
-        energy = atom.get_potential_energy()
-        energy_list.append(energy)
-        Natom = atom.get_number_of_atoms()
-    
-    print(f"successfully read {len(kspacing)} kspacing and {len(ecutwfc)} ecutwfc")
-        
-    convergence_df = pd.DataFrame({'job':job_list,'kspacing':kspacing, 'ecutwfc':ecutwfc, 'energy':energy_list})
-    ## Save the convergence test result if file exist then append to it
-    if os.path.exists(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv')):
-        convergence_df.to_csv(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv'), mode='a', header=False)
-    else:
-        convergence_df.to_csv(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv'))
-    
-    ## Determine the kpoints and ecutwfc based on the threshold
-    k_chosen, ecutwfc_chosen,df_kspacing, df_ecutwfc = select_k_ecut(convergence_df, threshold, Natom)
-    
-    print(f"Chosen kspacing: {k_chosen}, Chosen ecutwfc: {ecutwfc_chosen}")
-    
-    ## Save the chosen kspacing and ecutwfc
-    if os.path.exists(os.path.join(WORKING_DIRECTORY, 'df_k.csv')):
-        df_kspacing.to_csv(os.path.join(WORKING_DIRECTORY, 'df_k.csv'), mode='a', header=False)
-    else:
-        df_kspacing.to_csv(os.path.join(WORKING_DIRECTORY, 'df_k.csv'))
-    
-    if os.path.exists(os.path.join(WORKING_DIRECTORY, 'df_e.csv')):
-        df_ecutwfc.to_csv(os.path.join(WORKING_DIRECTORY, 'df_e.csv'), mode='a', header=False)
-    else:
-        df_ecutwfc.to_csv(os.path.join(WORKING_DIRECTORY, 'df_e.csv'))  
-        
-    print("saved the chosen kspacing and ecutwfc")
-    
-    return f"Please use kspacing {k_chosen} and ecutwfc {ecutwfc_chosen} for the production calculation"
 
 @tool
 def dummy_structure(concentration: float,
@@ -244,30 +186,6 @@ def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure
     return f"Surface with adsorbate saved at {parentPath}/Surface_with_adsorbate.traj"
 
 @tool
-def calculate_formation_E(slabFilePath: Annotated[str, "If I use ase.io.read on this path, I'll get the energy of the slab"],
-                          adsorbateFilePath: Annotated[str, "If I use ase.io.read on this path, I'll get the energy of the adsorbate"],
-                          systemFilePath: Annotated[str, "If I use ase.io.read on this path, I'll get the energy of the slab with adsorbate"]
-                          ):
-    """using the energies of the slab, adsorbate, and slab with adsorbate, calculate the formation energy of the adsorbate on the slab. """
-    # Load the energies
-    slab = read(slabFilePath)
-    adsorbate = read(adsorbateFilePath)
-    system = read(systemFilePath)
-    
-    slabEnergy = slab.get_potential_energy()/len(slab)
-    adsorbateEnergy = read(adsorbateFilePath).get_potential_energy()
-    systemEnergy = read(systemFilePath).get_potential_energy()
-    
-    # assume slab only have one species
-    slabSpecies = slab.numbers[0]
-    NslabInSystem = system.numbers.tolist().count(slabSpecies)
-    NadsorbateInSystem = (len(system) - NslabInSystem)/len(adsorbate)
-    
-    formationEnergy = systemEnergy - slabEnergy * NslabInSystem - adsorbateEnergy * NadsorbateInSystem
-    
-    return f"The formation energy of the adsorbate on the slab is {formationEnergy} eV"
-
-@tool
 def write_script(
     content: Annotated[str, "Text content to be written into the document."],
     file_name: Annotated[str, "Name of the file to be saved."],
@@ -333,7 +251,7 @@ def write_QE_script_w_ASE(
                   'calculation': calculation,
                   'restart_mode': restart_mode,
                   'prefix': prefix,
-                  'pseudo_dir': pseudo_dir,
+                  'pseudo_dir': "/nfs/turbo/coe-venkvis/ziqiw-turbo/sssp",
                   'outdir': './out',
                   'disk_io': disk_io,
               },
@@ -387,52 +305,11 @@ def write_LAMMPS_script(
     ## Remove duplicate files
     # job_list = list(set(job_list))
     ## Save the job list as json file
-    old_job_list = CANVAS.canvas.get('job_list', []).copy()
+    old_job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
     job_list = list(set(old_job_list + job_list))
-    CANVAS.write('job_list',job_list)
+    CANVAS.write('ready_to_run_job_list',job_list)
     
     return f"Initial file is created named {file_name}"
-
-@tool
-def calculate_lc() -> str:
-    """Read the output file and calculate the lattice constant"""
-    
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
-    job_list = CANVAS.canvas.get('job_list', []).copy()
-
-    volume_list = []
-    energy_list = []
-    for job in job_list:
-        print(f'reading {job}')
-        atom = read(os.path.join(WORKING_DIRECTORY, job+'.pwo'))
-        volume_list.append(atom.get_volume())
-        energy_list.append(atom.get_potential_energy())
-        print(f'{job} volume is {atom.get_volume()}, energy is {atom.get_potential_energy()}')
-    eos = EquationOfState(volume_list, energy_list)
-    v0, e0, B = eos.fit()
-    lc = (v0)**(1/3)
-
-    # Check if the json file exists
-    json_file = os.path.join(WORKING_DIRECTORY, '../lattice_constant.json')
-    if not os.path.exists(json_file):
-        with open(json_file, "w") as file:
-            json.dump({}, file)
-
-    # Load the existing dictionary from the json file
-    with open(json_file, "r") as file:
-        try:
-            lc_dict = json.load(file)
-        except:
-            lc_dict = {}
-
-    # Update the dictionary with the new lattice constant
-    lc_dict[str(atom.symbols)] = lc
-
-    # Save the updated dictionary back to the json file
-    with open(json_file, "w") as file:
-        json.dump(lc_dict, file)
-
-    return f'The lattice constant is {lc}'
 
 @tool
 def find_classical_potential(element: str) -> str:
@@ -449,72 +326,6 @@ def find_pseudopotential(element: str) -> str:
             if element == file.split('.')[0].split('_')[0].capitalize():
                 return f'The pseudopotential file for {element} is {file} under {pseudo_dir}'
     return f"Could not find pseudopotential for {element}"
-
-
-@tool
-def get_bulk_modulus(
-    working_directory: str,
-    pseudo_dir: str,
-    input_file: str,
-) -> float:
-    '''Calculate the bulk modulus of the given quantum espresso input file, pseudopotential directory and working directory'''
-    atoms = read(os.path.join(working_directory,input_file))
-    with open(os.path.join(working_directory,input_file),'r') as file:
-        content = file.read()
-    input_data = parse_qe_input_string(content)
-    pseudopotentials = filter_potential(input_data)
-
-    profile = EspressoProfile(command='mpiexec -n 8 pw.x', pseudo_dir=pseudo_dir)
-
-    atoms.calc = Espresso(
-    profile=profile,
-    pseudopotentials=pseudopotentials,
-    input_data=input_data
-)
-
-    # run variable cell relax first to make sure we have optimum scaling factor
-    # ecf = ExpCellFilter(atoms)
-    # dyn = FIRE(ecf)
-    # traj = Trajectory(os.path.join(working_directory,'relax.traj'), 'w', atoms)
-    # dyn.attach(traj)
-    # dyn.run(fmax=1.5)
-
-    # now we calculate eos
-    eos = calculate_eos(atoms)
-    v, e, B = eos.fit()
-    bulk_modulus = B / kJ * 1.0e24
-
-    return bulk_modulus
-
-
-@tool
-def get_lattice_constant(
-    working_directory: str,
-    pseudo_dir: str,
-    input_file: str,
-) -> float:
-    '''Calculate the lattice constant of the given quantum espresso input file, pseudopotential directory and working directory'''
-    atoms = read(os.path.join(working_directory,input_file))
-    with open(os.path.join(working_directory,input_file),'r') as file:
-        content = file.read()
-    input_data = parse_qe_input_string(content)
-    pseudopotentials = filter_potential(input_data)
-
-    profile = EspressoProfile(command='mpiexec -n 2 pw.x', pseudo_dir=pseudo_dir)
-
-    atoms.calc = Espresso(
-    profile=profile,
-    pseudopotentials=pseudopotentials,
-    input_data=input_data
-)
-
-    eos = calculate_eos(atoms)
-    v, e, B = eos.fit()
-    lc = (v)**(1/3)
-    print(f'{input_file} lattice constant is {lc}')
-    with open(os.path.join(working_directory,input_file.split('.')[0]+'.out'),'w') as file:
-        file.write(f'\n# {input_file} Lattice constant is {lc}')
-    return lc
 
 @tool
 def generate_convergence_test(input_file_name:str,kspacing:list[float], ecutwfc:list[int]):
@@ -599,9 +410,9 @@ def generate_convergence_test(input_file_name:str,kspacing:list[float], ecutwfc:
     ## Remove duplicate files
     job_list = list(set(job_list))
     ## Save the job list
-    old_job_list = CANVAS.canvas.get('job_list', []).copy()
+    old_job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
     job_list = list(set(old_job_list + job_list))
-    CANVAS.write('job_list',job_list)
+    CANVAS.write('ready_to_run_job_list',job_list)
     CANVAS.write('jobs_K_and_ecut',job_list_dict)
     return f"Job list is saved scucessfully, continue to submit the jobs"
 
@@ -615,7 +426,7 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
             kspacing: float, the kspacing to be tested
             ecutwfc: int, the ecutwfc to be tested
     '''
-    CANVAS.write('job_list', [], overwrite=True)
+    # CANVAS.write('job_list', [], overwrite=True)
     CANVAS.canvas['jobs_K_and_ecut'] = {}
     
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
@@ -626,7 +437,8 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
         atom = read(input_file)
     except:
         INITIAL_FILE = os.environ.get("INITIAL_FILE")
-        return f"Invalid input file, try to use {INITIAL_FILE} as the input file?"
+        return f"Invalid input file, try inspect the shared CANVAS and use the inital pwi file as the input file"
+    
     job_list = []
     
     cell = atom.cell
@@ -635,7 +447,7 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
             2 * ((np.ceil(2 * np.pi / np.linalg.norm(ii) / kspacing).astype(int)) // 2 + 1) for ii in cell
         ]
     
-    for scale in np.linspace(0.98, 1.02, 5):
+    for scale in np.linspace(0.95, 1.05, 5):
         # Read the input script
         with open(input_file, 'r') as f:
             lines = f.readlines()
@@ -666,33 +478,239 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
     job_list = list(set(job_list))
     print(job_list)
     ## Save the job list as json file
-    old_job_list = CANVAS.canvas.get('job_list', []).copy()
+    old_job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
     job_list = list(set(old_job_list + job_list))
     print(job_list)
-    CANVAS.write('job_list',job_list, overwrite=True)
+    CANVAS.write('ready_to_run_job_list',job_list, overwrite=True)
     
     return f"Job list is saved scucessfully, continue to submit the jobs"
 
-# @tool
-# def save_job_list(
-#     script_list: Annotated[list[str], "List of scripts to be calculated."]
-# ) -> Annotated[str, "Path of the saved json file."]:
-#     """Save the list of quantum espresso input files to the specified json file path"""
-#     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
-#     os.makedirs(WORKING_DIRECTORY, exist_ok=True)
-#     path = os.path.join(WORKING_DIRECTORY, 'job_list.json')
-#     job = {'job_list':script_list}
-#     with open(path,"w") as file:
-#         json.dump(job, file)
-#     return f"Job list saved to {path}"
+###################################### DFT POST-PROCESSING TOOLS ######################################
 
-### HPC tools
+@tool
+def calculate_formation_E(slabFilePath: Annotated[str, "If I use ase.io.read on this path, I'll get the energy of the slab"],
+                          adsorbateFilePath: Annotated[str, "If I use ase.io.read on this path, I'll get the energy of the adsorbate"],
+                          systemFilePath: Annotated[str, "If I use ase.io.read on this path, I'll get the energy of the slab with adsorbate"]
+                          ):
+    """using the energies of the slab, adsorbate, and slab with adsorbate, calculate the formation energy of the adsorbate on the slab. """
+    # Load the energies
+    slab = read(slabFilePath)
+    adsorbate = read(adsorbateFilePath)
+    system = read(systemFilePath)
+    
+    slabEnergy = slab.get_potential_energy()/len(slab)
+    adsorbateEnergy = read(adsorbateFilePath).get_potential_energy()
+    systemEnergy = read(systemFilePath).get_potential_energy()
+    
+    # assume slab only have one species
+    slabSpecies = slab.numbers[0]
+    NslabInSystem = system.numbers.tolist().count(slabSpecies)
+    NadsorbateInSystem = (len(system) - NslabInSystem)/len(adsorbate)
+    
+    formationEnergy = systemEnergy - slabEnergy * NslabInSystem - adsorbateEnergy * NadsorbateInSystem
+    
+    return f"The formation energy of the adsorbate on the slab is {formationEnergy} eV"
+
+@tool
+def calculate_lc(jobFileIdx: Annotated[List[int], "indexs of files in the finished job list of files of interest, which will be used to calculate the lattice constant"]
+    ) -> str:
+    """Read the output file and calculate the lattice constant"""
+    
+    assert isinstance(jobFileIdx, list), "jobFileIdx should be a list"
+    for i in jobFileIdx:
+        assert isinstance(i, int), "jobFileIdx should be a list of index of files of interest"
+    
+    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    job_list = CANVAS.canvas.get('finished_job_list', []).copy()
+    job_list = np.array(job_list, dtype=str)[jobFileIdx]
+    print(f"actual job list: {job_list}")
+
+    volume_list = []
+    energy_list = []
+    for job in job_list:
+        print(f'reading {job}')
+        atom = read(os.path.join(WORKING_DIRECTORY, job+'.pwo'))
+        volume_list.append(atom.get_volume())
+        energy_list.append(atom.get_potential_energy())
+        print(f'{job} volume is {atom.get_volume()}, energy is {atom.get_potential_energy()}')
+    
+    # plot the volume vs energy
+    plt.plot(volume_list, energy_list, 'o-')
+    plt.xlabel('Volume (A^3)')
+    plt.ylabel('Energy (eV)')
+    plt.title('Volume vs Energy')
+    plt.savefig(os.path.join(WORKING_DIRECTORY, 'volume_vs_energy.png'))
+    plt.close()
+    
+    eos = EquationOfState(volume_list, energy_list)
+    v0, e0, B = eos.fit()
+    lc = (v0)**(1/3)
+
+    # Check if the json file exists
+    json_file = os.path.join(WORKING_DIRECTORY, '../lattice_constant.json')
+    if not os.path.exists(json_file):
+        with open(json_file, "w") as file:
+            json.dump({}, file)
+
+    # Load the existing dictionary from the json file
+    with open(json_file, "r") as file:
+        try:
+            lc_dict = json.load(file)
+        except:
+            lc_dict = {}
+
+    # Update the dictionary with the new lattice constant
+    lc_dict[str(atom.symbols)] = lc
+
+    # Save the updated dictionary back to the json file
+    with open(json_file, "w") as file:
+        json.dump(lc_dict, file)
+
+    return f'The lattice constant is {lc}'
+
+@tool
+def get_bulk_modulus(
+    working_directory: str,
+    pseudo_dir: str,
+    input_file: str,
+) -> float:
+    '''Calculate the bulk modulus of the given quantum espresso input file, pseudopotential directory and working directory'''
+    atoms = read(os.path.join(working_directory,input_file))
+    with open(os.path.join(working_directory,input_file),'r') as file:
+        content = file.read()
+    input_data = parse_qe_input_string(content)
+    pseudopotentials = filter_potential(input_data)
+
+    profile = EspressoProfile(command='mpiexec -n 8 pw.x', pseudo_dir=pseudo_dir)
+
+    atoms.calc = Espresso(
+    profile=profile,
+    pseudopotentials=pseudopotentials,
+    input_data=input_data
+)
+
+    # run variable cell relax first to make sure we have optimum scaling factor
+    # ecf = ExpCellFilter(atoms)
+    # dyn = FIRE(ecf)
+    # traj = Trajectory(os.path.join(working_directory,'relax.traj'), 'w', atoms)
+    # dyn.attach(traj)
+    # dyn.run(fmax=1.5)
+
+    # now we calculate eos
+    eos = calculate_eos(atoms)
+    v, e, B = eos.fit()
+    bulk_modulus = B / kJ * 1.0e24
+
+    return bulk_modulus
+
+
+@tool
+def get_lattice_constant(
+    working_directory: str,
+    pseudo_dir: str,
+    input_file: str,
+) -> float:
+    '''Calculate the lattice constant of the given quantum espresso input file, pseudopotential directory and working directory'''
+    atoms = read(os.path.join(working_directory,input_file))
+    with open(os.path.join(working_directory,input_file),'r') as file:
+        content = file.read()
+    input_data = parse_qe_input_string(content)
+    pseudopotentials = filter_potential(input_data)
+
+    profile = EspressoProfile(command='mpiexec -n 2 pw.x', pseudo_dir=pseudo_dir)
+
+    atoms.calc = Espresso(
+    profile=profile,
+    pseudopotentials=pseudopotentials,
+    input_data=input_data
+)
+
+    eos = calculate_eos(atoms)
+    v, e, B = eos.fit()
+    lc = (v)**(1/3)
+    print(f'{input_file} lattice constant is {lc}')
+    with open(os.path.join(working_directory,input_file.split('.')[0]+'.out'),'w') as file:
+        file.write(f'\n# {input_file} Lattice constant is {lc}')
+    return lc
+
+@tool
+def get_kspacing_ecutwfc(jobFileIdx: Annotated[List[int], "indexs of files in the finished job list of files of interest, which will be used to determine the kspacing and ecutwfc"],
+                         threshold: Annotated[float, "the threshold mev/atom to determine the convergence"] = 1.0) -> str:
+    '''Read the convergen test result and determine the kspacing and ecutwfc used in the production
+    Input:
+        jobFileIdx: list, the indexs of files in the finished job list, which will be used to determine the kspacing and ecutwfc
+        threshold: float , the threshold mev/atom to determine the convergence
+    output: str, the kspacing and ecutwfc used in the production
+    '''
+    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    
+    assert isinstance(jobFileIdx, list), "jobFileIdx should be a list"
+    for i in jobFileIdx:
+        assert isinstance(i, int), "jobFileIdx should be a list of index of files of interest"
+    
+    job_dict = CANVAS.canvas.get('jobs_K_and_ecut', {})
+    job_list = CANVAS.canvas.get('finished_job_list', []).copy()
+    job_list = np.array(job_list, dtype=str)[jobFileIdx]
+    print(f"actual job list: {job_list}")
+    assert len(job_list) > 0, "job list 0"
+    
+    print(f"successfully read {len(job_list)} jobs, and {len(job_dict)} job_dict")
+
+    ### Find the kpoints and ecutwfc from the output file
+    kspacing = []
+    ecutwfc = []
+    energy_list = []
+    Natom = None
+    for job in job_list:
+        ## Read the output file
+        print(f'reading {job}')
+        kspacing.append(job_dict[job]['k'])
+        ecutwfc.append(job_dict[job]['ecutwfc'])
+        
+        atom = read(os.path.join(WORKING_DIRECTORY, job+'.pwo'))
+        energy = atom.get_potential_energy()
+        energy_list.append(energy)
+        Natom = atom.get_number_of_atoms()
+    
+    print(f"successfully read {len(kspacing)} kspacing and {len(ecutwfc)} ecutwfc")
+        
+    convergence_df = pd.DataFrame({'job':job_list,'kspacing':kspacing, 'ecutwfc':ecutwfc, 'energy':energy_list})
+    ## Save the convergence test result if file exist then append to it
+    if os.path.exists(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv')):
+        convergence_df.to_csv(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv'), mode='a', header=False)
+    else:
+        convergence_df.to_csv(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv'))
+    
+    ## Determine the kpoints and ecutwfc based on the threshold
+    k_chosen, ecutwfc_chosen,df_kspacing, df_ecutwfc = select_k_ecut(convergence_df, threshold, Natom)
+    
+    print(f"Chosen kspacing: {k_chosen}, Chosen ecutwfc: {ecutwfc_chosen}")
+    
+    ## Save the chosen kspacing and ecutwfc
+    if os.path.exists(os.path.join(WORKING_DIRECTORY, 'df_k.csv')):
+        df_kspacing.to_csv(os.path.join(WORKING_DIRECTORY, 'df_k.csv'), mode='a', header=False)
+    else:
+        df_kspacing.to_csv(os.path.join(WORKING_DIRECTORY, 'df_k.csv'))
+    
+    if os.path.exists(os.path.join(WORKING_DIRECTORY, 'df_e.csv')):
+        df_ecutwfc.to_csv(os.path.join(WORKING_DIRECTORY, 'df_e.csv'), mode='a', header=False)
+    else:
+        df_ecutwfc.to_csv(os.path.join(WORKING_DIRECTORY, 'df_e.csv'))  
+        
+    print("saved the chosen kspacing and ecutwfc")
+    
+    return f"Please use kspacing {k_chosen} and ecutwfc {ecutwfc_chosen} for the production calculation"
+
+##################################################################################################
+##                                          HPC tools                                           ##
+##################################################################################################
+
 @tool
 def find_job_list() -> str:
     """Return the list of job files to be submitted."""
 
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
-    job_list = CANVAS.canvas.get('job_list', []).copy()
+    job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
     
     return f'The files need to be submitted are {job_list}. Please continue to submit the job.'
 
@@ -776,7 +794,7 @@ echo "Job Ended at `date`"\n \
     # craete the json file if it does not exist, otherwise load it
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
 
-    new_resource_dict = {qeInputFileName: {"partition": partition, "nnodes": 1, "ntasks": 8, "runtime": 30, "submissionScript": submissionScript, "outputFilename": outputFilename}}
+    new_resource_dict = {qeInputFileName: {"partition": "venkvis-largemem", "nnodes": 1, "ntasks": 64, "runtime": 240, "submissionScript": submissionScript, "outputFilename": outputFilename}}
     
     # check if resource_suggestions.db exist in the working directory
     db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
@@ -810,7 +828,7 @@ def submit_and_monitor_job(
     
     qa = QueueAdapter(directory=WORKING_DIRECTORY)
         
-    job_list = CANVAS.canvas.get('job_list', []).copy()
+    job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
     
     # load reousrce suggestions
     # resource_suggestions = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.json')
@@ -959,7 +977,7 @@ def submit_and_monitor_job(
             #         print(f"Job {inputFile} failed, will resubmit the job")
             if len(job_list) == 0:
                 # load jobs frm job_list.json
-                job_list = CANVAS.canvas.get('job_list', []).copy()
+                job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
                 
                 # read all energies into a dict
                 energies = {}
@@ -1000,7 +1018,12 @@ def submit_and_monitor_job(
                 if len(job_list) == 0:
                     break
     
-    # reset resource_suggestions.db
+    # reset resource_suggestions.db and job lists
+    finishedJobs = CANVAS.canvas.get('finished_job_list', [])
+    readyToRunJobs = CANVAS.canvas.get('ready_to_run_job_list', [])
+    finishedJobs += readyToRunJobs
+    CANVAS.write('finished_job_list', finishedJobs, overwrite=True)
+    CANVAS.write('ready_to_run_job_list', [], overwrite=True)
     db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
     os.remove(db_file)
     time.sleep(1)
@@ -1106,7 +1129,7 @@ def read_energy_from_output(
     '''Read the total energy from the output file in job list and return it in a string'''
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
     # load job_list.jason
-    job_list = CANVAS.canvas.get('job_list', []).copy()
+    job_list = CANVAS.canvas.get('finished_job_list', []).copy()
         
     result = ""
     for job in job_list:

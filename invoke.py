@@ -84,7 +84,7 @@ if __name__ == "__main__":
     Sn (dia)	6.474
     '''
     
-    userMessage_6 = "You are going to calculate the lattic constant for BCC Rb through DFT, the experiment value is 5.577, use this to create the initial structure."
+    userMessage_6 = "You are going to calculate the lattic constant for FCC Cu through DFT, the experiment value is 3.596, use this to create the initial structure."
     userMessage_7 = "You are going to generat a Pt surface structure with 2x2x4 supercell, then do a convergence test, use maximum ecutwfc = 160. Get the optimal kspacing and ecutwfc."
     userMessage_8 = """Please generate intial structures required to calculate CO adsorbtion on Pt(111) surface with 1/4 coverage, and calculate the adsorbtion energy. The plan should roughly be:
 1. Create initial structure of Pt(111) surface
@@ -114,16 +114,18 @@ if __name__ == "__main__":
     
     CANVAS.set_working_directory(WORKING_DIRECTORY)
     
-    # check if resource_suggestions.db exist in the working directory
-    db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
-    if not os.path.exists(db_file):
-        initialize_database(db_file)
     
     # check if working directory exists, if so delete it
     if os.path.exists(WORKING_DIRECTORY):
         os.system(f"rm -rf {WORKING_DIRECTORY}")
     
     os.makedirs(WORKING_DIRECTORY, exist_ok=False)
+    
+    # check if resource_suggestions.db exist in the working directory
+    db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
+    if os.path.exists(db_file):
+        os.remove(db_file)
+    initialize_database(db_file)
 
     graph = create_graph(config)
     llm_config = {"thread_id": "1", 'recursion_limit': 1000}
@@ -182,7 +184,7 @@ if __name__ == "__main__":
         
         for s in graph.stream(
             {
-                "input": f"{userMessage_6}",
+                "input": f"{userMessage_8}",
                 "plan": [],
                 "past_steps": []
             }, llm_config):

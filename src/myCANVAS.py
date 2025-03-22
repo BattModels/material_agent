@@ -37,7 +37,9 @@ def _myDictPP(myDict, indent=4, nindent=0, toDisk=False, filename=None):
             f.write(" " * indent * nindent + "}\n")
 
 class myCANVAS():
+        
     def __init__(self, working_directory = os.getcwd()):
+        self.SpecialKeys = ["ready_to_run_job_list", "finished_job_list"]
         self.canvas = {}
         self.working_directory = working_directory
     
@@ -56,6 +58,11 @@ class myCANVAS():
     def write(self, key, value, overwrite=False):
         writeDir = os.path.join(self.working_directory, 'canvas.pickle')
         # if key not in self.canvas:
+        
+        if key in self.SpecialKeys:
+            assert isinstance(value, list), f"Value for key '{key}' must be a list."
+            assert all(isinstance(i, str) for i in value), f"All elements in the list for key '{key}' must be strings of job names."
+            
         if key not in self.canvas.keys():
             self.canvas[key] = value
             with open(writeDir, 'wb') as f:

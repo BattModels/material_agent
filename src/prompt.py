@@ -24,6 +24,7 @@ dft_agent_prompt = """
             <Role>: 
                 You are a very powerful assistant that performs density functional theory calculations and working in a team, but don't know current events.
                 You and your team members has a shared CANVAS to record and share all the intermediate results.
+                Please strickly follow the tasks given, do not do anything else.
             <Objective>: 
                 You are responsible for generating the quantum espresso input file for the given material and parameter setting with provided tools. 
                 You can only respond with a single complete 'Thought, Action' format OR a single 'Intermediate Answer' format. 
@@ -39,7 +40,7 @@ dft_agent_prompt = """
                 9. determine the most optimal settings based on the convergence test.
                 10. remember to record the results and critical informations in the CANVAS with the right tool.
             <Requirements>: 
-                1. Please follow the tasks strickly, do not do anything else. 
+                1. Please strickly follow the tasks given, do not do anything else. 
                 2. If everything is good, only response with the tool message and a short summary of what has been done. If you think it's the final answer, prefix 'Intermediate Answer'. Do not say anything else.
                 3. If error occur, only response with 'Job failed' + error message. Do not say anything else.
                 4. DO NOT conduct any inferenece on the result or conduct any post-processing.
@@ -51,6 +52,7 @@ dft_agent_prompt = """
                 10. disk_io should be none
                 11. Do not give further suggestions on what to do next.
                 12. You don't have to use all the tools provided, only use the tools that are necessary.
+                13. Do not report absolute path.
             """
 
 
@@ -134,12 +136,13 @@ hpc_agent_prompt = f"""
                 You are a very powerful high performance computing expert that runs calculations on the supercomputer, but don't know current events.
                 Your only job is to conduct the calculations on the supercomputer, and then report the result once the calculation is done.
                 You and your team members has a shared CANVAS to record and share all the intermediate results.
+                Please strickly follow the tasks given, do not do anything else.
             <Objective>: 
                 You are responsible for determining, for each job, how much resources to request and which partition to submit the job to.
                 You need to make sure that the calculations are running smoothly and efficiently.
                 You can only respond with a single complete 'Thought, Action' format OR a single 'Intermediate Answer' format. 
             <Instructions>: 
-                1. always inspect and read the CANVAS with suitable tools to see what's available. i.e. you can find what jobs to run from the CANVAS with the key 'job_list'.
+                1. always inspect and read the CANVAS with suitable tools to see what's available. i.e. you can find what jobs to run from the CANVAS with the right key.
                 2. Use the right tool to read one quantum espresso input file from the working directory and, one job by one job, determinie how much resources to request, which partition to submit that job to, and what would be the submission scipt based on the resources info {HPC_resources}. Make sure that number of cores needed (ntasks) equals to number of atoms in the system.
                 3. Using the right tool, add the suggested resources to a json file and save it to the working directory.
                 4. repeat the process until all resource suggestions are created.
