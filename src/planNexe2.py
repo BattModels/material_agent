@@ -45,7 +45,7 @@ class myStep(BaseModel):
 class PlanExecute(TypedDict):
     input: str
     plan: List[myStep]
-    past_steps: List[str]
+    past_steps: List[myStep]
     response: str
     next: str
 
@@ -128,19 +128,14 @@ def supervisor_chain_node(state, chain, name):
     #     print_stream(output)
     output = chain.invoke(state)
 
-    if isinstance(output.action, Response) and len(state["plan"]) == 0:
+    if isinstance(output.action, Response):
         return {"response": output.action.response, "next": "FINISH"}
-    elif isinstance(output.action, Response) and state["plan"][-1] == state["past_steps"][-1]:
-        return {"response": output.action.response, "next": "FINISH"}
-    elif isinstance(output.action, Response):
-        return {"response": "Plan is not finished! Do not use response!", "next": "Supervisor"}
+    # elif isinstance(output.action, Response):
+    #     return {"response": "Plan is not finished! Do not use response!", "next": "Supervisor"}
     else:
         return {"plan": output.action.steps, "next": output.action.steps[0].agent}
     
     
-    # for s in agent.stream(state, {"recursion_limit": 1000}):
-    #     print_stream(s)
-    # return {"messages": [HumanMessage(content=s["messages"][-1].content, name=name)]}
 
 def worker_agent_node(state, agent, name, past_steps_list):
     print(f"Agent {name} is processing!!!!!")
@@ -151,12 +146,12 @@ def worker_agent_node(state, agent, name, past_steps_list):
     task = plan[0]
 #     task_formatted = f"""For the following plan:
 # {plan_str}\n\nYou are tasked with executing step {1}, {task}."""
-    old_tasks_string = "\n".join(f"{i+1}. {step[0].agent}-{step[0].step}: {step[1]}" for i, step in enumerate(past_steps_list))
+    old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step}" for i, step in enumerate(past_steps_list))
     task_formatted = f"""
 Here are what has been done so far:
 {old_tasks_string}
 
-Now, you are tasked with executing step {1}, {task}.
+Now, you are tasked with: {task}.
 """
     
     print(task_formatted)
@@ -174,12 +169,13 @@ Now, you are tasked with executing step {1}, {task}.
     #     {"messages": [("user", task_formatted)]},  {"configurable": {"thread_id": "1"}}
     # )
     
-    past_steps_list.append((task, agent_response["messages"][-1].content))
+    # past_steps_list.append((task, agent_response["messages"][-1].content))
+    past_steps_list.append(myStep(step=agent_response["messages"][-1].content, agent=name))
     
     print_stream(agent_response)
     
     return {
-        "past_steps": [past_steps_list[-1]],
+        "past_steps": past_steps_list,
     }
 
     
@@ -188,9 +184,10 @@ def whos_next(state):
 
 def create_planning_graph(config: dict) -> StateGraph:
     # Define the model
-    # llm = ChatAnthropic(model=config["ANTHROPIC_MODEL"], api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-    llm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
-    workerllm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"], model_kwargs={'parallel_tool_calls': False})
+    llm = ChatAnthropic(model=config["ANTHROPIC_MODEL"], api_key=config['hongshuo_ANTHROPIC_API_KEY'],temperature=0.0)
+    workerllm = ChatAnthropic(model=config["ANTHROPIC_MODEL"], api_key=config['hongshuo_ANTHROPIC_API_KEY'],temperature=0.0)
+    # llm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
+    # workerllm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"], model_kwargs={'parallel_tool_calls': False})
     # llm = ChatDeepSeek(model_name=config["DeepSeek_MDL"], api_key=config['DeepSeek_API_KEY'], api_base=config['DeepSeek_BASE_URL'], temperature=0.0)
     
     
@@ -214,12 +211,14 @@ def create_planning_graph(config: dict) -> StateGraph:
         Your original plan was this:
         {{plan}}
 
-        Your last step is:
+        Your pass steps are:
         {{past_steps}}
 
         Update your plan accordingly, and fill out the plan. Only add steps to the plan that still NEED to be done. Do not return previously done steps as part of the plan. 
         choose plan if there are still steps to be done, or response if everything is done.
     2.  Given the conversation above, suggest who should act next. next could only be selected from: {OPTIONS}.
+<Requirements>:
+    1.  convergence test on DFT parameters should only be done once for the most complex system. I.e. if you have system with A, another one with B, and another one with A and B, you only need to do the convergence test for the system with A and B.
         """
     )
     
@@ -315,6 +314,7 @@ def create_planning_graph(config: dict) -> StateGraph:
     conditional_map["Supervisor"] = "Supervisor" 
     graph.add_conditional_edges("Supervisor", whos_next, conditional_map)
     graph.add_edge(START, "Supervisor") 
-    return graph.compile(checkpointer=memory)
+    # return graph.compile(checkpointer=memory)
+    return graph.compile()
 
 

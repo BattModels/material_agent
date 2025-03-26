@@ -86,24 +86,10 @@ if __name__ == "__main__":
     
     userMessage_6 = "You are going to calculate the lattic constant for FCC Cu through DFT, the experiment value is 3.596, use this to create the initial structure."
     userMessage_7 = "You are going to generat a Pt surface structure with 2x2x4 supercell, then do a convergence test, use maximum ecutwfc = 160. Get the optimal kspacing and ecutwfc."
-    userMessage_8 = """Please generate intial structures required to calculate CO adsorbtion on Pt(111) surface with 1/4 coverage, and calculate the adsorbtion energy. The plan should roughly be:
-1. Create initial structure of Pt(111) surface
-2. Create initial structure of CO molecule
-3. Create initial structure of CO adsorbed on Pt(111) surface
-4. Find appropriate pseudopotentials for Pt and C, O atoms
-5. Write initial DFT script for convergence testing
-6. Generate convergence test input files for energy cutoff and k-points
-7. Add resource requirements to convergence test jobs
-8. Submit convergence test jobs to HPC and monitor completion
-9. Analyze convergence test results and determine optimal parameters
-10. Generate input files for Pt(111) surface energy calculation using optimal parameters
-11. Generate input files for CO molecule energy calculation using optimal parameters
-12. Generate input files for CO adsorbed on Pt(111) surface energy calculation using optimal parameters
-13. Add resource requirements to energy calculation jobs
-14. Submit energy calculation jobs to HPC and monitor completion
-15. Extract energies from output files for all three systems
-16. Calculate CO adsorption energy on Pt(111) surface
-"""
+    userMessage_8 = """Please generate intial structures required to calculate CO adsorbtion on Pt(111) surface with 1/4 coverage (2x2x4 supercell), and calculate the adsorbtion energy."""
+    userMessage_9 = """
+    Please find out the most perfered adsorbtion site and adsorbate orientation (up or down) for CO adsorbtion on Pt(111) surface with 1/4 coverage.
+    """
     testMessage = '''
     please generate a single input script for Li BCC structure with kspacing 0.1 and ecutwfc 40
     '''
@@ -114,6 +100,8 @@ if __name__ == "__main__":
     
     CANVAS.set_working_directory(WORKING_DIRECTORY)
     
+    # set environment variable
+    os.environ["OMP_NUM_THREADS"] = "1"
     
     # check if working directory exists, if so delete it
     if os.path.exists(WORKING_DIRECTORY):

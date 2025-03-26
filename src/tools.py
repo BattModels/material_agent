@@ -140,13 +140,16 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
     )
     
     mySurface = surface_dict[species][f'{crystal_structures}{facets}']["structure"]
-    mySites = get_adsorption_sites(mySurface, symm_reduce=0)
+    # mySites = get_adsorption_sites(mySurface, symm_reduce=0)
+    mySites = get_adsorption_sites(mySurface)
     
     output_capture = io.StringIO()
     with contextlib.redirect_stdout(output_capture):
         print(mySites)
     
     mySites_str = output_capture.getvalue()
+    
+    CANVAS.write('Possible_CO_site_on_Pt_surface', mySites)
     
     return f"the surface generated is saved at {surface_dict[species][f'{crystal_structures}{facets}']['traj_file_path']}, available adsorbate sites are: {mySites_str}"
 
@@ -157,6 +160,7 @@ def generate_myAdsorbate(symbols: Annotated[str, "Element symbols of the adsorba
     """Generate an adsorbate structure and save it."""
     os.makedirs("adsorbates", exist_ok=True)
     tmpAtoms = Atoms(symbols=symbols, positions=positions)
+    tmpAtoms.center(vacuum=10.0)
     write(os.path.join("adsorbates", f"Adsorbate_{symbols}.traj"), tmpAtoms)
     
     return f"Adsorbate saved at adsorbates/Adsorbate_{symbols}.traj"
@@ -164,18 +168,41 @@ def generate_myAdsorbate(symbols: Annotated[str, "Element symbols of the adsorba
 @tool
 def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure"],
                     adsorbatePath: Annotated[str, "Path to the adsorbate structure"],
-                    mySites: Annotated[List[List[float]], "List of adsorption sites you want to put adsorbates on, e.g. [[x1, y1], [x2, y2], ...]"]
+                    mySites: Annotated[List[List[float]], "List of adsorption sites you want to put adsorbates on, e.g. [[x1, y1], [x2, y2], ...]"],
+                    rotations: Annotated[List[Tuple[float, str]], "List of rotations for the ith adsorbates, e.g. [[90.0, 'x'], [180.0, 'y'], ...]"]
                     ):
-    """Add adsorbate to the surface structure and save it. The third argument must be in the form of [[x1, y1], [x2, y2], ...], where x and y are the coordinates of the adsorption sites."""
+    """
+    Add adsorbate to the surface structure and save it.
+    The third argument must be in the form of [[x1, y1], [x2, y2], ...], where x and y are the coordinates of the adsorption sites.
+    The forth argument must be in the form of [[float(angle), str(axis)], ...], where the first element is the rotation angle and the second element is the axis of rotation.
+    """
+# @tool
+# def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure"],
+#                     adsorbatePath: Annotated[str, "Path to the adsorbate structure"],
+#                     mySites: Annotated[List[List[float]], "List of adsorption sites you want to put adsorbates on, e.g. [[x1, y1], [x2, y2], ...]"],
+#                     rotations: Annotated[List[List[str]], "List of rotations for the ith adsorbates, e.g. [['90.0', 'x'], ['180.0', 'y'], ...]"]
+#                     ):
+#     """
+#     Add adsorbate to the surface structure and save it.
+#     The third argument must be in the form of [[x1, y1], [x2, y2], ...], where x and y are the coordinates of the adsorption sites.
+#     The forth argument must be in the form of [[str(angle), str(axis)], ...], where the first element is the rotation angle and the second element is the axis of rotation.
+#     """
     # Load the surface structure
     mySurface = read(mySurfacePath)
     
     # Load the adsorbate structure
     myAdsorbate = read(adsorbatePath)
     
-    for oneSites in mySites:
-        myHeight = get_adsorbate_height_estimate(mySurface, myAdsorbate, (oneSites[0], oneSites[1]))
-        add_adsorbate(mySurface, myAdsorbate, height=myHeight, position=(oneSites[0], oneSites[1]))
+    for oneSites, oneRotation in zip(mySites, rotations):
+        print(oneSites, oneRotation)
+        _myAdsorbate = myAdsorbate.copy()
+        _myAdsorbate.rotate(float(oneRotation[0]), oneRotation[1], center="COP")
+        
+        # get the index of the atom with the lowest z-coordinate
+        lowestAtomIndex = _myAdsorbate.positions[:,2].argmin()
+        
+        myHeight = get_adsorbate_height_estimate(mySurface, _myAdsorbate, (oneSites[0], oneSites[1]), anchor_atom_index=lowestAtomIndex)
+        add_adsorbate(mySurface, _myAdsorbate, height=myHeight, position=(oneSites[0], oneSites[1]), mol_index=lowestAtomIndex)
     
     # get the parent path of mySurfacePath
     parentPath = os.path.dirname(mySurfacePath)
@@ -210,7 +237,7 @@ def write_script(
 
 @tool
 def write_QE_script_w_ASE(
-    listofElements: Annotated[List[str], "List of element symbols in the unit cell"],
+    listofElements: Annotated[List[str], "List of distinct element symbols in the unit cell"],
     ppfiles: Annotated[List[str], "List of pseudopotential files in the order of the elements"],
     pseudo_dir: Annotated[str, "Path to the directory containing the pseudopotentials"],
     filename: Annotated[str, "Name of the Quantum Espresso input file, end with .pwi"],
@@ -229,7 +256,8 @@ def write_QE_script_w_ASE(
     smearing: Annotated[Literal['gaussian', 'methfessel-paxton', 'marzari-vanderbilt', 'fermi-dirac'], "Smearing type"],
     degauss: Annotated[float, "value of the gaussian spreading (Ry) for brillouin-zone integration in metals."],
     conv_thr: Annotated[float, "Convergence threshold for self-consistent loop"],
-    kpts: Annotated[List[int], "Number of k-points along each reciprocal lattice vector. it would be a list of int: [int, int, int]"]
+    kpts: Annotated[List[int], "Number of k-points along each reciprocal lattice vector. it would be a list of int: [int, int, int]"],
+    ready_to_run_job: Annotated[bool, "True if the job is intended to be run directly without further modification, False if this file is intended to be used to generate other files"] = False
 ):
     """Write a Quantum Espresso input script using ASE."""
 
@@ -248,7 +276,7 @@ def write_QE_script_w_ASE(
           atoms,
           input_data={
               'control': {
-                  'calculation': calculation,
+                  'calculation': 'scf',
                   'restart_mode': restart_mode,
                   'prefix': prefix,
                   'pseudo_dir': "/nfs/turbo/coe-venkvis/ziqiw-turbo/sssp",
@@ -273,6 +301,17 @@ def write_QE_script_w_ASE(
           pseudopotentials=pseudopotentials,
           kpts=tuple(kpts)
           )
+    
+    
+    if not ready_to_run_job:
+        destiJobList = 'scratch_job_list'
+    else:
+        destiJobList = 'ready_to_run_job_list'
+    
+    job_list = [filename]
+    old_job_list = CANVAS.canvas.get(destiJobList, []).copy()
+    job_list = list(set(old_job_list + job_list))
+    CANVAS.write(destiJobList,job_list, overwrite=True)
     
     return f"Quantum Espresso input script is written to {filename}"
 
@@ -302,13 +341,10 @@ def write_LAMMPS_script(
     
     job_list.append(file_name)
     
-    ## Remove duplicate files
-    # job_list = list(set(job_list))
-    ## Save the job list as json file
     old_job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
     job_list = list(set(old_job_list + job_list))
-    CANVAS.write('ready_to_run_job_list',job_list)
-    
+    CANVAS.write('ready_to_run_job_list',job_list, overwrite=True)
+        
     return f"Initial file is created named {file_name}"
 
 @tool
@@ -336,6 +372,9 @@ def generate_convergence_test(input_file_name:str,kspacing:list[float], ecutwfc:
             kspacing: list[float], the list of kspacing to be tested
             ecutwfc: list[int], the list of ecutwfc to be tested
     '''
+    kspacing = [0.6, 0.8, 1.0]
+    ecutwfc = [10, 20, 30]
+    
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
     input_file = os.path.join(WORKING_DIRECTORY, input_file_name)
     # Read the atom object from the input script
@@ -412,7 +451,7 @@ def generate_convergence_test(input_file_name:str,kspacing:list[float], ecutwfc:
     ## Save the job list
     old_job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
     job_list = list(set(old_job_list + job_list))
-    CANVAS.write('ready_to_run_job_list',job_list)
+    CANVAS.write('ready_to_run_job_list',job_list, overwrite=True)
     CANVAS.write('jobs_K_and_ecut',job_list_dict)
     return f"Job list is saved scucessfully, continue to submit the jobs"
 
@@ -480,7 +519,6 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
     ## Save the job list as json file
     old_job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
     job_list = list(set(old_job_list + job_list))
-    print(job_list)
     CANVAS.write('ready_to_run_job_list',job_list, overwrite=True)
     
     return f"Job list is saved scucessfully, continue to submit the jobs"
@@ -488,11 +526,16 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
 ###################################### DFT POST-PROCESSING TOOLS ######################################
 
 @tool
-def calculate_formation_E(slabFilePath: Annotated[str, "If I use ase.io.read on this path, I'll get the energy of the slab"],
-                          adsorbateFilePath: Annotated[str, "If I use ase.io.read on this path, I'll get the energy of the adsorbate"],
-                          systemFilePath: Annotated[str, "If I use ase.io.read on this path, I'll get the energy of the slab with adsorbate"]
+def calculate_formation_E(slabFilePath: Annotated[str, "the slab calculation output file path"],
+                          adsorbateFilePath: Annotated[str, "the adsorbate calculation output file path"],
+                          systemFilePath: Annotated[str, "the slab with adsorbate calculation output file path"]
                           ):
     """using the energies of the slab, adsorbate, and slab with adsorbate, calculate the formation energy of the adsorbate on the slab. """
+    working_directory = os.environ.get("WORKING_DIR")
+    slabFilePath = os.path.join(working_directory, slabFilePath + '.pwo')
+    adsorbateFilePath = os.path.join(working_directory, adsorbateFilePath + '.pwo')
+    systemFilePath = os.path.join(working_directory, systemFilePath + '.pwo')
+    
     # Load the energies
     slab = read(slabFilePath)
     adsorbate = read(adsorbateFilePath)
@@ -505,9 +548,9 @@ def calculate_formation_E(slabFilePath: Annotated[str, "If I use ase.io.read on 
     # assume slab only have one species
     slabSpecies = slab.numbers[0]
     NslabInSystem = system.numbers.tolist().count(slabSpecies)
-    NadsorbateInSystem = (len(system) - NslabInSystem)/len(adsorbate)
+    # NadsorbateInSystem = (len(system) - NslabInSystem)/len(adsorbate)
     
-    formationEnergy = systemEnergy - slabEnergy * NslabInSystem - adsorbateEnergy * NadsorbateInSystem
+    formationEnergy = systemEnergy - slabEnergy * NslabInSystem - adsorbateEnergy
     
     return f"The formation energy of the adsorbate on the slab is {formationEnergy} eV"
 
@@ -794,7 +837,7 @@ echo "Job Ended at `date`"\n \
     # craete the json file if it does not exist, otherwise load it
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
 
-    new_resource_dict = {qeInputFileName: {"partition": "venkvis-largemem", "nnodes": 1, "ntasks": 64, "runtime": 240, "submissionScript": submissionScript, "outputFilename": outputFilename}}
+    new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 64, "runtime": 240, "submissionScript": submissionScript, "outputFilename": outputFilename}}
     
     # check if resource_suggestions.db exist in the working directory
     db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
@@ -1124,13 +1167,20 @@ echo "Job Ended at `date`"
     return f"Job has finished, please check the output file"   
 
 @tool
-def read_energy_from_output(
+def read_energy_from_output(jobFileIdx: Annotated[List[int], "indexs of files in the finished job list of files of interest, energies of which will be read and printed"]
 ) -> str:
     '''Read the total energy from the output file in job list and return it in a string'''
+    
+    assert isinstance(jobFileIdx, list), "jobFileIdx should be a list"
+    for i in jobFileIdx:
+        assert isinstance(i, int), "jobFileIdx should be a list of index of files of interest"
+    
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
     # load job_list.jason
     job_list = CANVAS.canvas.get('finished_job_list', []).copy()
-        
+    job_list = np.array(job_list, dtype=str)[jobFileIdx]
+    print(f"actual job list: {job_list}")
+    
     result = ""
     for job in job_list:
         
@@ -1145,7 +1195,7 @@ def read_energy_from_output(
             atoms = read(file_path)
         except:
             return f"Invalid output file {output_file} or calculation failed, please submit the {job} again."
-        result += f"Energy read from {job} is {atoms.get_potential_energy()}. "
+        result += f"Energy read from {job} is {atoms.get_potential_energy()}.\n"
         # print(result)
         time.sleep(1)
     print(result)
@@ -1154,7 +1204,7 @@ def read_energy_from_output(
     # atoms = read(file_path)
     # return f"Energy read from job {input_file} is {atoms.get_potential_energy()}"
         
-    return "All energies are read successfully"
+    return result
 
 
 @tool

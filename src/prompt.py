@@ -48,7 +48,7 @@ dft_agent_prompt = """
                 6. Do not give further suggestions on what to do next.
                 7. The electron conv_thr should be 1e-6.
                 8. Use the right smearing based on the material.
-                9. The final answer should be summarized in a short paragraph.
+                9. The final answer should be concise summary in a sentence.
                 10. disk_io should be none
                 11. Do not give further suggestions on what to do next.
                 12. You don't have to use all the tools provided, only use the tools that are necessary.
