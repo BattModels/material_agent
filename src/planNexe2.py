@@ -184,8 +184,8 @@ def whos_next(state):
 
 def create_planning_graph(config: dict) -> StateGraph:
     # Define the model
-    llm = ChatAnthropic(model=config["ANTHROPIC_MODEL"], api_key=config['hongshuo_ANTHROPIC_API_KEY'],temperature=0.0)
-    workerllm = ChatAnthropic(model=config["ANTHROPIC_MODEL"], api_key=config['hongshuo_ANTHROPIC_API_KEY'],temperature=0.0)
+    llm = ChatAnthropic(model=config["ANTHROPIC_MODEL"], api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    workerllm = ChatAnthropic(model=config["ANTHROPIC_MODEL"], api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # llm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
     # workerllm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"], model_kwargs={'parallel_tool_calls': False})
     # llm = ChatDeepSeek(model_name=config["DeepSeek_MDL"], api_key=config['DeepSeek_API_KEY'], api_base=config['DeepSeek_BASE_URL'], temperature=0.0)
@@ -218,7 +218,8 @@ def create_planning_graph(config: dict) -> StateGraph:
         choose plan if there are still steps to be done, or response if everything is done.
     2.  Given the conversation above, suggest who should act next. next could only be selected from: {OPTIONS}.
 <Requirements>:
-    1.  convergence test on DFT parameters should only be done once for the most complex system. I.e. if you have system with A, another one with B, and another one with A and B, you only need to do the convergence test for the system with A and B.
+    1.  when calculating formation energies, convergence test on DFT parameters should be done on one representitive system with both the adsorbate and the surface.
+    2.  when trying to explore the configuration design space, try a couple of configurations first, and then refine the search based on the results.
         """
     )
     

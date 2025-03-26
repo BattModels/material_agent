@@ -155,21 +155,25 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
 
 @tool
 def generate_myAdsorbate(symbols: Annotated[str, "Element symbols of the adsorbate (Do not use any delimiters)"],
-                         positions: Annotated[List[List[float]], "Positions of the atoms in the adsorbate, e.g. [[x1, y1, z1], [x2, y2, z2], ...], following the same order as the symbols."]
+                         positions: Annotated[List[List[float]], "Positions of the atoms in the adsorbate, e.g. [[x1, y1, z1], [x2, y2, z2], ...], following the same order as the symbols."],
+                         AdsorbateFileName: Annotated[str, "Name of the adsorbate file to be saved in traj format"]
                          ):
     """Generate an adsorbate structure and save it."""
+    assert AdsorbateFileName.endswith('.traj'), "AdsorbateFileName should end with .traj"
+    
     os.makedirs("adsorbates", exist_ok=True)
     tmpAtoms = Atoms(symbols=symbols, positions=positions)
     tmpAtoms.center(vacuum=10.0)
-    write(os.path.join("adsorbates", f"Adsorbate_{symbols}.traj"), tmpAtoms)
+    write(os.path.join("adsorbates", f"{AdsorbateFileName}"), tmpAtoms)
     
-    return f"Adsorbate saved at adsorbates/Adsorbate_{symbols}.traj"
+    return f"Adsorbate saved at adsorbates/{AdsorbateFileName}"
 
 @tool
 def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure"],
                     adsorbatePath: Annotated[str, "Path to the adsorbate structure"],
                     mySites: Annotated[List[List[float]], "List of adsorption sites you want to put adsorbates on, e.g. [[x1, y1], [x2, y2], ...]"],
-                    rotations: Annotated[List[Tuple[float, str]], "List of rotations for the ith adsorbates, e.g. [[90.0, 'x'], [180.0, 'y'], ...]"]
+                    rotations: Annotated[List[Tuple[float, str]], "List of rotations for the ith adsorbates, e.g. [[90.0, 'x'], [180.0, 'y'], ...]"],
+                    surfaceWithAdsorbateFileName: Annotated[str, "File name of the surface adsorbated with adsorbate to be saved in traj format"]
                     ):
     """
     Add adsorbate to the surface structure and save it.
@@ -187,6 +191,7 @@ def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure
 #     The third argument must be in the form of [[x1, y1], [x2, y2], ...], where x and y are the coordinates of the adsorption sites.
 #     The forth argument must be in the form of [[str(angle), str(axis)], ...], where the first element is the rotation angle and the second element is the axis of rotation.
 #     """
+    assert surfaceWithAdsorbateFileName.endswith('.traj'), "surfaceWithAdsorbateFileName should end with .traj"
     # Load the surface structure
     mySurface = read(mySurfacePath)
     
@@ -208,9 +213,9 @@ def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure
     parentPath = os.path.dirname(mySurfacePath)
     
     # save the new structure
-    write(os.path.join(parentPath, "Surface_with_adsorbate.traj"), mySurface)
+    write(os.path.join(parentPath, surfaceWithAdsorbateFileName), mySurface)
     
-    return f"Surface with adsorbate saved at {parentPath}/Surface_with_adsorbate.traj"
+    return f"Surface with adsorbate saved at {parentPath}/{surfaceWithAdsorbateFileName}"
 
 @tool
 def write_script(

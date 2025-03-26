@@ -88,7 +88,7 @@ if __name__ == "__main__":
     userMessage_7 = "You are going to generat a Pt surface structure with 2x2x4 supercell, then do a convergence test, use maximum ecutwfc = 160. Get the optimal kspacing and ecutwfc."
     userMessage_8 = """Please generate intial structures required to calculate CO adsorbtion on Pt(111) surface with 1/4 coverage (2x2x4 supercell), and calculate the adsorbtion energy."""
     userMessage_9 = """
-    Please find out the most perfered adsorbtion site and adsorbate orientation (up or down) for CO adsorbtion on Pt(111) surface with 1/4 coverage.
+    Please find out the most perfered adsorbtion site and adsorbate orientation (up or down) for CO adsorbtion on Pt(111) surface with 1/4 coverage (2x2x4 supercell).
     """
     testMessage = '''
     please generate a single input script for Li BCC structure with kspacing 0.1 and ecutwfc 40
@@ -172,7 +172,7 @@ if __name__ == "__main__":
         
         for s in graph.stream(
             {
-                "input": f"{userMessage_8}",
+                "input": f"{userMessage_9}",
                 "plan": [],
                 "past_steps": []
             }, llm_config):
