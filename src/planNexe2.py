@@ -177,6 +177,9 @@ Now, you are tasked with: {task}.
     return {
         "past_steps": past_steps_list,
     }
+    
+def recusive_agent_node(state, agent, name, past_steps_list):
+    print(f"Agent {name} is processing!!!!!")
 
     
 def whos_next(state):

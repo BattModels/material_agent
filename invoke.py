@@ -178,6 +178,8 @@ if __name__ == "__main__":
             }, llm_config):
             
             if "__end__" not in s:
+                print(s)
+                print("----")
                 # Print to console
                 log_file.write(f"{s}\n")
                 log_file.write("----\n")
