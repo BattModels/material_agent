@@ -180,7 +180,21 @@ Now, you are tasked with: {task}.
     
 def recusive_agent_node(state, agent, name, past_steps_list):
     print(f"Agent {name} is processing!!!!!")
-
+    graph = create_planning_graph(config)
+    llm_config = {"thread_id": "1", 'recursion_limit': 1000}
+    
+    someMessage = "I am a message"
+    
+    for s in graph.stream(
+            {
+                "input": f"{someMessage}",
+                "plan": [],
+                "past_steps": []
+            }, llm_config):
+            
+            if "__end__" not in s:
+                print(s)
+                print("----")
     
 def whos_next(state):
     return state["next"]
