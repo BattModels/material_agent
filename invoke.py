@@ -121,7 +121,7 @@ if __name__ == "__main__":
     # print(graph)
     
 
-    # save_graph_to_file(graph, WORKING_DIRECTORY, "super_graph")
+    save_graph_to_file(graph, WORKING_DIRECTORY, "super_graph")
     # exit()
 
     
@@ -172,7 +172,7 @@ if __name__ == "__main__":
         
         for s in graph.stream(
             {
-                "input": f"{userMessage_9}",
+                "input": f"{userMessage_5}",
                 "plan": [],
                 "past_steps": []
             }, llm_config):

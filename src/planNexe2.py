@@ -24,7 +24,7 @@ from src.agent import create_agent
 from src.tools import *
 from src.prompt import dft_agent_prompt,hpc_agent_prompt,supervisor_prompt
 
-members = ["DFT_Agent", "HPC_Agent"]
+members = ["DFT_Agent", "HPC_Agent", "recursion_node"]
 instructions = [dft_agent_prompt, hpc_agent_prompt]
 OPTIONS = members
 
@@ -92,6 +92,8 @@ teamCapability = """
     - find job list from the job list file
     - Add resource suggestion base on the DFT input file
     - Submit job to HPC and report back once all jobs are done
+<rerursion Node>:
+    - Recursively dissect the task into smaller tasks and execute them
 """
 
 teamRestriction = """
@@ -99,6 +101,8 @@ teamRestriction = """
     - Cannot submit job to HPC
 <HPC Agent>:
     - Cannot determine the best parameters from convergence test result
+<rerursion Node>:
+    - Cannot use any tools
 """
 
 
@@ -178,16 +182,19 @@ Now, you are tasked with: {task}.
         "past_steps": past_steps_list,
     }
     
-def recusive_agent_node(state, agent, name, past_steps_list):
+def recusive_agent_node(state, name, config):
     print(f"Agent {name} is processing!!!!!")
     graph = create_planning_graph(config)
     llm_config = {"thread_id": "1", 'recursion_limit': 1000}
     
-    someMessage = "I am a message"
+    plan = state["plan"]
+    plan_str = "\n".join(f"{i+1}. {step.step}" for i, step in enumerate(plan))
+    print(plan_str)
+    task = plan[0]
     
     for s in graph.stream(
             {
-                "input": f"{someMessage}",
+                "input": f"{task}",
                 "plan": [],
                 "past_steps": []
             }, llm_config):
@@ -195,6 +202,8 @@ def recusive_agent_node(state, agent, name, past_steps_list):
             if "__end__" not in s:
                 print(s)
                 print("----")
+    
+    return s['Supervisor']['response']
     
 def whos_next(state):
     return state["next"]
@@ -215,8 +224,9 @@ def create_planning_graph(config: dict) -> StateGraph:
 <Objective>
     Given the following user request, decide which the member to act next, and do what
 <Instructions>:
-    1.  If the plan is empty, For the given objective, come up with a simple, high level plan based on the capability of the team listed here: {teamCapability} and the restrictions listed here: {teamRestriction} 
-        You don't have to use all the members, nor all the capabilities of the members.
+    1.  If the plan is empty, For the given objective, first, try to dissect the problem into smaller pieces. Then base on on the capability of the team listed here: {teamCapability} and the restrictions listed here: {teamRestriction} decide which member should act next, or the recursion_node should be called to further dissect each step recursively.
+        For example, if to calculate (a+b)*(c+d), you the first plan could be 1. calculate a+b 2. calculate c+d 3. multiply the results. Then call recursion node with the new task calculate a+b.
+        You don't have to use all the members, nor all the capabilities of the members, nor use recursion.
         This plan should involve individual tasks, that if executed correctly will yield the correct answer. Do not add any superfluous steps. 
         The result of the final step should be the final answer. Make sure that each step has all the information needed - do not skip steps.
         If you are given a list of systems, process them one by one: generate plan for one system first, finish that system, then generate plan for the next system.
@@ -308,6 +318,11 @@ def create_planning_graph(config: dict) -> StateGraph:
     #                               state_modifier=md_agent_prompt)
     
     # md_node = functools.partial(worker_agent_node, agent=md_agent, name="MD_Agent", past_steps_list=PAST_STEPS)
+    
+    
+    ### recursion node
+    recursion_node = functools.partial(recusive_agent_node, name="recursion_node", config=config)
+    
 
     # save_graph_to_file(dft_agent, config['working_directory'], "dft_agent")
     
@@ -319,6 +334,7 @@ def create_planning_graph(config: dict) -> StateGraph:
     graph.add_node("HPC_Agent", hpc_node)
     # graph.add_node("MD_Agent", md_node)
     # graph.add_node("CSS_Agent", css_node)
+    graph.add_node("recursion_node", recursion_node)
 
     graph.add_node("Supervisor", supervisor_agent)
     
