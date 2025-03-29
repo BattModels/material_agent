@@ -101,8 +101,6 @@ teamRestriction = """
     - Cannot submit job to HPC
 <HPC Agent>:
     - Cannot determine the best parameters from convergence test result
-<rerursion Node>:
-    - Cannot use any tools
 """
 
 
@@ -182,9 +180,9 @@ Now, you are tasked with: {task}.
         "past_steps": past_steps_list,
     }
     
-def recusive_agent_node(state, name, config):
+def recusive_agent_node(state, name):
     print(f"Agent {name} is processing!!!!!")
-    graph = create_planning_graph(config)
+    graph = create_planning_graph()
     llm_config = {"thread_id": "1", 'recursion_limit': 1000}
     
     plan = state["plan"]
@@ -208,10 +206,12 @@ def recusive_agent_node(state, name, config):
 def whos_next(state):
     return state["next"]
 
-def create_planning_graph(config: dict) -> StateGraph:
+def create_planning_graph() -> StateGraph:
     # Define the model
-    llm = ChatAnthropic(model=config["ANTHROPIC_MODEL"], api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-    workerllm = ChatAnthropic(model=config["ANTHROPIC_MODEL"], api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    # llm = ChatAnthropic(model=config["ANTHROPIC_MODEL"], api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    # workerllm = ChatAnthropic(model=config["ANTHROPIC_MODEL"], api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key='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',temperature=0.0)
+    workerllm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key='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',temperature=0.0)
     # llm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
     # workerllm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"], model_kwargs={'parallel_tool_calls': False})
     # llm = ChatDeepSeek(model_name=config["DeepSeek_MDL"], api_key=config['DeepSeek_API_KEY'], api_base=config['DeepSeek_BASE_URL'], temperature=0.0)
@@ -220,17 +220,18 @@ def create_planning_graph(config: dict) -> StateGraph:
     supervisor_prompt = ChatPromptTemplate.from_template(
         f"""
 <Role>
-    You are a supervisor tasked with managing a conversation for scientific computing between the following workers: {members}. You don't have to use all the members, nor all the capabilities of the members.
+    You are a planner that dissect the given objective into high level steps and decide if any member can act or if it needs to be dissected further.
+    You have following workers available: {members}. You don't have to use all the members, nor all the capabilities of the members.
 <Objective>
-    Given the following user request, decide which the member to act next, and do what
+    Given the following user request, dissect the objective into smaller and smaller spices until it can be executed by one of the workers, and decide which member to act next, and do what
+    You can also choose to call the recursion_node to further dissect the task if you think it is necessary.
 <Instructions>:
     1.  If the plan is empty, For the given objective, first, try to dissect the problem into smaller pieces. Then base on on the capability of the team listed here: {teamCapability} and the restrictions listed here: {teamRestriction} decide which member should act next, or the recursion_node should be called to further dissect each step recursively.
         For example, if to calculate (a+b)*(c+d), you the first plan could be 1. calculate a+b 2. calculate c+d 3. multiply the results. Then call recursion node with the new task calculate a+b.
         You don't have to use all the members, nor all the capabilities of the members, nor use recursion.
-        This plan should involve individual tasks, that if executed correctly will yield the correct answer. Do not add any superfluous steps. 
-        The result of the final step should be the final answer. Make sure that each step has all the information needed - do not skip steps.
-        If you are given a list of systems, process them one by one: generate plan for one system first, finish that system, then generate plan for the next system.
-
+        This plan should involve high level tasks, that if executed correctly will yield the correct answer. Do not add any superfluous steps. 
+        The result of the final step should be the final answer. 
+        
         If the plan is not empty, update the plan:
         Your objective was this:
         {{input}}
@@ -321,7 +322,7 @@ def create_planning_graph(config: dict) -> StateGraph:
     
     
     ### recursion node
-    recursion_node = functools.partial(recusive_agent_node, name="recursion_node", config=config)
+    recursion_node = functools.partial(recusive_agent_node, name="recursion_node")
     
 
     # save_graph_to_file(dft_agent, config['working_directory'], "dft_agent")

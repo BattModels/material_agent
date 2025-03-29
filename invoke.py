@@ -94,6 +94,8 @@ if __name__ == "__main__":
     please generate a single input script for Li BCC structure with kspacing 0.1 and ecutwfc 40
     '''
     
+    configPath = os.path.join('./config', "default.yaml")
+    
     config = load_config(os.path.join('./config', "default.yaml"))
     check_config(config)
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
@@ -115,55 +117,12 @@ if __name__ == "__main__":
         os.remove(db_file)
     initialize_database(db_file)
 
-    graph = create_graph(config)
+    graph = create_graph()
     llm_config = {"thread_id": "1", 'recursion_limit': 1000}
     
     # print(graph)
     
 
-    save_graph_to_file(graph, WORKING_DIRECTORY, "super_graph")
-    # exit()
-
-    
-    # for s in graph.stream(
-    # {
-    #     "messages": [
-    #         HumanMessage(content=f"{userMessage_4}")
-    #     ]
-    # },llm_config):
-    #     if "__end__" not in s:
-    #         print(s)
-    #         print("----")
-
-    # for s in graph.stream(
-    # {
-    #     "messages": [
-    #         HumanMessage(content=f"{userMessage_2}")
-    #     ]
-    # },llm_config):
-    #     if "__end__" not in s:
-    #         print(s)
-    #         print("----")
-
-    # for s in graph.stream(
-    # {
-    #     "input": f"{userMessage_6}",
-    #     "plan": [],
-    #     "past_steps": []
-    # },llm_config):
-    #     if "__end__" not in s:
-    #         print(s)
-    #         print("----")
-            
-    # for s in graph.stream(
-    # {
-    #     "input": [
-    #         HumanMessage(content=f"{userMessage_5}")
-    #     ]
-    # },llm_config):
-    #     if "__end__" not in s:
-    #         print(s)
-    #         print("----")
 
     print("Start, check the log file for details")
     log_filename = f"./log/agent_stream_{int(time.time())}.log"  # Add timestamp to filename
