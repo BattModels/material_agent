@@ -221,7 +221,8 @@ def create_planning_graph(config: dict) -> StateGraph:
         choose plan if there are still steps to be done, or response if everything is done.
     2.  Given the conversation above, suggest who should act next. next could only be selected from: {OPTIONS}.
 <Requirements>:
-    1.  when calculating formation energies, convergence test on DFT parameters should be done on one representitive system with both the adsorbate and the surface.
+    0.  Do not generate convergence test for all systems and all configurations.
+    1.  Please only generate one batch of convergence test for the most complicated system using the most complicated configuration. 
     2.  when trying to explore the configuration design space, try a couple of configurations first, and then refine the search based on the results.
         """
     )

@@ -141,7 +141,8 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
     
     mySurface = surface_dict[species][f'{crystal_structures}{facets}']["structure"]
     # mySites = get_adsorption_sites(mySurface, symm_reduce=0)
-    mySites = get_adsorption_sites(mySurface)
+    # mySites = get_adsorption_sites(mySurface)
+    mySites = mySurface.info['adsorbate_info']['sites']
     
     output_capture = io.StringIO()
     with contextlib.redirect_stdout(output_capture):
@@ -281,10 +282,10 @@ def write_QE_script_w_ASE(
           atoms,
           input_data={
               'control': {
-                  'calculation': 'scf',
+                  'calculation': calculation,
                   'restart_mode': restart_mode,
                   'prefix': prefix,
-                  'pseudo_dir': "/nfs/turbo/coe-venkvis/ziqiw-turbo/sssp",
+                  'pseudo_dir': "/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/all_lda_pbe_UPF",
                   'outdir': './out',
                   'disk_io': disk_io,
               },
@@ -361,12 +362,22 @@ def find_classical_potential(element: str) -> str:
 @tool
 def find_pseudopotential(element: str) -> str:
     """Return the pseudopotential file path for given element symbol."""
+    spList = []
     pseudo_dir = os.environ.get("PSEUDO_DIR")
     for roots, dirs, files in os.walk(f'{pseudo_dir}'):
         for file in files:
-            if element == file.split('.')[0].split('_')[0].capitalize():
-                return f'The pseudopotential file for {element} is {file} under {pseudo_dir}'
-    return f"Could not find pseudopotential for {element}"
+            # if element == file.split('.')[0].split('_')[0].capitalize():
+            if element == file.split('_')[0].capitalize():
+                spList.append(file)
+    
+    if len(spList) > 0:
+        ans = f'The pseudopotential file for {element} is:\n'
+        for sp in spList:
+            ans += f'{sp}\n'
+        ans += f'under {pseudo_dir}'
+        return ans
+    else:
+        return f"Could not find pseudopotential for {element}"
 
 @tool
 def generate_convergence_test(input_file_name:str,kspacing:list[float], ecutwfc:list[int]):
@@ -377,8 +388,8 @@ def generate_convergence_test(input_file_name:str,kspacing:list[float], ecutwfc:
             kspacing: list[float], the list of kspacing to be tested
             ecutwfc: list[int], the list of ecutwfc to be tested
     '''
-    kspacing = [0.6, 0.8, 1.0]
-    ecutwfc = [10, 20, 30]
+    # kspacing = [0.6, 0.8, 1.0]
+    # ecutwfc = [10, 20, 30]
     
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
     input_file = os.path.join(WORKING_DIRECTORY, input_file_name)
@@ -730,7 +741,7 @@ def get_kspacing_ecutwfc(jobFileIdx: Annotated[List[int], "indexs of files in th
         convergence_df.to_csv(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv'))
     
     ## Determine the kpoints and ecutwfc based on the threshold
-    k_chosen, ecutwfc_chosen,df_kspacing, df_ecutwfc = select_k_ecut(convergence_df, threshold, Natom)
+    k_chosen, ecutwfc_chosen,finnerEcut,df_kspacing, df_ecutwfc,finnerKspacing = select_k_ecut(convergence_df, threshold, Natom)
     
     print(f"Chosen kspacing: {k_chosen}, Chosen ecutwfc: {ecutwfc_chosen}")
     
@@ -747,7 +758,16 @@ def get_kspacing_ecutwfc(jobFileIdx: Annotated[List[int], "indexs of files in th
         
     print("saved the chosen kspacing and ecutwfc")
     
-    return f"Please use kspacing {k_chosen} and ecutwfc {ecutwfc_chosen} for the production calculation"
+    ans = f"Please use kspacing {k_chosen} and ecutwfc {ecutwfc_chosen} for the production calculation"
+    
+    if finnerEcut and finnerKspacing:
+        ans += f"\nHowever, the calculation is not converged, please consider redo the convergence test and using a finner ecutwfc and finner kspacing"
+    elif finnerEcut:
+        ans += f"\nHowever, the calculation is not converged, please consider redo the convergence test and using a finner ecutwfc"
+    elif finnerKspacing:
+        ans += f"\nHowever, the calculation is not converged, please consider redo the convergence test and using a finner kspacing"
+    
+    return ans
 
 ##################################################################################################
 ##                                          HPC tools                                           ##
@@ -842,7 +862,7 @@ echo "Job Ended at `date`"\n \
     # craete the json file if it does not exist, otherwise load it
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
 
-    new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 64, "runtime": 240, "submissionScript": submissionScript, "outputFilename": outputFilename}}
+    new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 96, "runtime": 1440, "submissionScript": submissionScript, "outputFilename": outputFilename}}
     
     # check if resource_suggestions.db exist in the working directory
     db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')

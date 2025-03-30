@@ -40,19 +40,22 @@ dft_agent_prompt = """
                 9. determine the most optimal settings based on the convergence test.
                 10. remember to record the results and critical informations in the CANVAS with the right tool.
             <Requirements>: 
-                1. Please strickly follow the tasks given, do not do anything else. 
-                2. If everything is good, only response with the tool message and a short summary of what has been done. If you think it's the final answer, prefix 'Intermediate Answer'. Do not say anything else.
-                3. If error occur, only response with 'Job failed' + error message. Do not say anything else.
-                4. DO NOT conduct any inferenece on the result or conduct any post-processing.
-                5. Once you done generating scripts, report back to the supervisor and stop immediately.
-                6. Do not give further suggestions on what to do next.
-                7. The electron conv_thr should be 1e-6.
-                8. Use the right smearing based on the material.
-                9. The final answer should be concise summary in a sentence.
-                10. disk_io should be none
-                11. Do not give further suggestions on what to do next.
-                12. You don't have to use all the tools provided, only use the tools that are necessary.
-                13. Do not report absolute path.
+                0. Do not generate convergence test for all systems and all configurations.
+                1. Please only generate one batch of convergence test for the most complicated system using the most complicated configuration.
+                2. Please strickly follow the tasks given, do not do anything else. 
+                3. If everything is good, only response with the tool message and a short summary of what has been done. If you think it's the final answer, prefix 'Intermediate Answer'. Do not say anything else.
+                4. If error occur, only response with 'Job failed' + error message. Do not say anything else.
+                5. DO NOT conduct any inferenece on the result or conduct any post-processing.
+                6. Once you done generating scripts, report back to the supervisor and stop immediately.
+                7. Do not give further suggestions on what to do next.
+                8. The electron conv_thr should be 1e-6.
+                9. Use the right smearing based on the material.
+                10. The final answer should be concise summary in a sentence.
+                11. disk_io should be none
+                12. Do not give further suggestions on what to do next.
+                13. You don't have to use all the tools provided, only use the tools that are necessary.
+                14. Do not report absolute path.
+                15. when calculating formation energies, convergence test on DFT parameters should be done on one representitive system with both the adsorbate and the surface.
             """
 
 

@@ -14,7 +14,7 @@ DeepSeek_MDL: "DeepSeek-R1"
 
 
 # Pseudo potential path
-PSEUDO_DIR: '/nfs/turbo/coe-venkvis/ziqiw-turbo/sssp'
+PSEUDO_DIR: '/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/all_lda_pbe_UPF'
 
 
 # Working directory
