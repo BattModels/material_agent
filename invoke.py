@@ -90,7 +90,10 @@ if __name__ == "__main__":
     userMessage_9 = """
     Please find out the most perfered adsorbtion site and adsorbate orientation (up or down) for CO adsorbtion on Pt(111) surface with 1/4 coverage (2x2x4 supercell).
     """
-    userMessage_10 = "please find the adsorption energy difference between the most favorable configuration (adsorbate orientation up or down) at fcc site and most favorable configuration (adsorbate orientation up or down) at ontop site for CO on Pt(111) surface with p(2x2) adsorbate overlayer (1/4 coverage). Literatures suggest that ontop site is 0.24 eV more stable than fcc site when using PBE xc. If your result is not consistent with the literature, please provide a possible explanation and try to improve the accuracy of the calculation."
+    userMessage_10 = """please find the adsorption energy difference between the most favorable configurations (different adsorbate orientations) at fcc site and
+    most favorable configuration (different adsorbate orientations) at ontop site for CO on Pt(111) surface with p(2x2) adsorbate overlayer (1/4 coverage). 
+    Literatures suggest that ontop site is 0.24 eV less stable than fcc site when using PBE xc. 
+    If your result is not within 10 percent of the literature, please provide a possible explanation and try to improve the accuracy of the calculation."""
     testMessage = '''
     please generate a single input script for Li BCC structure with kspacing 0.1 and ecutwfc 40
     '''
@@ -170,6 +173,9 @@ if __name__ == "__main__":
     log_filename = f"./log/agent_stream_{int(time.time())}.log"  # Add timestamp to filename
     with open(log_filename, "a") as log_file:
         log_file.write(f"=== Session started at {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n\n")
+        if eval(config["SAVE_DIALOGUE"]):
+            with open(f"{WORKING_DIRECTORY}/his.txt", "a") as f:
+                f.write(f"=== Session started at {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n\n")
         
         for s in graph.stream(
             {
@@ -181,8 +187,17 @@ if __name__ == "__main__":
             if "__end__" not in s:
                 print(s)
                 print("----")
+                if eval(config["SAVE_DIALOGUE"]):
+                    with open(f"{WORKING_DIRECTORY}/his.txt", "a") as f:
+                        f.write(repr(s) + "\n")
+                        f.write("----\n")
+                    
                 # Print to console
                 log_file.write(f"{s}\n")
                 log_file.write("----\n")
                 log_file.flush()
+        log_file.write(f"=== Session ended at {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n\n")
+        if eval(config["SAVE_DIALOGUE"]):
+            with open(f"{WORKING_DIRECTORY}/his.txt", "a") as f:
+                f.write(f"=== Session ended at {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n\n")
     print("End, check the log file for details")

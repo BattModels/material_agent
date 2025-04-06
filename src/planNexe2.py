@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 from src.agent import create_agent
 from src.tools import *
 from src.prompt import dft_agent_prompt,hpc_agent_prompt,supervisor_prompt
+from src import var
 
 members = ["DFT_Agent", "HPC_Agent"]
 instructions = [dft_agent_prompt, hpc_agent_prompt]
@@ -105,14 +106,32 @@ teamRestriction = """
 def print_stream(s):
     if "messages" not in s:
         print("#################")
+        if var.my_SAVE_DIALOGUE:
+            with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+                f.write("#################\n")
         print(s)
+        if var.my_SAVE_DIALOGUE:
+            with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+                f.write(repr(s))
+                f.write("\n")
     else:
         message = s["messages"][-1]
         if isinstance(message, tuple):
             print(message)
+            if var.my_SAVE_DIALOGUE:
+                with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+                    f.write(repr(message))
+                    f.write("\n")
         else:
             message.pretty_print()
+            if var.my_SAVE_DIALOGUE:
+                with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+                    f.write(message.pretty_repr())
+                    f.write("\n")
     print()
+    if var.my_SAVE_DIALOGUE:
+        with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+            f.write("\n")
 
 # def agent_node(state, agent, name):
 #     print(f"Agent {name} is processing!!!!!")
@@ -121,11 +140,28 @@ def print_stream(s):
 #     return {"messages": [HumanMessage(content=s["messages"][-1].content, name=name)]}
 
 def supervisor_chain_node(state, chain, name):
+    
+    # read "status.txt" in the working directory
+    with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
+        status = f.read()
+    while status == "stop":
+        print(f"Calculation pause, supervisor is waiting")
+        # wait for 5 second
+        time.sleep(5)
+        with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
+            status = f.read()
+    
     print(f"supervisor is processing!!!!!")
+    if var.my_SAVE_DIALOGUE:
+        with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+            f.write(f"supervisor is processing!!!!!\n")
 
     print(state)
-    # for output in chain.stream(state, {"recursion_limit": 1000}):
-    #     print_stream(output)
+    if var.my_SAVE_DIALOGUE:
+        with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+            f.write(str(state))
+            f.write("\n")
+
     output = chain.invoke(state)
 
     if isinstance(output.action, Response):
@@ -138,11 +174,28 @@ def supervisor_chain_node(state, chain, name):
     
 
 def worker_agent_node(state, agent, name, past_steps_list):
-    print(f"Agent {name} is processing!!!!!")
+    # read "status.txt" in the working directory
+    with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
+        status = f.read()
+    while status == "stop":
+        print(f"Calculation pause, {name} Agent is waiting")
+        # wait for 5 second
+        time.sleep(5)
+        with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
+            status = f.read()
     
+    print(f"Agent {name} is processing!!!!!")
+    if var.my_SAVE_DIALOGUE:
+        with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+            f.write(f"Agent {name} is processing!!!!!\n")
+        
     plan = state["plan"]
     plan_str = "\n".join(f"{i+1}. {step.step}" for i, step in enumerate(plan))
     print(plan_str)
+    if var.my_SAVE_DIALOGUE:
+        with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+            f.write(plan_str)
+            f.write("\n")
     task = plan[0]
 #     task_formatted = f"""For the following plan:
 # {plan_str}\n\nYou are tasked with executing step {1}, {task}."""
@@ -155,7 +208,14 @@ Now, you are tasked with: {task}.
 """
     
     print(task_formatted)
+    if var.my_SAVE_DIALOGUE:
+        with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+            f.write(task_formatted)
+            f.write("\n")
     print(f"Agent {name} is processing!!!!!")
+    if var.my_SAVE_DIALOGUE:
+        with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+            f.write(f"Agent {name} is processing!!!!!\n")
     
     
     for agent_response in agent.stream(
@@ -180,24 +240,36 @@ Now, you are tasked with: {task}.
     
 def recusive_agent_node(state, agent, name, past_steps_list):
     print(f"Agent {name} is processing!!!!!")
-
+    if var.my_SAVE_DIALOGUE:
+        with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+            f.write(f"Agent {name} is processing!!!!!\n")
     
 def whos_next(state):
     return state["next"]
-
+        
 def create_planning_graph(config: dict) -> StateGraph:
+    # create a file named status.txt in the working directory
+    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    with open(f"{WORKING_DIRECTORY}/status.txt", "w") as f:
+        f.write("run")
+    
     # Define the model
-    llm = ChatAnthropic(model=config["ANTHROPIC_MODEL"], api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-    workerllm = ChatAnthropic(model=config["ANTHROPIC_MODEL"], api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    workerllm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    # workerllm = ChatAnthropic(model="claude-3-5-sonnet-20241022", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # llm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
     # workerllm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"], model_kwargs={'parallel_tool_calls': False})
     # llm = ChatDeepSeek(model_name=config["DeepSeek_MDL"], api_key=config['DeepSeek_API_KEY'], api_base=config['DeepSeek_BASE_URL'], temperature=0.0)
     
+    var.my_WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    
+    if not eval(config["SAVE_DIALOGUE"]):
+        var.my_SAVE_DIALOGUE = False
     
     supervisor_prompt = ChatPromptTemplate.from_template(
         f"""
 <Role>
-    You are a supervisor tasked with managing a conversation for scientific computing between the following workers: {members}. You don't have to use all the members, nor all the capabilities of the members.
+    You are a scientist supervisor tasked with managing a conversation for scientific computing between the following workers: {members}. You don't have to use all the members, nor all the capabilities of the members.
 <Objective>
     Given the following user request, decide which the member to act next, and do what
 <Instructions>:
@@ -220,16 +292,24 @@ def create_planning_graph(config: dict) -> StateGraph:
         Update your plan accordingly, and fill out the plan. Only add steps to the plan that still NEED to be done. Do not return previously done steps as part of the plan. 
         choose plan if there are still steps to be done, or response if everything is done.
     2.  Given the conversation above, suggest who should act next. next could only be selected from: {OPTIONS}.
+    3.  If your end result is different from your expectation, please reflect on what you have done by inspect and read through the canvas, scientificly, try to understand why the result is different, list out possible reasons, adjust your plan accordingly, and try to eliminate possible causes one by one.
+        Do not stop until the end result is within user specified margin of error, or you have tried everything you can think of. Only if user did not specify a margin of error, you can judge by yourself.
 <Requirements>:
     0.  Do not generate convergence test for all systems and all configurations.
     1.  Please only generate one batch of convergence test for the most complicated system using the most complicated configuration. 
     2.  when trying to explore the configuration design space, try a couple of configurations first, and then refine the search based on the results.
+    3.  Do not touch the canvas unless you are reflecting.
         """
     )
     
     
-    # System Supervisor
-    supervisor_chain = supervisor_prompt | llm.with_structured_output(Act)
+    # System Supervisor with tool bind and with_structured_output
+    
+    supervisor_tools = [
+        inspect_my_canvas,
+        read_my_canvas,
+        ]
+    supervisor_chain = supervisor_prompt | llm.bind_tools(supervisor_tools).with_structured_output(Act)
     supervisor_agent = functools.partial(supervisor_chain_node, chain=supervisor_chain, name="Supervisor")
     # def supervisor_agent(state):
     #     print("Supervisor!!!!!!!!!")

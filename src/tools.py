@@ -123,14 +123,16 @@ def init_structure_data(
 @tool
 def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"],
                                         crystal_structures: Annotated[str, "Crystal structure. Must be one of sc, fcc, bcc, tetragonal, bct, hcp, rhombohedral, orthorhombic, mcl, diamond, zincblende, rocksalt, cesiumchloride, fluorite or wurtzite."],
+                                        a_dict: Annotated[Dict[str, float], "Dictionary of lattice parameters for the crystal structure: Dict[species, lattice_parameter_a]. i.e. {'Pt': 4.0}"],
                                         facets: Annotated[str, "Facet of the surface. Must be one of 100, 110, 111, 210, 211, 310, 311, 320, 321, 410, 411, 420, 421, 510, 511, 520, 521, 530, 531, 540, 541, 610, 611, 620, 621, 630, 631, 640, 641, 650, 651, 660, 661"],
-                                        supercell_dim: Annotated[List[int], "typically [int, int, 4]. Supercell dimension, how many times do you want to repeat the primitive cell in each direction: [int, int, int]"],
-                                        n_fixed_layers: Annotated[int, "typically 2. Number of fixed layers in the slab"] = 2
+                                        supercell_dim: Annotated[List[int], "typically [int, int, 6]. Supercell dimension, how many times do you want to repeat the primitive cell in each direction: [int, int, int]"],
+                                        n_fixed_layers: Annotated[int, "typically 3. Number of fixed layers in the slab"] = 3
                                         ):
     """Generate a surface structure and get the available adsorption sites."""
     surface_dict = generate_surface_structures(
         species_list=[species],
         crystal_structures={species: crystal_structures},
+        a_dict={'Pt': 4.0},
         facets={species: [facets]},
         supercell_dim=supercell_dim,
         n_fixed_layers=n_fixed_layers,
@@ -152,29 +154,36 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
     
     CANVAS.write('Possible_CO_site_on_Pt_surface', mySites)
     
-    return f"the surface generated is saved at {surface_dict[species][f'{crystal_structures}{facets}']['traj_file_path']}, available adsorbate sites are: {mySites_str}"
+    absPath = surface_dict[species][f'{crystal_structures}{facets}']['traj_file_path']
+    # trim the absPath, remove the part before out, including out
+    relaPath = absPath.split('out/')[-1]
+    
+    return f"the surface generated is saved at {relaPath}, available adsorbate sites are: {mySites_str}"
 
 @tool
 def generate_myAdsorbate(symbols: Annotated[str, "Element symbols of the adsorbate (Do not use any delimiters)"],
                          positions: Annotated[List[List[float]], "Positions of the atoms in the adsorbate, e.g. [[x1, y1, z1], [x2, y2, z2], ...], following the same order as the symbols."],
-                         AdsorbateFileName: Annotated[str, "Name of the adsorbate file to be saved in traj format"]
+                         AdsorbateFileName: Annotated[str, "Name (not a path) of the adsorbate file to be saved in traj format"]
                          ):
     """Generate an adsorbate structure and save it."""
     assert AdsorbateFileName.endswith('.traj'), "AdsorbateFileName should end with .traj"
+    assert not '/' in AdsorbateFileName, "AdsorbateFileName should not contain '/'"
     
-    os.makedirs("adsorbates", exist_ok=True)
+    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    
+    os.makedirs(os.path.join(WORKING_DIRECTORY, "adsorbates"), exist_ok=True)
     tmpAtoms = Atoms(symbols=symbols, positions=positions)
     tmpAtoms.center(vacuum=10.0)
-    write(os.path.join("adsorbates", f"{AdsorbateFileName}"), tmpAtoms)
+    write(os.path.join(WORKING_DIRECTORY, "adsorbates", f"{AdsorbateFileName}"), tmpAtoms)
     
-    return f"Adsorbate saved at adsorbates/{AdsorbateFileName}"
+    return f"Adsorbate saved under working directory at adsorbates/{AdsorbateFileName}"
 
 @tool
 def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure"],
                     adsorbatePath: Annotated[str, "Path to the adsorbate structure"],
                     mySites: Annotated[List[List[float]], "List of adsorption sites you want to put adsorbates on, e.g. [[x1, y1], [x2, y2], ...]"],
                     rotations: Annotated[List[Tuple[float, str]], "List of rotations for the ith adsorbates, e.g. [[90.0, 'x'], [180.0, 'y'], ...]"],
-                    surfaceWithAdsorbateFileName: Annotated[str, "File name of the surface adsorbated with adsorbate to be saved in traj format"]
+                    surfaceWithAdsorbateFileName: Annotated[str, "Name (not a path) of the surface adsorbated with adsorbate to be saved in traj format"]
                     ):
     """
     Add adsorbate to the surface structure and save it.
@@ -193,8 +202,24 @@ def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure
 #     The forth argument must be in the form of [[str(angle), str(axis)], ...], where the first element is the rotation angle and the second element is the axis of rotation.
 #     """
     assert surfaceWithAdsorbateFileName.endswith('.traj'), "surfaceWithAdsorbateFileName should end with .traj"
-    # Load the surface structure
-    mySurface = read(mySurfacePath)
+    assert not '/' in surfaceWithAdsorbateFileName, "surfaceWithAdsorbateFileName should not contain '/'"
+    
+    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    
+    try:
+        if not mySurfacePath.startswith('out') and not mySurfacePath.startswith('./out') and not mySurfacePath.startswith('/nfs'):
+            mySurfacePath = os.path.join(WORKING_DIRECTORY, mySurfacePath)
+        mySurface = read(mySurfacePath)
+    except:
+        return f"Invalid input atoms directory: {mySurfacePath}. make sure to supply either absolute path, or relative path starting with './out'. Please check the path in canvas and try again."
+
+    
+    try:
+        if not adsorbatePath.startswith('out') and not adsorbatePath.startswith('./out') and not adsorbatePath.startswith('/nfs'):
+            adsorbatePath = os.path.join(WORKING_DIRECTORY, adsorbatePath)
+        myAdsorbate = read(adsorbatePath)
+    except:
+        return f"Invalid input atoms directory: {adsorbatePath}. make sure to supply either absolute path, or relative path starting with './out'. Please check the path in canvas and try again."
     
     # Load the adsorbate structure
     myAdsorbate = read(adsorbatePath)
@@ -213,10 +238,13 @@ def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure
     # get the parent path of mySurfacePath
     parentPath = os.path.dirname(mySurfacePath)
     
+    absPath = os.path.join(parentPath, surfaceWithAdsorbateFileName)
     # save the new structure
-    write(os.path.join(parentPath, surfaceWithAdsorbateFileName), mySurface)
+    write(absPath, mySurface)
     
-    return f"Surface with adsorbate saved at {parentPath}/{surfaceWithAdsorbateFileName}"
+    relaPath = absPath.split('out/')[-1]
+    
+    return f"Surface with adsorbate saved at {relaPath}"
 
 @tool
 def write_script(
@@ -272,10 +300,17 @@ def write_QE_script_w_ASE(
     for element, pseudo in zip(listofElements, ppfiles):
         pseudopotentials[element] = pseudo
     
-    # Create a dummy Atoms object
-    atoms = read(inputAtomsDir)
+    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
     
-    filenameWDir = os.path.join(os.environ.get("WORKING_DIR"), filename)
+    try:
+        if inputAtomsDir.startswith('out') or inputAtomsDir.startswith('./out') or inputAtomsDir.startswith('/nfs'):
+            atoms = read(inputAtomsDir)
+        else:
+            atoms = read(os.path.join(WORKING_DIRECTORY, inputAtomsDir))
+    except:
+        raise ValueError(f"Invalid input atoms directory: {inputAtomsDir}. make sure to supply either absolute path, or relative path starting with './out'. Please check the path in canvas and try again.")
+    
+    filenameWDir = os.path.join(WORKING_DIRECTORY, filename)
 
     # Write the input script
     write(filenameWDir,
@@ -380,13 +415,12 @@ def find_pseudopotential(element: str) -> str:
         return f"Could not find pseudopotential for {element}"
 
 @tool
-def generate_convergence_test(input_file_name:str,kspacing:list[float], ecutwfc:list[int]):
+def generate_convergence_test(input_file_name: Annotated[str, "Name of the template quantum espresso input file"],
+                              kspacing:Annotated[list[float], "List of kspacing to be tested"],
+                              ecutwfc:Annotated[list[int], "List of ecutwfc to be tested"]
+                              ):
     '''
-    Generate the convergence test input scripts for quantum espresso calculation and save the job list. 
-
-    Input:  input_file_name: str, the name of the input file
-            kspacing: list[float], the list of kspacing to be tested
-            ecutwfc: list[int], the list of ecutwfc to be tested
+    Generate the convergence test input scripts for quantum espresso calculation using another quantum espresso input file as a template and save the job list. 
     '''
     # kspacing = [0.6, 0.8, 1.0]
     # ecutwfc = [10, 20, 30]
@@ -473,14 +507,17 @@ def generate_convergence_test(input_file_name:str,kspacing:list[float], ecutwfc:
 
 
 @tool
-def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
+def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int, stepSize:float=0.025):
     '''
     Generate the equation of state test input scripts for quantum espresso calculation and save the job list.
     
     Input:  input_file_name: str, the name of the input file
             kspacing: float, the kspacing to be tested
             ecutwfc: int, the ecutwfc to be tested
+            stepSize: float, the step size for the scale factor, default is 0.025, which will scale the cell size from 0.95 to 1.05
     '''
+    assert stepSize > 0.01 and stepSize < 0.1, "stepSize should be between 0.01 and 0.1"
+    
     # CANVAS.write('job_list', [], overwrite=True)
     CANVAS.canvas['jobs_K_and_ecut'] = {}
     
@@ -502,7 +539,7 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
             2 * ((np.ceil(2 * np.pi / np.linalg.norm(ii) / kspacing).astype(int)) // 2 + 1) for ii in cell
         ]
     
-    for scale in np.linspace(0.95, 1.05, 5):
+    for scale in np.linspace(1-stepSize*2, 1+stepSize*2, 5):
         # Read the input script
         with open(input_file, 'r') as f:
             lines = f.readlines()
@@ -524,7 +561,7 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
                 lines[i+1] = f"{kpoints[0]} {kpoints[1]} {kpoints[2]} 0 0 0\n"
     
         ## New input file name
-        new_file_name = f"{prefix}_{scale}.in"
+        new_file_name = f"{prefix}_{scale}.pwi"
         job_list.append(new_file_name)
         new_file = os.path.join(WORKING_DIRECTORY, new_file_name)
         with open(new_file, 'w') as f:
@@ -537,7 +574,7 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int):
     job_list = list(set(old_job_list + job_list))
     CANVAS.write('ready_to_run_job_list',job_list, overwrite=True)
     
-    return f"Job list is saved scucessfully, continue to submit the jobs"
+    return f"Job list is saved scucessfully, continue to submit the jobs. Files of interest are {job_list}"
 
 ###################################### DFT POST-PROCESSING TOOLS ######################################
 
@@ -785,44 +822,16 @@ def find_job_list() -> str:
 
 @tool
 def read_script(
-    WORKING_DIRECTORY: Annotated[str, "The working directory."],
     input_file: Annotated[str, "The input file to be read."]
 ) -> Annotated[str, "read content"]:
     """read the quantum espresso input file from the specified file path"""
+    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
     ## Error when '/' in the content, manually delete
     path = os.path.join(WORKING_DIRECTORY, input_file)
     with open(path,"r") as file:
         content = file.read()
     return content
 
-# @tool
-# def add_resource_suggestion(
-#     qeInputFileName: str,
-#     partition: str,
-#     nnodes: int,
-#     ntasks: int,
-#     runtime: Annotated[str, "Time limit for the job, in minutes"],
-# ) -> Annotated[str, "source suggestion saved location"]:
-#     """
-#     After agent generate resource suggestions based on the QE input file, add it to the json file "resource_suggestions.json" in the WORKING_DIRECTORY.
-#     For example: {"input1.pwi": {"nnodes": 2, "ntasks": 4, "runtime": 60}, "input2.pwi": {"nnodes": 1, "ntasks": 2, "runtime": 30}}
-#     """
-#     if not isinstance(partition, str) or not isinstance(nnodes, int) or not isinstance(ntasks, int) or not isinstance(runtime, str):
-#         return "Invalid input, please check the input format"
-#     # craete the json file if it does not exist, otherwise load it
-#     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
-
-#     new_resource_dict = {qeInputFileName: {"partition": partition, "nnodes": 1, "ntasks": 4, "runtime": 30}}
-
-    
-#     # check if resource_suggestions.db exist in the working directory
-#     db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
-#     if not os.path.exists(db_file):
-#         initialize_database(db_file)
-    
-#     add_to_database(new_resource_dict, db_file)
-    
-#     return f"Resource suggestion for {qeInputFileName} saved scucessfully"
 
 @tool
 def add_resource_suggestion(
@@ -862,7 +871,7 @@ echo "Job Ended at `date`"\n \
     # craete the json file if it does not exist, otherwise load it
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
 
-    new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 96, "runtime": 1440, "submissionScript": submissionScript, "outputFilename": outputFilename}}
+    new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 32, "runtime": 1440, "submissionScript": submissionScript, "outputFilename": outputFilename}}
     
     # check if resource_suggestions.db exist in the working directory
     db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
