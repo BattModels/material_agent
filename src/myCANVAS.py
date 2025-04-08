@@ -60,6 +60,8 @@ class myCANVAS():
         # if key not in self.canvas:
         
         if key in self.SpecialKeys:
+            if key == "finished_job_list":
+                return f"Key '{key}' is read-only and cannot be overwritten."
             assert isinstance(value, list), f"Value for key '{key}' must be a list."
             assert all(isinstance(i, str) for i in value), f"All elements in the list for key '{key}' must be strings of job names."
             

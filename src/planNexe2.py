@@ -292,7 +292,8 @@ def create_planning_graph(config: dict) -> StateGraph:
         Update your plan accordingly, and fill out the plan. Only add steps to the plan that still NEED to be done. Do not return previously done steps as part of the plan. 
         choose plan if there are still steps to be done, or response if everything is done.
     2.  Given the conversation above, suggest who should act next. next could only be selected from: {OPTIONS}.
-    3.  If your end result is different from your expectation, please reflect on what you have done by inspect and read through the canvas, scientificly, try to understand why the result is different, list out possible reasons, adjust your plan accordingly, and try to eliminate possible causes one by one.
+    3.  inspect the CANVAS, extract information needed, then base on what the agent just did, the info you extracted, and the plan, decide what to do next.
+    4.  If your end result is different from your expectation, please reflect on what you have done by inspect and read through the canvas, scientificly, try to understand why the result is different, list out possible reasons, adjust your plan accordingly, and try to eliminate possible causes one by one.
         Do not stop until the end result is within user specified margin of error, or you have tried everything you can think of. Only if user did not specify a margin of error, you can judge by yourself.
 <Requirements>:
     0.  Do not generate convergence test for all systems and all configurations.
@@ -330,6 +331,8 @@ def create_planning_graph(config: dict) -> StateGraph:
         inspect_my_canvas,
         write_my_canvas,
         read_my_canvas,
+        get_files_in_dir,
+        read_file,
         calculate_formation_E,
         generateSurface_and_getPossibleSite,
         generate_myAdsorbate,
@@ -342,7 +345,6 @@ def create_planning_graph(config: dict) -> StateGraph:
         get_kspacing_ecutwfc,
         generate_eos_test,
         read_energy_from_output,
-        
         ]
     dft_agent = create_react_agent(workerllm, tools=dft_tools,
                                    state_modifier=dft_agent_prompt)   

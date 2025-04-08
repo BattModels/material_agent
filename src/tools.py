@@ -21,6 +21,7 @@ from ase.optimize import BFGS, FIRE
 from ase.io.trajectory import Trajectory
 from ase.io.lammpsdata import write_lammps_data
 from ase.build import bulk, surface, add_adsorbate
+import ase.build
 from ase import Atoms
 import subprocess
 import time
@@ -60,21 +61,43 @@ def write_my_canvas(key: Annotated[str, "key"],
 ##                                          DFT tools                                           ##
 ##################################################################################################
 
-@tool
-def get_kpoints(atom_dict: AtomsDict, kspacing: float) -> list:
+def get_kpoints(atoms, kspacing: float) -> list:
     """Returns the kpoints of a given ase atoms object and specific kspacing."""
-    atoms = Atoms(**atom_dict.dict())
     cell = atoms.cell
-    ## Check input kspacing is valid
-    if kspacing <= 0:
-        return "Invalid kspacing, should be greater than 0"
-    if kspacing > 0.5:
-        return "Too Coarse kspacing, should be less than 0.5"
+    # ## Check input kspacing is valid
+    # if kspacing <= 0:
+    #     return "Invalid kspacing, should be greater than 0"
+    # if kspacing > 0.5:
+    #     return "Too Coarse kspacing, should be less than 0.5"
     ## Calculate the kpoints
     kpoints = [
             2 * ((np.ceil(2 * np.pi / np.linalg.norm(ii) / kspacing).astype(int)) // 2 + 1) for ii in cell
         ]
+    
+    ## Check if kpoints is even
+    for i in range(len(kpoints)):
+        if kpoints[i] % 2 == 0:
+            if kpoints[i] > 1:
+                kpoints[i] -= 1
+            else:
+                kpoints[i] += 1
+    
     return kpoints
+
+@tool
+def get_files_in_dir(dir_path: Annotated[str, "Directory path"],
+                     file_extension: Annotated[str, "File extension to filter by. If you want all files and folders, use ''"] = ''
+                     ) -> list:
+    """Returns a list of files in a given directory with a specific file extension."""
+    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    files = ""
+    # list all files in the directory
+    for file in os.listdir(os.path.join(WORKING_DIRECTORY, dir_path)):
+        # check if the file has the specified extension
+        if file.endswith(file_extension):
+            files += file + "\n"
+    
+    return files
 
 @tool
 def dummy_structure(concentration: float,
@@ -129,10 +152,11 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
                                         n_fixed_layers: Annotated[int, "typically 3. Number of fixed layers in the slab"] = 3
                                         ):
     """Generate a surface structure and get the available adsorption sites."""
+    a_dict = {'Pt': 4.0}
     surface_dict = generate_surface_structures(
         species_list=[species],
         crystal_structures={species: crystal_structures},
-        a_dict={'Pt': 4.0},
+        a_dict=a_dict,
         facets={species: [facets]},
         supercell_dim=supercell_dim,
         n_fixed_layers=n_fixed_layers,
@@ -145,6 +169,11 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
     # mySites = get_adsorption_sites(mySurface, symm_reduce=0)
     # mySites = get_adsorption_sites(mySurface)
     mySites = mySurface.info['adsorbate_info']['sites']
+    
+    func = eval(f"ase.build.{crystal_structures}{facets}")
+    tmpAtom = func(species, size=(1,1,1), a = a_dict[species])
+    for site in mySites.keys():
+        mySites[site] = np.sum(tmpAtom.cell*[mySites[site][0], mySites[site][1], 0], axis=0)[:2]
     
     output_capture = io.StringIO()
     with contextlib.redirect_stdout(output_capture):
@@ -187,8 +216,8 @@ def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure
                     ):
     """
     Add adsorbate to the surface structure and save it.
-    The third argument must be in the form of [[x1, y1], [x2, y2], ...], where x and y are the coordinates of the adsorption sites.
-    The forth argument must be in the form of [[float(angle), str(axis)], ...], where the first element is the rotation angle and the second element is the axis of rotation.
+    The third argument must be a list in the form of [[x1, y1], [x2, y2], ...], where x and y are the coordinates of the adsorption sites.
+    The forth argument must be a list of tuple in the form of [[float(angle), str(axis)], ...], where the first element is the rotation angle and the second element is the axis of rotation.
     """
 # @tool
 # def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure"],
@@ -273,13 +302,11 @@ def write_script(
 def write_QE_script_w_ASE(
     listofElements: Annotated[List[str], "List of distinct element symbols in the unit cell"],
     ppfiles: Annotated[List[str], "List of pseudopotential files in the order of the elements"],
-    pseudo_dir: Annotated[str, "Path to the directory containing the pseudopotentials"],
     filename: Annotated[str, "Name of the Quantum Espresso input file, end with .pwi"],
     inputAtomsDir: Annotated[str, "Directory of the input Atoms object"],
     calculation: Annotated[str, "Type of calculation to perform, e.g. 'scf' or 'relax'"],
     restart_mode: Annotated[Literal['from_scratch', 'restart'], "Restart mode"],
     prefix: Annotated[str, "Prefix for the output files"],
-    outdir: Annotated[str, "Path to the directory where the output files are written"],
     disk_io: Annotated[Literal['none', 'minimal', 'nowf', 'low', 'medium', 'high'], "Disk I/O level"],
     ibrav: Annotated[int, "Bravais-lattice index. Optional only if space_group is set."],
     nat: Annotated[int, "Number of atoms in the unit cell"],
@@ -290,11 +317,17 @@ def write_QE_script_w_ASE(
     smearing: Annotated[Literal['gaussian', 'methfessel-paxton', 'marzari-vanderbilt', 'fermi-dirac'], "Smearing type"],
     degauss: Annotated[float, "value of the gaussian spreading (Ry) for brillouin-zone integration in metals."],
     conv_thr: Annotated[float, "Convergence threshold for self-consistent loop"],
-    kpts: Annotated[List[int], "Number of k-points along each reciprocal lattice vector. it would be a list of int: [int, int, int]"],
-    ready_to_run_job: Annotated[bool, "True if the job is intended to be run directly without further modification, False if this file is intended to be used to generate other files"] = False
+    electron_maxstep: Annotated[int, "Maximum number of SCF iterations"],
+    kspacing: Annotated[float, "K-point spacing (in Angstrom^-1)"],
+    ready_to_run_job: Annotated[bool, "True if the job is intended to be run directly without further modification, False if this file is intended to be used to generate other files"] = False,
+    additional_input: Annotated[Dict[str, Any], "Additional input parameters to be added to the input script. Do not use unless you know what you are doing."] = {},
 ):
     """Write a Quantum Espresso input script using ASE."""
 
+    assert isinstance(additional_input, dict), "additional_input must be a dictionary"
+    
+    disk_io = 'none'
+    
     # assemble the pseudopotentials dict from the list of elements and pseudopotentials
     pseudopotentials = {}
     for element, pseudo in zip(listofElements, ppfiles):
@@ -311,36 +344,45 @@ def write_QE_script_w_ASE(
         raise ValueError(f"Invalid input atoms directory: {inputAtomsDir}. make sure to supply either absolute path, or relative path starting with './out'. Please check the path in canvas and try again.")
     
     filenameWDir = os.path.join(WORKING_DIRECTORY, filename)
+    
+    
+    kpoints = [
+            2 * ((np.ceil(2 * np.pi / np.linalg.norm(ii) / kspacing).astype(int)) // 2 + 1) for ii in atoms.cell
+        ]
+        
+    ## Check if kpoints is even
+    for i in range(len(kpoints)):
+        if kpoints[i] % 2 == 0:
+            if kpoints[i] > 1:
+                kpoints[i] -= 1
+            else:
+                kpoints[i] += 1
 
     # Write the input script
     write(filenameWDir,
           atoms,
           input_data={
-              'control': {
-                  'calculation': calculation,
-                  'restart_mode': restart_mode,
-                  'prefix': prefix,
-                  'pseudo_dir': "/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/all_lda_pbe_UPF",
-                  'outdir': './out',
-                  'disk_io': disk_io,
-              },
-              'system': {
-                  'ibrav': ibrav,
-                  'nat': nat,
-                  'ntyp': ntyp,
-                  'ecutwfc': ecutwfc,
-                  'ecutrho': ecutrho,
-                  'occupations': occupations,
-                  'smearing': smearing,
-                  'degauss': degauss,
-              },
-              'electrons': {
-                  'conv_thr': conv_thr,
-              }
+                'calculation': calculation,
+                'restart_mode': restart_mode,
+                'prefix': prefix,
+                'pseudo_dir': "/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/all_lda_pbe_UPF",
+                'outdir': './out',
+                'disk_io': disk_io,
+                'ibrav': ibrav,
+                'nat': nat,
+                'ntyp': ntyp,
+                'ecutwfc': ecutwfc,
+                'ecutrho': ecutrho,
+                'occupations': occupations,
+                'smearing': smearing,
+                'degauss': degauss,
+                'conv_thr': conv_thr,
+                'electron_maxstep': electron_maxstep,
+                **additional_input
           },
           format='espresso-in',
           pseudopotentials=pseudopotentials,
-          kpts=tuple(kpts)
+          kpts=tuple(kpoints)
           )
     
     
@@ -393,7 +435,6 @@ def find_classical_potential(element: str) -> str:
     """Return classical potential file path for given element symbol."""
     return f'The classcial potential file for {element} is located at /nfs/turbo/coe-venkvis/ziqiw-turbo/mint-PD/PD/EAM/Li_v2.eam.fs'
 
-
 @tool
 def find_pseudopotential(element: str) -> str:
     """Return the pseudopotential file path for given element symbol."""
@@ -444,6 +485,15 @@ def generate_convergence_test(input_file_name: Annotated[str, "Name of the templ
         kpoints = [
             2 * ((np.ceil(2 * np.pi / np.linalg.norm(ii) / k).astype(int)) // 2 + 1) for ii in cell
         ]
+        
+        ## Check if kpoints is even
+        for i in range(len(kpoints)):
+            if kpoints[i] % 2 == 0:
+                if kpoints[i] > 1:
+                    kpoints[i] -= 1
+                else:
+                    kpoints[i] += 1
+                
         with open(input_file, 'r') as f:
             lines = f.readlines()
             for i, line in enumerate(lines):
@@ -474,6 +524,15 @@ def generate_convergence_test(input_file_name: Annotated[str, "Name of the templ
         kpoints = [
             2 * ((np.ceil(2 * np.pi / np.linalg.norm(ii) / kspacing_min).astype(int)) // 2 + 1) for ii in cell
         ]
+        
+        ## Check if kpoints is even
+        for i in range(len(kpoints)):
+            if kpoints[i] % 2 == 0:
+                if kpoints[i] > 1:
+                    kpoints[i] -= 1
+                else:
+                    kpoints[i] += 1
+                
         with open(input_file, 'r') as f:
             lines = f.readlines()
             for i, line in enumerate(lines):
@@ -504,7 +563,6 @@ def generate_convergence_test(input_file_name: Annotated[str, "Name of the templ
     CANVAS.write('ready_to_run_job_list',job_list, overwrite=True)
     CANVAS.write('jobs_K_and_ecut',job_list_dict)
     return f"Job list is saved scucessfully, continue to submit the jobs"
-
 
 @tool
 def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int, stepSize:float=0.025):
@@ -539,6 +597,14 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int, stepSize:
             2 * ((np.ceil(2 * np.pi / np.linalg.norm(ii) / kspacing).astype(int)) // 2 + 1) for ii in cell
         ]
     
+    ## Check if kpoints is even
+    for i in range(len(kpoints)):
+        if kpoints[i] % 2 == 0:
+            if kpoints[i] > 1:
+                kpoints[i] -= 1
+            else:
+                kpoints[i] += 1
+            
     for scale in np.linspace(1-stepSize*2, 1+stepSize*2, 5):
         # Read the input script
         with open(input_file, 'r') as f:
@@ -625,7 +691,10 @@ def calculate_lc(jobFileIdx: Annotated[List[int], "indexs of files in the finish
     energy_list = []
     for job in job_list:
         print(f'reading {job}')
-        atom = read(os.path.join(WORKING_DIRECTORY, job+'.pwo'))
+        try:
+            atom = read(os.path.join(WORKING_DIRECTORY, job+'.pwo'))
+        except:
+            return f"Job {job} is not finished or failed."
         volume_list.append(atom.get_volume())
         energy_list.append(atom.get_potential_energy())
         print(f'{job} volume is {atom.get_volume()}, energy is {atom.get_potential_energy()}')
@@ -756,21 +825,34 @@ def get_kspacing_ecutwfc(jobFileIdx: Annotated[List[int], "indexs of files in th
     kspacing = []
     ecutwfc = []
     energy_list = []
+    goodJob = []
     Natom = None
     for job in job_list:
         ## Read the output file
         print(f'reading {job}')
-        kspacing.append(job_dict[job]['k'])
-        ecutwfc.append(job_dict[job]['ecutwfc'])
-        
-        atom = read(os.path.join(WORKING_DIRECTORY, job+'.pwo'))
+        try:
+            atom = read(os.path.join(WORKING_DIRECTORY, job+'.pwo'))
+        except:
+            print(f"Job {job} is not finished or failed.")
+            continue
         energy = atom.get_potential_energy()
         energy_list.append(energy)
         Natom = atom.get_number_of_atoms()
+        
+        kspacing.append(job_dict[job]['k'])
+        ecutwfc.append(job_dict[job]['ecutwfc'])
+        goodJob.append(job)
     
     print(f"successfully read {len(kspacing)} kspacing and {len(ecutwfc)} ecutwfc")
+    
+    if len(set(kspacing)) == 1 and len(set(ecutwfc)) > 1:
+        return f"Only one kspacing is found, the rest of the jobs seems unfinished or not converged. Please check jobs with other kspacing"
+    if len(set(ecutwfc)) == 1 and len(set(kspacing)) > 1:
+        return f"Only one ecutwfc is found, the rest of the jobs seems unfinished or not converged. Please check jobs with other ecutwfc"
+    if len(set(kspacing)) == 1 and len(set(ecutwfc)) == 1:
+        return f"Only one job is good, the rest of the jobs seems unfinished or not converged."
         
-    convergence_df = pd.DataFrame({'job':job_list,'kspacing':kspacing, 'ecutwfc':ecutwfc, 'energy':energy_list})
+    convergence_df = pd.DataFrame({'job':goodJob,'kspacing':kspacing, 'ecutwfc':ecutwfc, 'energy':energy_list})
     ## Save the convergence test result if file exist then append to it
     if os.path.exists(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv')):
         convergence_df.to_csv(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv'), mode='a', header=False)
@@ -819,19 +901,17 @@ def find_job_list() -> str:
     
     return f'The files need to be submitted are {job_list}. Please continue to submit the job.'
 
-
 @tool
-def read_script(
-    input_file: Annotated[str, "The input file to be read."]
+def read_file(
+    input_file: Annotated[str, "The file to be read."]
 ) -> Annotated[str, "read content"]:
-    """read the quantum espresso input file from the specified file path"""
+    """read file content from the specified file path"""
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
     ## Error when '/' in the content, manually delete
     path = os.path.join(WORKING_DIRECTORY, input_file)
     with open(path,"r") as file:
         content = file.read()
     return content
-
 
 @tool
 def add_resource_suggestion(
@@ -871,7 +951,7 @@ echo "Job Ended at `date`"\n \
     # craete the json file if it does not exist, otherwise load it
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
 
-    new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 32, "runtime": 1440, "submissionScript": submissionScript, "outputFilename": outputFilename}}
+    new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 48, "runtime": 2800, "submissionScript": submissionScript, "outputFilename": outputFilename}}
     
     # check if resource_suggestions.db exist in the working directory
     db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
@@ -905,7 +985,8 @@ def submit_and_monitor_job(
     
     qa = QueueAdapter(directory=WORKING_DIRECTORY)
         
-    job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
+    # job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
+    job_list = []
     
     # load reousrce suggestions
     # resource_suggestions = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.json')
@@ -923,6 +1004,7 @@ def submit_and_monitor_job(
     resource_dict = {}
     for row in rows:
         filename, partition, nnodes, ntasks, runtime, submissionScript, outputFilename = row
+        job_list.append(filename)
         resource_dict[filename] = {
             'partition': partition,
             'nnodes': nnodes,
@@ -935,6 +1017,8 @@ def submit_and_monitor_job(
     conn.close()
     print(f"loaded resource suggestions: {json.dumps(resource_dict, indent=4)}")
     
+    CANVAS.canvas['ready_to_run_job_list'] = job_list.copy()
+    
     ## Check resource key is valid
     for job in job_list:
         if job not in resource_dict.keys():
@@ -943,6 +1027,7 @@ def submit_and_monitor_job(
     print(f"loaded {len(job_list)} jobs from job_list.json, and {len(resource_dict)} resource suggestions from resource_suggestions.json")
     
     queueIDList = []
+    notConvergedList = []
     while True:
         for inputFile in job_list:    
             
@@ -1028,14 +1113,30 @@ def submit_and_monitor_job(
                         print(f"Job list: {job_list}")
                         print()
                     except:
-                        # if outputFile exsit remove outputFile
-                        try:
-                            # temporay disable remove to avoid the calculation
-                            # os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
-                            print(f"{outputFile} removed")
-                        except:
-                            print("output file does not exist")
-                        print(f"Job {inputFile} failed, will resubmit the job")
+                        # see if the job did not converge
+                        # read the output file as text
+                        with open(os.path.join(WORKING_DIRECTORY, outputFile), 'r') as f:
+                            lines = f.readlines()
+                        # check if the output file contains "convergence NOT achieved"
+                        notConverge = False
+                        for line in lines:
+                            if "convergence NOT achieved" in line:
+                                notConverge = True
+                                notConvergedList.append(inputFile)
+                                break
+                            
+                        if notConverge:
+                            # remove inputFile from job_list
+                            job_list.remove(inputFile)
+                        else:
+                            # if outputFile exsit remove outputFile
+                            try:
+                                # temporay disable remove to avoid the calculation
+                                # os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
+                                print(f"{outputFile} removed")
+                            except:
+                                print("output file does not exist")
+                            print(f"Job {inputFile} failed, will resubmit the job")
             
             
             # for idx, inputFile in enumerate(job_list):
@@ -1059,6 +1160,8 @@ def submit_and_monitor_job(
                 # read all energies into a dict
                 energies = {}
                 for inputFile in job_list:
+                    if inputFile in notConvergedList:
+                        continue
                     outputFile = resource_dict[inputFile]['outputFilename']
                     atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
                     energies[inputFile] = atoms.get_potential_energy()
@@ -1106,7 +1209,14 @@ def submit_and_monitor_job(
     time.sleep(1)
     initialize_database(db_file)
     time.sleep(1)
-    return f"All job in job_list has finished, please check the output file in the {WORKING_DIRECTORY}"
+    
+    notConvergedListString = ""
+    if len(notConvergedList) > 0:
+        notConvergedListString = "However, the following jobs did not converge: "
+        for job in notConvergedList:
+            notConvergedListString += job + ", "
+    
+    return f"All job in job_list has finished. {notConvergedListString}please check the output file in the {WORKING_DIRECTORY}"
 
 @tool
 def submit_single_job(
@@ -1228,7 +1338,21 @@ def read_energy_from_output(jobFileIdx: Annotated[List[int], "indexs of files in
         try:
             atoms = read(file_path)
         except:
-            return f"Invalid output file {output_file} or calculation failed, please submit the {job} again."
+            try:
+                # read in as text
+                with open(file_path, 'r') as f:
+                    lines = f.readlines()
+                # check if the output file contains "convergence NOT achieved"
+                notConverge = False
+                for line in lines:
+                    if "convergence NOT achieved" in line:
+                        notConverge = True
+                        result += f"Job {job} did not converge\n"
+                        break
+                if not notConverge:
+                    return f"Invalid output file {output_file} or calculation failed, please submit the {job} again."
+            except:
+                return f"Invalid output file {output_file} or calculation failed, please submit the {job} again."
         result += f"Energy read from {job} is {atoms.get_potential_energy()}.\n"
         # print(result)
         time.sleep(1)
