@@ -24,7 +24,7 @@ from src.agent import create_agent
 from src.tools import find_pseudopotential, submit_single_job,write_script,calculate_lc,generate_convergence_test,generate_eos_test,\
 submit_and_monitor_job,find_job_list,read_energy_from_output,add_resource_suggestion
 from src.prompt import dft_agent_prompt,hpc_agent_prompt
-from src.graph import create_graph
+from DFTgraph import create_graph
 
 
 class PlanExecute(TypedDict):

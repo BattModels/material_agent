@@ -1,3 +1,4 @@
+import uuid
 import operator
 from typing import Annotated, Sequence, TypedDict,Literal, List, Dict, Tuple, Union
 import functools
@@ -217,9 +218,9 @@ Now, you are tasked with: {task}.
         with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
             f.write(f"Agent {name} is processing!!!!!\n")
     
-    
+    thisInvokeID = str(uuid.uuid4())
     for agent_response in agent.stream(
-        {"messages": [("user", task_formatted)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
+        {"messages": [("user", task_formatted)]},  {"configurable": {"thread_id": thisInvokeID}, "recursion_limit": 1000}
     ):
         # set agent_response to be the value of the first key of the dictionary
         agent_response = next(iter(agent_response.values()))
@@ -237,6 +238,24 @@ Now, you are tasked with: {task}.
     return {
         "past_steps": past_steps_list,
     }
+    
+def reader_agent_node(state, agent, name):
+    # read "status.txt" in the working directory
+    with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
+        status = f.read()
+    while status == "stop":
+        print(f"Calculation pause, {name} Agent is waiting")
+        # wait for 5 second
+        time.sleep(5)
+        with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
+            status = f.read()
+    
+    print(f"Agent {name} is processing!!!!!")
+    if var.my_SAVE_DIALOGUE:
+        with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+            f.write(f"Agent {name} is processing!!!!!\n")
+            
+    
     
 def recusive_agent_node(state, agent, name, past_steps_list):
     print(f"Agent {name} is processing!!!!!")
@@ -349,8 +368,9 @@ def create_planning_graph(config: dict) -> StateGraph:
     dft_agent = create_react_agent(workerllm, tools=dft_tools,
                                    state_modifier=dft_agent_prompt)   
     dft_node = functools.partial(worker_agent_node, agent=dft_agent, name="DFT_Agent", past_steps_list=PAST_STEPS)
-
-
+    
+    dft_reader_tools = [read_file]
+    
     ### HPC Agent
     # hpc_tools = [read_script, submit_and_monitor_job, read_energy_from_output]
     hpc_tools = [
