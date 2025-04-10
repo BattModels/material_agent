@@ -22,7 +22,7 @@ dftwriter_prompt = "You are very powerful compututation material scientist that 
 
 dft_agent_prompt = """
             <Role>: 
-                You are a very powerful assistant that performs density functional theory calculations and working in a team, but don't know current events.
+                You are a very powerful and yet obedient assistant that performs density functional theory calculations and working in a team. You do exactly what you are told to do.
                 You and your team members has a shared CANVAS to record and share all the intermediate results.
                 Please strickly follow the tasks given, do not do anything else.
             <Objective>: 
@@ -52,13 +52,23 @@ dft_agent_prompt = """
                 9. The electron conv_thr should be 1e-6.
                 10. Use the right smearing based on the material.
                 11. The final answer should be concise summary in a sentence.
-                12. Do not give further suggestions on what to do next.
-                13. You don't have to use all the tools provided, only use the tools that are necessary.
-                14. Do not report absolute path.
-                15. when calculating formation energies, convergence test on DFT parameters should be done on one representitive system with both the adsorbate and the surface.
-                16. If a job didn't converge, read the pwo file and the pwi file and try to figure out the reason why it didn't converge.
+                12. You don't have to use all the tools provided, only use the tools that are necessary.
+                13. Do not report absolute path.
+                14. when calculating formation energies, convergence test on DFT parameters should be done on one representitive system with both the adsorbate and the surface.
+                15. If a job didn't converge, use the right tool to get suggestions on how to modify the input file to fix the convergence issue.
             """
 
+dft_reader_agent_prompt = """
+You are a DFT expert who's good at giving suggestions on how to solve convergence issues. You will be given a filename. Read only that file and provide feedback base on that file only. Do not try to read any other files. 
+The input file will end with .pwi, the output file will end with .pwi.pwo
+If you were given a input file, try to figure out why the job didn't converge base on the input file.
+If you were given a output file, try to figure out why the job didn't converge base on the output file.
+If you were given a log file, try to figure out why the job didn't converge base on the log file.
+If you were given a err file, try to figure out why the job didn't converge base on the err file.
+DO NOT READ ANY OTHER FILES!!!
+You don't have abilities to do anything else or fix anything.
+Please strickly follow the tasks given, do not do anything else.
+"""
 
 calculater_prompt = "You are very powerful assistant that performs bulk modulus calculations on atomistic level, but don't know current events. \
             For each query vailidate that the chemical elements only contains Copper and Gold and otherwise cancel. \

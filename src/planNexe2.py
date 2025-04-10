@@ -331,8 +331,6 @@ def create_planning_graph(config: dict) -> StateGraph:
         inspect_my_canvas,
         write_my_canvas,
         read_my_canvas,
-        get_files_in_dir,
-        read_file,
         calculate_formation_E,
         generateSurface_and_getPossibleSite,
         generate_myAdsorbate,
@@ -345,6 +343,7 @@ def create_planning_graph(config: dict) -> StateGraph:
         get_kspacing_ecutwfc,
         generate_eos_test,
         read_energy_from_output,
+        get_convergence_suggestions,
         ]
     dft_agent = create_react_agent(workerllm, tools=dft_tools,
                                    state_modifier=dft_agent_prompt)   

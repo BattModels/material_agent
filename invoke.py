@@ -111,10 +111,10 @@ if __name__ == "__main__":
     os.environ["OMP_NUM_THREADS"] = "1"
     
     # check if working directory exists, if so delete it
-    # if os.path.exists(WORKING_DIRECTORY):
-    #     os.system(f"rm -rf {WORKING_DIRECTORY}")
+    if os.path.exists(WORKING_DIRECTORY):
+        os.system(f"rm -rf {WORKING_DIRECTORY}")
     
-    # os.makedirs(WORKING_DIRECTORY, exist_ok=False)
+    os.makedirs(WORKING_DIRECTORY, exist_ok=False)
     
     # check if resource_suggestions.db exist in the working directory
     db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
@@ -182,7 +182,7 @@ if __name__ == "__main__":
         
         for s in graph.stream(
             {
-                "input": f"{userMessage_11}",
+                "input": f"{userMessage_10}",
                 "plan": [],
                 "past_steps": []
             }, llm_config):

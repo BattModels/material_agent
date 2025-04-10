@@ -5,6 +5,9 @@ from src.utils import *
 from src.myCANVAS import CANVAS
 from ase import Atoms, Atom
 from langchain.agents import tool
+from langgraph.prebuilt import create_react_agent
+from langchain_anthropic import ChatAnthropic
+from langchain_openai import AzureChatOpenAI
 import os 
 from typing import Annotated, Dict, Literal, Optional, Sequence, Tuple, Any
 import numpy as np
@@ -33,6 +36,7 @@ from filecmp import cmp
 import contextlib
 from autocat.surface import generate_surface_structures
 from autocat.adsorption import get_adsorption_sites, get_adsorbate_height_estimate
+from src.utils import load_config
 
 ##################################################################################################
 ##                                        Common tools                                          ##
@@ -322,15 +326,19 @@ def write_QE_script_w_ASE(
     ready_to_run_job: Annotated[bool, "True if the job is intended to be run directly without further modification, False if this file is intended to be used to generate other files"] = False,
     additional_input: Annotated[Dict[str, Any], "Additional input parameters to be added to the input script. Do not use unless you know what you are doing."] = {},
 ):
-    """Write a Quantum Espresso input script using ASE."""
+    """Write a Quantum Espresso input script using ASE. Bool value have no quote around them."""
 
     assert isinstance(additional_input, dict), "additional_input must be a dictionary"
     
     disk_io = 'none'
     
+    
+    
     # assemble the pseudopotentials dict from the list of elements and pseudopotentials
     pseudopotentials = {}
     for element, pseudo in zip(listofElements, ppfiles):
+        if not os.path.exists(os.path.join("/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/all_lda_pbe_UPF", pseudo)):
+            return f"Invalid pseudopotential file: {pseudo}. Make sure to supply the correct pseudopotential file name."
         pseudopotentials[element] = pseudo
     
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
@@ -512,7 +520,8 @@ def generate_convergence_test(input_file_name: Annotated[str, "Name of the templ
                     lines[i+1] = ' '.join(map(str,kpoints)) +' 0 0 0' +'\n'
 
             ## Write the new input script
-            new_file_name = f'{os.path.splitext(input_file_name)[0]}_k_{k}_ecutwfc_{ecutwfc_max}.pwi'
+            tmpName = os.path.splitext(input_file_name)[0].split('_k_')[0]
+            new_file_name = f'{tmpName}_k_{k}_ecutwfc_{ecutwfc_max}.pwi'
             print(new_file_name)
             job_list_dict[new_file_name] = {'k':k, 'ecutwfc':ecutwfc_max}
             new_input_file = os.path.join(WORKING_DIRECTORY, new_file_name)
@@ -643,6 +652,65 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int, stepSize:
     return f"Job list is saved scucessfully, continue to submit the jobs. Files of interest are {job_list}"
 
 ###################################### DFT POST-PROCESSING TOOLS ######################################
+
+@tool
+def get_convergence_suggestions(
+    filename: Annotated[str, "Name of the Quantum Espresso input file that did not converge, end with .pwi"],
+):
+    "Get suggestions on how to resolve convergence issues for a certain job."
+    outFile = filename + ".pwo"
+    errFile = filename + ".err"
+    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    # WORKING_DIRECTORY = "/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/out"
+    
+    config = load_config(os.path.join('./config', "default.yaml"))
+    # llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    workerllm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    # llm = ChatAnthropic(model="claude-3-5-sonnet-20241022", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    # workerllm = ChatAnthropic(model="claude-3-5-sonnet-20241022", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    # llm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
+    # workerllm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
+    # llm = ChatDeepSeek(model_name=config["DeepSeek_MDL"], api_key=config['DeepSeek_API_KEY'], api_base=config['DeepSeek_BASE_URL'], temperature=0.0)
+    
+    finalSuggestion = ""
+    for myfile in [
+                   filename, 
+                   outFile, 
+                #    errFile
+                   ]:
+        if os.path.exists(os.path.join(WORKING_DIRECTORY, myfile)):
+            finalSuggestion += f"Suggestion based on {myfile}:\n"
+            print(f"Suggestion based on {myfile}:\n")
+            
+            with open(os.path.join(WORKING_DIRECTORY, myfile),"r") as file:
+                content = file.read()
+            
+            task_formatted = f"{content}\nThe DFT calculation related to the file above did not converge. Please think about why the job didn't converge, and give me suggestions on how to fix it."
+            
+            # for agent_response in dft_reader_agent.stream({"messages": [("user", task_formatted)]}, {"configurable": {"thread_id": thread_id}, "recursion_limit": 1000}):
+            #     agent_response = next(iter(agent_response.values()))
+            #     print_stream(agent_response)
+            
+            system_msg = """
+You are a DFT expert who's good at giving concise suggestions on how to resolve convergence issues. Do not modify nosym and pesudopotentials.
+Please use the format: parameterX: suggestionX, reasonX; parameterY: suggestionY, reasonY; ...
+"""
+            
+            invokingMsg = [
+                ("system", system_msg),
+                ("user", task_formatted)
+            ]
+            agent_response = workerllm.invoke(invokingMsg)
+            
+            finalSuggestion += agent_response.content + "\n\n"
+            print(agent_response.content + "\n\n")
+            
+    if finalSuggestion == "":
+        return f"Job {filename} has no related files, please check the job list and make sure the job is finished."
+        
+    finalSuggestion += "Please check the suggestions above and come up with a plan to fix the convergence issue."
+    return finalSuggestion
+        
 
 @tool
 def calculate_formation_E(slabFilePath: Annotated[str, "the slab calculation output file path"],
@@ -920,7 +988,7 @@ def add_resource_suggestion(
     nnodes: int,
     ntasks: int,
     runtime: Annotated[str, "Time limit for the job, in minutes"],
-    submissionScript: Annotated[str, "submission script based on the types of jobs. output filename must be <full input filename with extension>.<output_file_type>"],
+    submissionScript: Annotated[str, "submission script based on the types of jobs. Do not include any #SBATCH stuff. output filename must be <full input filename with extension>.<output_file_type>"],
     outputFilename: Annotated[str, "the output filename of the job"],
 ) -> Annotated[str, "source suggestion saved location"]:
     """
@@ -1094,109 +1162,110 @@ def submit_and_monitor_job(
         print(f"All job in job_list has finished")
         print("waiting for files...")
         time.sleep(10)
+        break
         
-        if jobType == "DFT":
-            print("Checking jobs")
+        # if jobType == "DFT":
+        #     print("Checking jobs")
             
-            checked = set()
-            unchecked = set(job_list)
-            while checked != unchecked:
-                for inputFile in job_list:
-                    outputFile = resource_dict[inputFile]['outputFilename']
-                    print(f"Checking job {inputFile}")
-                    checked.add(inputFile)
-                    try:
-                        atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
-                        print(atoms.get_potential_energy())
-                        # delete inputFile from job_list
-                        job_list.remove(inputFile)
-                        print(f"Job list: {job_list}")
-                        print()
-                    except:
-                        # see if the job did not converge
-                        # read the output file as text
-                        with open(os.path.join(WORKING_DIRECTORY, outputFile), 'r') as f:
-                            lines = f.readlines()
-                        # check if the output file contains "convergence NOT achieved"
-                        notConverge = False
-                        for line in lines:
-                            if "convergence NOT achieved" in line:
-                                notConverge = True
-                                notConvergedList.append(inputFile)
-                                break
+        #     checked = set()
+        #     unchecked = set(job_list)
+        #     while checked != unchecked:
+        #         for inputFile in job_list:
+        #             outputFile = resource_dict[inputFile]['outputFilename']
+        #             print(f"Checking job {inputFile}")
+        #             checked.add(inputFile)
+        #             try:
+        #                 atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
+        #                 print(atoms.get_potential_energy())
+        #                 # delete inputFile from job_list
+        #                 job_list.remove(inputFile)
+        #                 print(f"Job list: {job_list}")
+        #                 print()
+        #             except:
+        #                 # see if the job did not converge
+        #                 # read the output file as text
+        #                 with open(os.path.join(WORKING_DIRECTORY, outputFile), 'r') as f:
+        #                     lines = f.readlines()
+        #                 # check if the output file contains "convergence NOT achieved"
+        #                 notConverge = False
+        #                 for line in lines:
+        #                     if "convergence NOT achieved" in line:
+        #                         notConverge = True
+        #                         notConvergedList.append(inputFile)
+        #                         break
                             
-                        if notConverge:
-                            # remove inputFile from job_list
-                            job_list.remove(inputFile)
-                        else:
-                            # if outputFile exsit remove outputFile
-                            try:
-                                # temporay disable remove to avoid the calculation
-                                # os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
-                                print(f"{outputFile} removed")
-                            except:
-                                print("output file does not exist")
-                            print(f"Job {inputFile} failed, will resubmit the job")
+        #                 if notConverge:
+        #                     # remove inputFile from job_list
+        #                     job_list.remove(inputFile)
+        #                 else:
+        #                     # if outputFile exsit remove outputFile
+        #                     try:
+        #                         # temporay disable remove to avoid the calculation
+        #                         # os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
+        #                         print(f"{outputFile} removed")
+        #                     except:
+        #                         print("output file does not exist")
+        #                     print(f"Job {inputFile} failed, will resubmit the job")
             
             
-            # for idx, inputFile in enumerate(job_list):
-            #     outputFile = resource_dict[inputFile]['outputFilename']
-            #     print(f"Checking job {inputFile}")
-            #     try:
-            #         atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
-            #         print(atoms.get_potential_energy())
-            #         # delete inputFile from job_list
-            #         job_list.remove(inputFile)
-            #         print(f"Job list: {job_list}")
-            #         print()
-            #     except:
-            #         # remove outputFile
-            #         os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
-            #         print(f"Job {inputFile} failed, will resubmit the job")
-            if len(job_list) == 0:
-                # load jobs frm job_list.json
-                job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
+        #     # for idx, inputFile in enumerate(job_list):
+        #     #     outputFile = resource_dict[inputFile]['outputFilename']
+        #     #     print(f"Checking job {inputFile}")
+        #     #     try:
+        #     #         atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
+        #     #         print(atoms.get_potential_energy())
+        #     #         # delete inputFile from job_list
+        #     #         job_list.remove(inputFile)
+        #     #         print(f"Job list: {job_list}")
+        #     #         print()
+        #     #     except:
+        #     #         # remove outputFile
+        #     #         os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
+        #     #         print(f"Job {inputFile} failed, will resubmit the job")
+        #     if len(job_list) == 0:
+        #         # load jobs frm job_list.json
+        #         job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
                 
-                # read all energies into a dict
-                energies = {}
-                for inputFile in job_list:
-                    if inputFile in notConvergedList:
-                        continue
-                    outputFile = resource_dict[inputFile]['outputFilename']
-                    atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
-                    energies[inputFile] = atoms.get_potential_energy()
+        #         # read all energies into a dict
+        #         energies = {}
+        #         for inputFile in job_list:
+        #             if inputFile in notConvergedList:
+        #                 continue
+        #             outputFile = resource_dict[inputFile]['outputFilename']
+        #             atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
+        #             energies[inputFile] = atoms.get_potential_energy()
                 
-                job_list = []
+        #         job_list = []
                 
-                # check two or more key has the same value, if so, add the key back to the job_list
-                for key, value in energies.items():
-                    if list(energies.values()).count(value) > 1:
-                        print(f"!!!!!!!Job {key} has the same energy as other jobs, may resubmit the job!!!!!!!!")
-                        job_list.append(key)
+        #         # check two or more key has the same value, if so, add the key back to the job_list
+        #         for key, value in energies.items():
+        #             if list(energies.values()).count(value) > 1:
+        #                 print(f"!!!!!!!Job {key} has the same energy as other jobs, may resubmit the job!!!!!!!!")
+        #                 job_list.append(key)
                 
-                print()
-                # check whether job in job_list has the same inputFile content, if so, remove the job from job_list
-                tobeRemoved = np.zeros(len(job_list))
-                for jobIdx in range(len(job_list)):
-                    for jobIdx2 in range(jobIdx+1, len(job_list)):
-                        if cmp(os.path.join(WORKING_DIRECTORY, job_list[jobIdx]), os.path.join(WORKING_DIRECTORY, job_list[jobIdx2]), shallow=False):
-                            print(f"!!!!!!!Job {job_list[jobIdx]} has the same content as {job_list[jobIdx2]}, will remove the job!!!!!!!!")
-                            tobeRemoved[jobIdx] = 1
-                            tobeRemoved[jobIdx2] = 1
+        #         print()
+        #         # check whether job in job_list has the same inputFile content, if so, remove the job from job_list
+        #         tobeRemoved = np.zeros(len(job_list))
+        #         for jobIdx in range(len(job_list)):
+        #             for jobIdx2 in range(jobIdx+1, len(job_list)):
+        #                 if cmp(os.path.join(WORKING_DIRECTORY, job_list[jobIdx]), os.path.join(WORKING_DIRECTORY, job_list[jobIdx2]), shallow=False):
+        #                     print(f"!!!!!!!Job {job_list[jobIdx]} has the same content as {job_list[jobIdx2]}, will remove the job!!!!!!!!")
+        #                     tobeRemoved[jobIdx] = 1
+        #                     tobeRemoved[jobIdx2] = 1
                 
-                job_list = [job_list[i] for i in range(len(job_list)) if tobeRemoved[i] == 0]
+        #         job_list = [job_list[i] for i in range(len(job_list)) if tobeRemoved[i] == 0]
                 
-                print("##########")
-                print(f"Final jobs to be resubmitted: {job_list}")
-                print("##########")
-                # remove outputFile for jobs in job_list
-                for inputFile in job_list:
-                    outputFile = resource_dict[inputFile]['outputFilename']
-                    print(f"Removing {outputFile}")
-                    os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
+        #         print("##########")
+        #         print(f"Final jobs to be resubmitted: {job_list}")
+        #         print("##########")
+        #         # remove outputFile for jobs in job_list
+        #         for inputFile in job_list:
+        #             outputFile = resource_dict[inputFile]['outputFilename']
+        #             print(f"Removing {outputFile}")
+        #             os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
             
-                if len(job_list) == 0:
-                    break
+        #         if len(job_list) == 0:
+        #             break
     
     # reset resource_suggestions.db and job lists
     finishedJobs = CANVAS.canvas.get('finished_job_list', [])
@@ -1211,11 +1280,19 @@ def submit_and_monitor_job(
     time.sleep(1)
     
     notConvergedListString = ""
-    if len(notConvergedList) > 0:
-        notConvergedListString = "However, the following jobs did not converge: "
-        for job in notConvergedList:
+    
+    for job in job_list:
+        try:
+            # temporay disable the read function to avoid the calculation
+            tmp = read(os.path.join(WORKING_DIRECTORY, job + '.pwo'))
+            _ = tmp.get_potential_energy()
+            print(f"Job {job} has finished")
+        except:
             notConvergedListString += job + ", "
     
+    if notConvergedListString != "":
+        notConvergedListString = "However, the following jobs did not converge: " + notConvergedListString
+            
     return f"All job in job_list has finished. {notConvergedListString}please check the output file in the {WORKING_DIRECTORY}"
 
 @tool
