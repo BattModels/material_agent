@@ -90,8 +90,8 @@ if __name__ == "__main__":
     userMessage_9 = """
     Please find out the most perfered adsorbtion site and adsorbate orientation (up or down) for CO adsorbtion on Pt(111) surface with 1/4 coverage (2x2x4 supercell).
     """
-    userMessage_10 = """please find the adsorption energy difference between the most favorable configurations (different adsorbate orientations) at fcc site and
-    most favorable configuration (different adsorbate orientations) at ontop site for CO on Pt(111) surface with p(2x2) adsorbate overlayer (1/4 coverage). 
+    userMessage_10 = """please find the adsorption energy difference between the most favorable configurations (different adsorbate orientations 0-180) at fcc site and
+    most favorable configuration (different adsorbate orientations 0-180) at ontop site for CO on Pt(111) surface with p(2x2) adsorbate overlayer (1/4 coverage). 
     Literatures suggest that ontop site is 0.24 eV less stable than fcc site when using PBE xc. 
     If your result is not within 10 percent of the literature, please provide a possible explanation and try to improve the accuracy of the calculation."""
     userMessage_11 = "I am trying to study adsorption of CO on Pt111 surface at fcc site. Job CO_Pt111_fcc_upright_k_0.3_ecutwfc_60.pwi did not converge, please figure out why and resolve the convergence issue."
