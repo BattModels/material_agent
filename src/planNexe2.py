@@ -203,7 +203,7 @@ def worker_agent_node(state, agent, name, past_steps_list):
 Here are what has been done so far:
 {old_tasks_string}
 
-Now, you are tasked with: {task}.
+Now, you are tasked with: {task}. Please only do this task! Do not do anything else!
 """
     
     print(task_formatted)
@@ -253,11 +253,11 @@ def create_planning_graph(config: dict) -> StateGraph:
         f.write("run")
     
     # Define the model
-    # llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-    # workerllm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    workerllm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # workerllm = ChatAnthropic(model="claude-3-5-sonnet-20241022", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-    llm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
-    workerllm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"], model_kwargs={'parallel_tool_calls': False})
+    # llm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
+    # workerllm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"], model_kwargs={'parallel_tool_calls': False})
     # llm = ChatDeepSeek(model_name=config["DeepSeek_MDL"], api_key=config['DeepSeek_API_KEY'], api_base=config['DeepSeek_BASE_URL'], temperature=0.0)
     
     var.my_WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
@@ -333,7 +333,7 @@ def create_planning_graph(config: dict) -> StateGraph:
         calculate_formation_E,
         generateSurface_and_getPossibleSite,
         generate_myAdsorbate,
-        # add_myAdsorbate,
+        add_myAdsorbate,
         init_structure_data,
         find_pseudopotential,
         write_QE_script_w_ASE,

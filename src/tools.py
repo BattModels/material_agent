@@ -169,6 +169,9 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
         write_location=os.environ.get("WORKING_DIR"),
     )
     
+    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    DirOfInterests = WORKING_DIRECTORY.split('/')[-1]
+    
     mySurface = surface_dict[species][f'{crystal_structures}{facets}']["structure"]
     # mySites = get_adsorption_sites(mySurface, symm_reduce=0)
     # mySites = get_adsorption_sites(mySurface)
@@ -189,7 +192,7 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
     
     absPath = surface_dict[species][f'{crystal_structures}{facets}']['traj_file_path']
     # trim the absPath, remove the part before out, including out
-    relaPath = absPath.split('out/')[-1]
+    relaPath = absPath.split(f'{DirOfInterests}/')[-1]
     
     return f"the surface generated is saved at {relaPath}, available adsorbate sites are: {mySites_str}"
 
@@ -227,7 +230,8 @@ def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure
 # def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure"],
 #                     adsorbatePath: Annotated[str, "Path to the adsorbate structure"],
 #                     mySites: Annotated[List[List[float]], "List of adsorption sites you want to put adsorbates on, e.g. [[x1, y1], [x2, y2], ...]"],
-#                     rotations: Annotated[List[List[str]], "List of rotations for the ith adsorbates, e.g. [['90.0', 'x'], ['180.0', 'y'], ...]"]
+#                     rotations: Annotated[List[List[str]], "List of rotations for the ith adsorbates, e.g. [['90.0', 'x'], ['180.0', 'y'], ...]"],
+#                     surfaceWithAdsorbateFileName: Annotated[str, "Name (not a path) of the surface adsorbated with adsorbate to be saved in traj format"]
 #                     ):
 #     """
 #     Add adsorbate to the surface structure and save it.
@@ -239,20 +243,22 @@ def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure
     
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
     
+    DirOfInterests = WORKING_DIRECTORY.split('/')[-1]
+    
     try:
-        if not mySurfacePath.startswith('out') and not mySurfacePath.startswith('./out') and not mySurfacePath.startswith('/nfs'):
+        if not mySurfacePath.startswith(DirOfInterests) and not mySurfacePath.startswith(f'./{DirOfInterests}') and not mySurfacePath.startswith('/nfs'):
             mySurfacePath = os.path.join(WORKING_DIRECTORY, mySurfacePath)
         mySurface = read(mySurfacePath)
     except:
-        return f"Invalid input atoms directory: {mySurfacePath}. make sure to supply either absolute path, or relative path starting with './out'. Please check the path in canvas and try again."
+        return f"Invalid input atoms directory: {mySurfacePath}. make sure to supply either absolute path, or relative path starting with './{DirOfInterests}'. Please check the path in canvas and try again."
 
     
     try:
-        if not adsorbatePath.startswith('out') and not adsorbatePath.startswith('./out') and not adsorbatePath.startswith('/nfs'):
+        if not adsorbatePath.startswith(DirOfInterests) and not adsorbatePath.startswith(f'./{DirOfInterests}') and not adsorbatePath.startswith('/nfs'):
             adsorbatePath = os.path.join(WORKING_DIRECTORY, adsorbatePath)
         myAdsorbate = read(adsorbatePath)
     except:
-        return f"Invalid input atoms directory: {adsorbatePath}. make sure to supply either absolute path, or relative path starting with './out'. Please check the path in canvas and try again."
+        return f"Invalid input atoms directory: {adsorbatePath}. make sure to supply either absolute path, or relative path starting with './{DirOfInterests}'. Please check the path in canvas and try again."
     
     # Load the adsorbate structure
     myAdsorbate = read(adsorbatePath)
@@ -275,7 +281,7 @@ def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure
     # save the new structure
     write(absPath, mySurface)
     
-    relaPath = absPath.split('out/')[-1]
+    relaPath = absPath.split(f'{DirOfInterests}/')[-1]
     
     return f"Surface with adsorbate saved at {relaPath}"
 
@@ -343,13 +349,15 @@ def write_QE_script_w_ASE(
     
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
     
+    DirOfInterests = WORKING_DIRECTORY.split('/')[-1]
+    
     try:
-        if inputAtomsDir.startswith('out') or inputAtomsDir.startswith('./out') or inputAtomsDir.startswith('/nfs'):
+        if inputAtomsDir.startswith(DirOfInterests) or inputAtomsDir.startswith(f'./{DirOfInterests}') or inputAtomsDir.startswith('/nfs'):
             atoms = read(inputAtomsDir)
         else:
             atoms = read(os.path.join(WORKING_DIRECTORY, inputAtomsDir))
     except:
-        raise ValueError(f"Invalid input atoms directory: {inputAtomsDir}. make sure to supply either absolute path, or relative path starting with './out'. Please check the path in canvas and try again.")
+        raise ValueError(f"Invalid input atoms directory: {inputAtomsDir}. make sure to supply either absolute path, or relative path starting with './{DirOfInterests}'. Please check the path in canvas and try again.")
     
     filenameWDir = os.path.join(WORKING_DIRECTORY, filename)
     
@@ -666,11 +674,11 @@ def get_convergence_suggestions(
     
     config = load_config(os.path.join('./config', "default.yaml"))
     # llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-    # workerllm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    workerllm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # llm = ChatAnthropic(model="claude-3-5-sonnet-20241022", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # workerllm = ChatAnthropic(model="claude-3-5-sonnet-20241022", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # llm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
-    workerllm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
+    # workerllm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
     # llm = ChatDeepSeek(model_name=config["DeepSeek_MDL"], api_key=config['DeepSeek_API_KEY'], api_base=config['DeepSeek_BASE_URL'], temperature=0.0)
     
     finalSuggestion = ""

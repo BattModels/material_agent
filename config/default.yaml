@@ -18,6 +18,6 @@ PSEUDO_DIR: '/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/all_lda_pbe_UPF'
 # PSEUDO_DIR: '/nfs/turbo/coe-venkvis/ziqiw-turbo/sssp'
 
 # Working directory
-WORKING_DIR: '/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/out'
+WORKING_DIR: '/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/PBEProdNoReflecout'
 
 SAVE_DIALOGUE: 'True'
