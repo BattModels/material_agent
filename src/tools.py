@@ -1,4 +1,4 @@
-
+from copy import deepcopy
 from matplotlib import pyplot as plt
 from math import e
 from src.utils import *
@@ -656,8 +656,9 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int, stepSize:
 @tool
 def get_convergence_suggestions(
     filename: Annotated[str, "Name of the Quantum Espresso input file that did not converge, end with .pwi"],
+    question: Annotated[str, "Question about this job, e.g. 'Why this job did not converge?' or 'how to improve the accuracy of this job?'"],
 ):
-    "Get suggestions on how to resolve convergence issues for a certain job."
+    "Get suggestions on how to resolve issues for a certain job, i.e. converge or not accurate enough."
     outFile = filename + ".pwo"
     errFile = filename + ".err"
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
@@ -665,11 +666,11 @@ def get_convergence_suggestions(
     
     config = load_config(os.path.join('./config', "default.yaml"))
     # llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-    workerllm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    # workerllm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # llm = ChatAnthropic(model="claude-3-5-sonnet-20241022", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # workerllm = ChatAnthropic(model="claude-3-5-sonnet-20241022", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # llm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
-    # workerllm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
+    workerllm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
     # llm = ChatDeepSeek(model_name=config["DeepSeek_MDL"], api_key=config['DeepSeek_API_KEY'], api_base=config['DeepSeek_BASE_URL'], temperature=0.0)
     
     finalSuggestion = ""
@@ -685,14 +686,14 @@ def get_convergence_suggestions(
             with open(os.path.join(WORKING_DIRECTORY, myfile),"r") as file:
                 content = file.read()
             
-            task_formatted = f"{content}\nThe DFT calculation related to the file above did not converge. Please think about why the job didn't converge, and give me suggestions on how to fix it."
+            task_formatted = f"{content}\n I have a question about the DFT calculation related to the file above: {question}. Please think about what could be the reason, and give me suggestions to address it."
             
             # for agent_response in dft_reader_agent.stream({"messages": [("user", task_formatted)]}, {"configurable": {"thread_id": thread_id}, "recursion_limit": 1000}):
             #     agent_response = next(iter(agent_response.values()))
             #     print_stream(agent_response)
             
             system_msg = """
-You are a DFT expert who's good at giving concise suggestions on how to resolve convergence issues. Do not modify nosym and pesudopotentials.
+You are a DFT expert who's good at giving concise suggestions on how to resolve issues in DFT calculations. Do not modify nosym and pesudopotentials. Never make any adjustment to make the calculation less accurate.
 Please use the format: parameterX: suggestionX, reasonX; parameterY: suggestionY, reasonY; ...
 """
             
@@ -708,7 +709,7 @@ Please use the format: parameterX: suggestionX, reasonX; parameterY: suggestionY
     if finalSuggestion == "":
         return f"Job {filename} has no related files, please check the job list and make sure the job is finished."
         
-    finalSuggestion += "Please check the suggestions above and come up with a plan to fix the convergence issue."
+    finalSuggestion += "Please check the suggestions above and come up with a plan to fix the issue."
     return finalSuggestion
         
 
@@ -1086,6 +1087,7 @@ def submit_and_monitor_job(
     print(f"loaded resource suggestions: {json.dumps(resource_dict, indent=4)}")
     
     CANVAS.canvas['ready_to_run_job_list'] = job_list.copy()
+    wasJobList = deepcopy(job_list)
     
     ## Check resource key is valid
     for job in job_list:
@@ -1269,9 +1271,8 @@ def submit_and_monitor_job(
     
     # reset resource_suggestions.db and job lists
     finishedJobs = CANVAS.canvas.get('finished_job_list', [])
-    readyToRunJobs = CANVAS.canvas.get('ready_to_run_job_list', [])
-    finishedJobs += readyToRunJobs
-    CANVAS.write('finished_job_list', finishedJobs, overwrite=True)
+    finishedJobs += wasJobList
+    CANVAS.canvas['finished_job_list'] = finishedJobs
     CANVAS.write('ready_to_run_job_list', [], overwrite=True)
     db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
     os.remove(db_file)

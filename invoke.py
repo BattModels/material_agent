@@ -84,7 +84,7 @@ if __name__ == "__main__":
     Sn (dia)	6.474
     '''
     
-    userMessage_6 = "You are going to calculate the lattic constant for FCC Cu through DFT, the experiment value is 3.596, use this to create the initial structure."
+    userMessage_6 = "You are going to calculate the lattice constant for BCC Li through DFT, the experiment value is 3.451, use this to create the initial structure."
     userMessage_7 = "You are going to generat a Pt surface structure with 2x2x4 supercell, then do a convergence test, use maximum ecutwfc = 160. Get the optimal kspacing and ecutwfc."
     userMessage_8 = """Please generate intial structures required to calculate CO adsorbtion on Pt(111) surface with 1/4 coverage (2x2x4 supercell), and calculate the adsorbtion energy."""
     userMessage_9 = """
@@ -93,7 +93,7 @@ if __name__ == "__main__":
     userMessage_10 = """please find the adsorption energy difference between the most favorable configurations (different adsorbate orientations 0-180) at fcc site and
     most favorable configuration (different adsorbate orientations 0-180) at ontop site for CO on Pt(111) surface with p(2x2) adsorbate overlayer (1/4 coverage). 
     Literatures suggest that ontop site is 0.24 eV less stable than fcc site when using PBE xc. 
-    If your result is not within 10 percent of the literature, please provide a possible explanation and try to improve the accuracy of the calculation."""
+    If your result is not within 10 percent of the literature, please find out possible reasons and resolve it."""
     userMessage_11 = "I am trying to study adsorption of CO on Pt111 surface at fcc site. Job CO_Pt111_fcc_upright_k_0.3_ecutwfc_60.pwi did not converge, please figure out why and resolve the convergence issue."
     
     testMessage = '''
@@ -105,7 +105,7 @@ if __name__ == "__main__":
     WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
     
     CANVAS.set_working_directory(WORKING_DIRECTORY)
-    CANVAS.canvas["finished_job_list"] = ["CO_Pt111_fcc_upright_k_0.3_ecutwfc_60.pwi"]
+    # CANVAS.canvas["finished_job_list"] = ["CO_Pt111_fcc_upright_k_0.3_ecutwfc_60.pwi"]
     
     # set environment variable
     os.environ["OMP_NUM_THREADS"] = "1"
@@ -182,7 +182,7 @@ if __name__ == "__main__":
         
         for s in graph.stream(
             {
-                "input": f"{userMessage_10}",
+                "input": f"{userMessage_6}",
                 "plan": [],
                 "past_steps": []
             }, llm_config):
