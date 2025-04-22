@@ -7,6 +7,7 @@ from IPython.display import Image, display
 from langchain_core.runnables.graph import CurveStyle, MermaidDrawMethod, NodeStyles
 import getpass
 import pandas as pd
+from src import var
 def load_config(path: str):
     ## Load the configuration file
     with open(path) as f:
@@ -14,6 +15,7 @@ def load_config(path: str):
     ## Set up environment variables
     for key, value in config.items():
         os.environ[key] = value
+    var.my_WORKING_DIRECTORY = config["WORKING_DIR"]
     return config
 def check_config(config: dict):
     for key, value in config.items():

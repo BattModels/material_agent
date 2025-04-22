@@ -17,6 +17,7 @@ from src.planNexe2 import create_planning_graph as create_graph
 import time
 from src.utils import load_config, save_graph_to_file,check_config,initialize_database
 from src.myCANVAS import CANVAS
+from src import var
 
 
 if __name__ == "__main__":
@@ -102,7 +103,7 @@ if __name__ == "__main__":
     
     config = load_config(os.path.join('./config', "default.yaml"))
     check_config(config)
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     
     CANVAS.set_working_directory(WORKING_DIRECTORY)
     # CANVAS.canvas["finished_job_list"] = ["CO_Pt111_fcc_upright_k_0.3_ecutwfc_60.pwi"]

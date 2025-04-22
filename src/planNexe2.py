@@ -138,6 +138,62 @@ def print_stream(s):
 #         print_stream(s)
 #     return {"messages": [HumanMessage(content=s["messages"][-1].content, name=name)]}
 
+def reflector_node(state, agent, name):
+    with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
+        status = f.read()
+    while status == "stop":
+        print(f"Calculation pause, supervisor is waiting")
+        # wait for 5 second
+        time.sleep(5)
+        with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
+            status = f.read()
+    
+    print(f"supervisor is processing!!!!!")
+    if var.my_SAVE_DIALOGUE:
+        with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+            f.write(f"supervisor is processing!!!!!\n")
+
+    print(state)
+    if var.my_SAVE_DIALOGUE:
+        with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+            f.write(str(state))
+            f.write("\n")
+            
+    # if first time, save orginal objective
+    # empty the plan
+    # Get current response
+    # compare to the orginal objective
+    # review what has been done
+    # review what's on CANVAS
+    # formulate a new input to be this is the goal, you've done this, but ....., please try .....
+    # pass back to supervisor
+    
+    if var.reflector_first_visit:
+        var.reflector_first_visit = False
+        # save the original objective
+        var.original_objective = state["input"]
+        
+    # empty the plan
+    state["plan"] = []
+    
+    current_response = state["response"]
+    
+    task_formatted = f"""
+Here is the original objective: {var.original_objective}
+Here is the current response: {current_response}
+Please 
+"""
+    
+    for agent_response in agent.stream(
+        {"messages": [("user", task_formatted)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
+    ):
+        # set agent_response to be the value of the first key of the dictionary
+        agent_response = next(iter(agent_response.values()))
+        print_stream(agent_response)
+    
+    
+    
+
 def supervisor_chain_node(state, chain, name):
     
     # read "status.txt" in the working directory
@@ -248,7 +304,7 @@ def whos_next(state):
         
 def create_planning_graph(config: dict) -> StateGraph:
     # create a file named status.txt in the working directory
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     with open(f"{WORKING_DIRECTORY}/status.txt", "w") as f:
         f.write("run")
     
@@ -260,7 +316,7 @@ def create_planning_graph(config: dict) -> StateGraph:
     # workerllm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"], model_kwargs={'parallel_tool_calls': False})
     # llm = ChatDeepSeek(model_name=config["DeepSeek_MDL"], api_key=config['DeepSeek_API_KEY'], api_base=config['DeepSeek_BASE_URL'], temperature=0.0)
     
-    var.my_WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    var.my_WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     
     if not eval(config["SAVE_DIALOGUE"]):
         var.my_SAVE_DIALOGUE = False

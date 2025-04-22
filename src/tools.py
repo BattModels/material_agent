@@ -37,6 +37,7 @@ import contextlib
 from autocat.surface import generate_surface_structures
 from autocat.adsorption import get_adsorption_sites, get_adsorbate_height_estimate
 from src.utils import load_config
+from src import var
 
 ##################################################################################################
 ##                                        Common tools                                          ##
@@ -93,7 +94,7 @@ def get_files_in_dir(dir_path: Annotated[str, "Directory path"],
                      file_extension: Annotated[str, "File extension to filter by. If you want all files and folders, use ''"] = ''
                      ) -> list:
     """Returns a list of files in a given directory with a specific file extension."""
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     files = ""
     # list all files in the directory
     for file in os.listdir(os.path.join(WORKING_DIRECTORY, dir_path)):
@@ -130,7 +131,7 @@ def init_structure_data(
     c: Annotated[float, "Lattice constant"] = None,
 ) -> Annotated[str, "Path of the saved initial structure data file."]:
     """Create single element bulk initial structure based on composite, crystal lattice, lattice info, save to the working dir, and return filename."""
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     os.makedirs(WORKING_DIRECTORY, exist_ok=True)
     atoms = bulk(element, lattice, a=a, b=b, c=c, cubic=True)
     # atoms *= (2, 2, 2)
@@ -166,10 +167,10 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
         n_fixed_layers=n_fixed_layers,
         dirs_exist_ok=True,
         write_to_disk=True,
-        write_location=os.environ.get("WORKING_DIR"),
+        write_location=var.my_WORKING_DIRECTORY,
     )
     
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     DirOfInterests = WORKING_DIRECTORY.split('/')[-1]
     
     mySurface = surface_dict[species][f'{crystal_structures}{facets}']["structure"]
@@ -205,7 +206,7 @@ def generate_myAdsorbate(symbols: Annotated[str, "Element symbols of the adsorba
     assert AdsorbateFileName.endswith('.traj'), "AdsorbateFileName should end with .traj"
     assert not '/' in AdsorbateFileName, "AdsorbateFileName should not contain '/'"
     
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     
     os.makedirs(os.path.join(WORKING_DIRECTORY, "adsorbates"), exist_ok=True)
     tmpAtoms = Atoms(symbols=symbols, positions=positions)
@@ -241,7 +242,7 @@ def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure
     assert surfaceWithAdsorbateFileName.endswith('.traj'), "surfaceWithAdsorbateFileName should end with .traj"
     assert not '/' in surfaceWithAdsorbateFileName, "surfaceWithAdsorbateFileName should not contain '/'"
     
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     
     DirOfInterests = WORKING_DIRECTORY.split('/')[-1]
     
@@ -292,7 +293,7 @@ def write_script(
 ) -> Annotated[str, "Path of the saved document file."]:
     """Save the quantum espresso input script to the specified file path"""
     ## Error when '/' in the content, manually delete
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
 
     os.makedirs(WORKING_DIRECTORY, exist_ok=True)
     path = os.path.join(WORKING_DIRECTORY, f'{file_name}')
@@ -347,7 +348,7 @@ def write_QE_script_w_ASE(
             return f"Invalid pseudopotential file: {pseudo}. Make sure to supply the correct pseudopotential file name."
         pseudopotentials[element] = pseudo
     
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     
     DirOfInterests = WORKING_DIRECTORY.split('/')[-1]
     
@@ -421,7 +422,7 @@ def write_LAMMPS_script(
 ) -> Annotated[str, "Path of the saved document file."]:
     """Save the LAMMPS input script to the specified file path"""
     ## Error when '/' in the content, manually delete
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     
     os.makedirs(WORKING_DIRECTORY, exist_ok=True)
     path = os.path.join(WORKING_DIRECTORY, f'{file_name}')
@@ -482,14 +483,13 @@ def generate_convergence_test(input_file_name: Annotated[str, "Name of the templ
     # kspacing = [0.6, 0.8, 1.0]
     # ecutwfc = [10, 20, 30]
     
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     input_file = os.path.join(WORKING_DIRECTORY, input_file_name)
     # Read the atom object from the input script
     try:
         atom = read(input_file)
     except:
-        INITIAL_FILE = os.environ.get("INITIAL_FILE")
-        return f"Invalid input file, do you want to use {INITIAL_FILE} as the input file?"
+        return f"Invalid input file, please check CANVAS and select the correct template file."
     
     cell = atom.cell
     ecutwfc_max = max(ecutwfc)
@@ -596,14 +596,13 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int, stepSize:
     # CANVAS.write('job_list', [], overwrite=True)
     CANVAS.canvas['jobs_K_and_ecut'] = {}
     
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     input_file = os.path.join(WORKING_DIRECTORY, input_file_name)
     prefix = input_file_name.split('.')[0]
     # Read the atom object from the input script
     try:
         atom = read(input_file)
     except:
-        INITIAL_FILE = os.environ.get("INITIAL_FILE")
         return f"Invalid input file, try inspect the shared CANVAS and use the inital pwi file as the input file"
     
     job_list = []
@@ -669,7 +668,7 @@ def get_convergence_suggestions(
     "Get suggestions on how to resolve issues for a certain job, i.e. converge or not accurate enough."
     outFile = filename + ".pwo"
     errFile = filename + ".err"
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     # WORKING_DIRECTORY = "/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/out"
     
     config = load_config(os.path.join('./config', "default.yaml"))
@@ -727,7 +726,7 @@ def calculate_formation_E(slabFilePath: Annotated[str, "the slab calculation out
                           systemFilePath: Annotated[str, "the slab with adsorbate calculation output file path"]
                           ):
     """using the energies of the slab, adsorbate, and slab with adsorbate, calculate the formation energy of the adsorbate on the slab. """
-    working_directory = os.environ.get("WORKING_DIR")
+    working_directory = var.my_WORKING_DIRECTORY
     slabFilePath = os.path.join(working_directory, slabFilePath + '.pwo')
     adsorbateFilePath = os.path.join(working_directory, adsorbateFilePath + '.pwo')
     systemFilePath = os.path.join(working_directory, systemFilePath + '.pwo')
@@ -759,7 +758,7 @@ def calculate_lc(jobFileIdx: Annotated[List[int], "indexs of files in the finish
     for i in jobFileIdx:
         assert isinstance(i, int), "jobFileIdx should be a list of index of files of interest"
     
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     job_list = CANVAS.canvas.get('finished_job_list', []).copy()
     job_list = np.array(job_list, dtype=str)[jobFileIdx]
     print(f"actual job list: {job_list}")
@@ -884,7 +883,7 @@ def get_kspacing_ecutwfc(jobFileIdx: Annotated[List[int], "indexs of files in th
         threshold: float , the threshold mev/atom to determine the convergence
     output: str, the kspacing and ecutwfc used in the production
     '''
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     
     assert isinstance(jobFileIdx, list), "jobFileIdx should be a list"
     for i in jobFileIdx:
@@ -973,7 +972,7 @@ def get_kspacing_ecutwfc(jobFileIdx: Annotated[List[int], "indexs of files in th
 def find_job_list() -> str:
     """Return the list of job files to be submitted."""
 
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
     
     return f'The files need to be submitted are {job_list}. Please continue to submit the job.'
@@ -983,7 +982,7 @@ def read_file(
     input_file: Annotated[str, "The file to be read."]
 ) -> Annotated[str, "read content"]:
     """read file content from the specified file path"""
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     ## Error when '/' in the content, manually delete
     path = os.path.join(WORKING_DIRECTORY, input_file)
     with open(path,"r") as file:
@@ -1026,7 +1025,7 @@ echo "Job Ended at `date`"\n \
     if not isinstance(partition, str) or not isinstance(nnodes, int) or not isinstance(ntasks, int) or not isinstance(runtime, str):
         return "Invalid input, please check the input format"
     # craete the json file if it does not exist, otherwise load it
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
 
     new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 48, "runtime": 2800, "submissionScript": submissionScript, "outputFilename": outputFilename}}
     
@@ -1049,7 +1048,7 @@ def submit_and_monitor_job(
     '''
     
     # check if resource_suggestions.json exist
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     resource_suggestions = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
     if not os.path.exists(resource_suggestions):
         return "Resource suggestion file not found, please use the add_resource_suggestion tool to add the resource suggestion"
@@ -1310,7 +1309,7 @@ def submit_single_job(
 ) -> str:
     '''Submit a single job to supercomputer, return the location of the output file once the job is done'''
     print("checking pysqa prerequisites...")
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     # check if slurm.sh and queue.yaml exist in the working directory
     if not os.path.exists(os.path.join(WORKING_DIRECTORY, "slurm.sh")) or not os.path.exists(os.path.join(WORKING_DIRECTORY, "queue.yaml")):
         print("Creating pysqa prerequisites...")
@@ -1405,7 +1404,7 @@ def read_energy_from_output(jobFileIdx: Annotated[List[int], "indexs of files in
     for i in jobFileIdx:
         assert isinstance(i, int), "jobFileIdx should be a list of index of files of interest"
     
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     # load job_list.jason
     job_list = CANVAS.canvas.get('finished_job_list', []).copy()
     job_list = np.array(job_list, dtype=str)[jobFileIdx]
@@ -1456,7 +1455,7 @@ def read_single_output(
     input_file: str
 ) -> str:
     '''Read the total energy from the file in job list and return it in a string'''
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     # load job_list.jason
     output_file = input_file + '.pwo'
     file_path = os.path.join(WORKING_DIRECTORY, output_file)
