@@ -54,7 +54,7 @@ dft_agent_prompt = """
                 9. Do not give further suggestions on what to do next.
                 10. The electron conv_thr should be 1e-6.
                 11. Use the right smearing based on the material.
-                12. The final answer should be concise summary in a sentence.
+                12. The final answer should be concise summary in a sentence. Do not repeat what you've noted on the CANVAS, just mention it's on the CANVAS.
                 13. You don't have to use all the tools provided, only use the tools that are necessary.
                 14. Do not report absolute path.
                 15. when calculating formation energies, convergence test on DFT parameters should be done on one representitive system with both the adsorbate and the surface.

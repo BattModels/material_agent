@@ -20,7 +20,6 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import ToolNode,create_react_agent
 from pydantic import BaseModel, Field
 
-from src.agent import create_agent
 from src.tools import *
 from src.prompt import dft_agent_prompt,hpc_agent_prompt,supervisor_prompt
 from src import var
@@ -86,8 +85,11 @@ teamCapability = """
     - generate convergence test input files
     - determine the best parameters from convergence test result
     - generate EOS calculation input files using the best parameters
+    - generate production run input files
+    - generate BEEF input files from finished relax calculation
     - Read output file to get energy
     - Calculate lattice constant
+    - Calculate formation energy
 <HPC Agent>:
     - find job list from the job list file
     - Add resource suggestion base on the DFT input file
@@ -203,6 +205,9 @@ def worker_agent_node(state, agent, name, past_steps_list):
 Here are what has been done so far:
 {old_tasks_string}
 
+Here is the overall objective:
+{state["input"]}
+
 Now, you are tasked with: {task}. Please only do this task! Do not do anything else!
 """
     
@@ -248,7 +253,7 @@ def whos_next(state):
         
 def create_planning_graph(config: dict) -> StateGraph:
     # create a file named status.txt in the working directory
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     with open(f"{WORKING_DIRECTORY}/status.txt", "w") as f:
         f.write("run")
     
@@ -260,7 +265,7 @@ def create_planning_graph(config: dict) -> StateGraph:
     # workerllm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"], model_kwargs={'parallel_tool_calls': False})
     # llm = ChatDeepSeek(model_name=config["DeepSeek_MDL"], api_key=config['DeepSeek_API_KEY'], api_base=config['DeepSeek_BASE_URL'], temperature=0.0)
     
-    var.my_WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    var.my_WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     
     if not eval(config["SAVE_DIALOGUE"]):
         var.my_SAVE_DIALOGUE = False
@@ -276,8 +281,9 @@ def create_planning_graph(config: dict) -> StateGraph:
         You don't have to use all the members, nor all the capabilities of the members.
         This plan should involve individual tasks, that if executed correctly will yield the correct answer. Do not add any superfluous steps. 
         The result of the final step should be the final answer. Make sure that each step has all the information needed - do not skip steps.
-        If you are given a list of systems, process them one by one: generate plan for one system first, finish that system, then generate plan for the next system.
-
+        Only generate structures needed for convergence test first. Once you determined the best parameters, generate the rest of the structures.
+        In the plan, you need to be clear what pseudopotential and xc to use for steps that need pseudopotential and xc.
+        
         If the plan is not empty, update the plan:
         Your objective was this:
         {{input}}
@@ -295,10 +301,10 @@ def create_planning_graph(config: dict) -> StateGraph:
     4.  If your end result is different from your expectation, please reflect on what you have done by inspect and read through the canvas, scientificly, try to understand why the result is different, list out possible reasons, adjust your plan accordingly, and try to eliminate possible causes one by one.
         Do not stop until the end result is within user specified margin of error, or you have tried everything you can think of. Only if user did not specify a margin of error, you can judge by yourself.
 <Requirements>:
-    0.  Do not generate convergence test for all systems and all configurations.
-    1.  Please only generate one batch of convergence test for the most complicated system using the most complicated configuration. 
-    2.  when trying to explore the configuration design space, try a couple of configurations first, and then refine the search based on the results.
-    3.  Do not touch the canvas unless you are reflecting.
+    1.  Do not generate convergence test for all systems and all configurations.
+    2.  Please only generate one batch of convergence test for the most complicated system using the most complicated configuration. 
+    3.  when trying to explore the configuration design space, try a couple of configurations first, and then refine the search based on the results.
+    4.  Do not touch the canvas unless you are reflecting.
         """
     )
     

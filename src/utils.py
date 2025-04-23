@@ -7,18 +7,20 @@ from IPython.display import Image, display
 from langchain_core.runnables.graph import CurveStyle, MermaidDrawMethod, NodeStyles
 import getpass
 import pandas as pd
+from src import var
 def load_config(path: str):
     ## Load the configuration file
     with open(path) as f:
         config = yaml.load(f, Loader=yaml.FullLoader)
     ## Set up environment variables
     for key, value in config.items():
-        os.environ[key] = value
+        var.OTHER_GLOBAL_VARIABLES[key] = value
+    var.my_WORKING_DIRECTORY = config["WORKING_DIR"]
     return config
-def check_config(config: dict):
-    for key, value in config.items():
-        _set_if_undefined(key)
-    return 'Loaded config successfully'
+# def check_config(config: dict):
+#     for key, value in config.items():
+#         _set_if_undefined(key)
+#     return 'Loaded config successfully'
 class AtomsDict(BaseModel):
     numbers: List[int]
     positions: List[List[float]]
@@ -26,9 +28,9 @@ class AtomsDict(BaseModel):
     pbc: List[bool]
 
 
-def _set_if_undefined(var: str):
-    if not os.environ.get(var):
-        os.environ[var] = getpass.getpass(f"Please provide your {var}")
+# def _set_if_undefined(var: str):
+#     if not os.environ.get(var):
+#         os.environ[var] = getpass.getpass(f"Please provide your {var}")
 
 def save_graph_to_file(graph, path: str, name: str):
     try:

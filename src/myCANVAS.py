@@ -53,6 +53,12 @@ class myCANVAS():
         if len(self.canvas) == 0:
             return "Canvas is empty"
         notFoundMsg = f"Key '{key}' not found. Please choose from {list(self.canvas.keys())}"
+        
+        if key == "finished_job_list":
+            # turn list into a dict where the key is the index and the value is the job name
+            returning_finished_job_list = {i: job for i, job in enumerate(self.canvas[key])}
+            return repr(returning_finished_job_list)
+        
         return f"{self.canvas.get(key, notFoundMsg)}"
         
     def write(self, key, value, overwrite=False):

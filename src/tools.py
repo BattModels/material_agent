@@ -36,7 +36,7 @@ from filecmp import cmp
 import contextlib
 from autocat.surface import generate_surface_structures
 from autocat.adsorption import get_adsorption_sites, get_adsorbate_height_estimate
-from src.utils import load_config
+from src import var
 
 ##################################################################################################
 ##                                        Common tools                                          ##
@@ -65,6 +65,11 @@ def write_my_canvas(key: Annotated[str, "key"],
 ##                                          DFT tools                                           ##
 ##################################################################################################
 
+# @tool
+# def get_my_WORKING_DIRECTORY() -> str:
+#     """Get the working directory."""
+#     return var.my_WORKING_DIRECTORY
+
 def get_kpoints(atoms, kspacing: float) -> list:
     """Returns the kpoints of a given ase atoms object and specific kspacing."""
     cell = atoms.cell
@@ -85,7 +90,7 @@ def get_kpoints(atoms, kspacing: float) -> list:
                 kpoints[i] -= 1
             else:
                 kpoints[i] += 1
-    
+    # time.sleep(60)
     return kpoints
 
 @tool
@@ -93,14 +98,14 @@ def get_files_in_dir(dir_path: Annotated[str, "Directory path"],
                      file_extension: Annotated[str, "File extension to filter by. If you want all files and folders, use ''"] = ''
                      ) -> list:
     """Returns a list of files in a given directory with a specific file extension."""
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     files = ""
     # list all files in the directory
     for file in os.listdir(os.path.join(WORKING_DIRECTORY, dir_path)):
         # check if the file has the specified extension
         if file.endswith(file_extension):
             files += file + "\n"
-    
+    # time.sleep(60)
     return files
 
 @tool
@@ -117,7 +122,7 @@ def dummy_structure(concentration: float,
     # scaleFactor = (1.0 - concentration) * (6.5 - 3.58) / 3.58 + 1
     # scaleFactor = 1.0
     atoms.set_cell(atoms.cell * scale_factor, scale_atoms=True)
-
+    # time.sleep(60)
     return atoms.todict()
 
 
@@ -130,7 +135,7 @@ def init_structure_data(
     c: Annotated[float, "Lattice constant"] = None,
 ) -> Annotated[str, "Path of the saved initial structure data file."]:
     """Create single element bulk initial structure based on composite, crystal lattice, lattice info, save to the working dir, and return filename."""
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     os.makedirs(WORKING_DIRECTORY, exist_ok=True)
     atoms = bulk(element, lattice, a=a, b=b, c=c, cubic=True)
     # atoms *= (2, 2, 2)
@@ -144,7 +149,7 @@ def init_structure_data(
     # save the atoms into working dir
     saveDir = os.path.join(WORKING_DIRECTORY, f"{element}-{lattice}.xyz")
     write(saveDir, atoms)
-    
+    # time.sleep(60)
     return f"Created atoms saved in {saveDir}"
 
 @tool
@@ -166,10 +171,10 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
         n_fixed_layers=n_fixed_layers,
         dirs_exist_ok=True,
         write_to_disk=True,
-        write_location=os.environ.get("WORKING_DIR"),
+        write_location=var.my_WORKING_DIRECTORY,
     )
     
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     DirOfInterests = WORKING_DIRECTORY.split('/')[-1]
     
     mySurface = surface_dict[species][f'{crystal_structures}{facets}']["structure"]
@@ -193,7 +198,7 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
     absPath = surface_dict[species][f'{crystal_structures}{facets}']['traj_file_path']
     # trim the absPath, remove the part before out, including out
     relaPath = absPath.split(f'{DirOfInterests}/')[-1]
-    
+    # time.sleep(60)
     return f"the surface generated is saved at {relaPath}, available adsorbate sites are: {mySites_str}"
 
 @tool
@@ -205,13 +210,13 @@ def generate_myAdsorbate(symbols: Annotated[str, "Element symbols of the adsorba
     assert AdsorbateFileName.endswith('.traj'), "AdsorbateFileName should end with .traj"
     assert not '/' in AdsorbateFileName, "AdsorbateFileName should not contain '/'"
     
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     
     os.makedirs(os.path.join(WORKING_DIRECTORY, "adsorbates"), exist_ok=True)
     tmpAtoms = Atoms(symbols=symbols, positions=positions)
     tmpAtoms.center(vacuum=10.0)
     write(os.path.join(WORKING_DIRECTORY, "adsorbates", f"{AdsorbateFileName}"), tmpAtoms)
-    
+    # time.sleep(60)
     return f"Adsorbate saved under working directory at adsorbates/{AdsorbateFileName}"
 
 @tool
@@ -241,7 +246,7 @@ def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure
     assert surfaceWithAdsorbateFileName.endswith('.traj'), "surfaceWithAdsorbateFileName should end with .traj"
     assert not '/' in surfaceWithAdsorbateFileName, "surfaceWithAdsorbateFileName should not contain '/'"
     
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     
     DirOfInterests = WORKING_DIRECTORY.split('/')[-1]
     
@@ -250,6 +255,7 @@ def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure
             mySurfacePath = os.path.join(WORKING_DIRECTORY, mySurfacePath)
         mySurface = read(mySurfacePath)
     except:
+        # time.sleep(60)
         return f"Invalid input atoms directory: {mySurfacePath}. make sure to supply either absolute path, or relative path starting with './{DirOfInterests}'. Please check the path in canvas and try again."
 
     
@@ -258,6 +264,7 @@ def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure
             adsorbatePath = os.path.join(WORKING_DIRECTORY, adsorbatePath)
         myAdsorbate = read(adsorbatePath)
     except:
+        # time.sleep(60)
         return f"Invalid input atoms directory: {adsorbatePath}. make sure to supply either absolute path, or relative path starting with './{DirOfInterests}'. Please check the path in canvas and try again."
     
     # Load the adsorbate structure
@@ -282,7 +289,7 @@ def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure
     write(absPath, mySurface)
     
     relaPath = absPath.split(f'{DirOfInterests}/')[-1]
-    
+    # time.sleep(60)
     return f"Surface with adsorbate saved at {relaPath}"
 
 @tool
@@ -292,7 +299,7 @@ def write_script(
 ) -> Annotated[str, "Path of the saved document file."]:
     """Save the quantum espresso input script to the specified file path"""
     ## Error when '/' in the content, manually delete
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
 
     os.makedirs(WORKING_DIRECTORY, exist_ok=True)
     path = os.path.join(WORKING_DIRECTORY, f'{file_name}')
@@ -305,6 +312,7 @@ def write_script(
         file.write(content)
     
     os.environ['INITIAL_FILE'] = file_name
+    # time.sleep(60)
     return f"Initial file is created named {file_name}"
 
 
@@ -344,10 +352,11 @@ def write_QE_script_w_ASE(
     pseudopotentials = {}
     for element, pseudo in zip(listofElements, ppfiles):
         if not os.path.exists(os.path.join("/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/all_lda_pbe_UPF", pseudo)):
+            # time.sleep(60)
             return f"Invalid pseudopotential file: {pseudo}. Make sure to supply the correct pseudopotential file name."
         pseudopotentials[element] = pseudo
     
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     
     DirOfInterests = WORKING_DIRECTORY.split('/')[-1]
     
@@ -412,6 +421,7 @@ def write_QE_script_w_ASE(
     job_list = list(set(old_job_list + job_list))
     CANVAS.write(destiJobList,job_list, overwrite=True)
     
+    # time.sleep(60)
     return f"Quantum Espresso input script is written to {filename}"
 
 @tool
@@ -421,7 +431,7 @@ def write_LAMMPS_script(
 ) -> Annotated[str, "Path of the saved document file."]:
     """Save the LAMMPS input script to the specified file path"""
     ## Error when '/' in the content, manually delete
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     
     os.makedirs(WORKING_DIRECTORY, exist_ok=True)
     path = os.path.join(WORKING_DIRECTORY, f'{file_name}')
@@ -444,18 +454,24 @@ def write_LAMMPS_script(
     job_list = list(set(old_job_list + job_list))
     CANVAS.write('ready_to_run_job_list',job_list, overwrite=True)
         
+    # time.sleep(60)
     return f"Initial file is created named {file_name}"
 
 @tool
 def find_classical_potential(element: str) -> str:
     """Return classical potential file path for given element symbol."""
+    # time.sleep(60)
     return f'The classcial potential file for {element} is located at /nfs/turbo/coe-venkvis/ziqiw-turbo/mint-PD/PD/EAM/Li_v2.eam.fs'
 
 @tool
 def find_pseudopotential(element: str) -> str:
     """Return the pseudopotential file path for given element symbol."""
     spList = []
-    pseudo_dir = os.environ.get("PSEUDO_DIR")
+    pseudo_dir = var.OTHER_GLOBAL_VARIABLES["PSEUDO_DIR"]
+    if pseudo_dir is None:
+        print("find_pseudopotential tool faulty! please terminate the calculation!")
+        while(1):
+            time.sleep(60)
     for roots, dirs, files in os.walk(f'{pseudo_dir}'):
         for file in files:
             # if element == file.split('.')[0].split('_')[0].capitalize():
@@ -467,8 +483,10 @@ def find_pseudopotential(element: str) -> str:
         for sp in spList:
             ans += f'{sp}\n'
         ans += f'under {pseudo_dir}'
+        # time.sleep(60)
         return ans
     else:
+        # time.sleep(60)
         return f"Could not find pseudopotential for {element}"
 
 @tool
@@ -482,14 +500,14 @@ def generate_convergence_test(input_file_name: Annotated[str, "Name of the templ
     # kspacing = [0.6, 0.8, 1.0]
     # ecutwfc = [10, 20, 30]
     
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     input_file = os.path.join(WORKING_DIRECTORY, input_file_name)
     # Read the atom object from the input script
     try:
         atom = read(input_file)
     except:
-        INITIAL_FILE = os.environ.get("INITIAL_FILE")
-        return f"Invalid input file, do you want to use {INITIAL_FILE} as the input file?"
+        # time.sleep(60)
+        return f"Invalid input file, please inspect CANVAS and select the correct template file."
     
     cell = atom.cell
     ecutwfc_max = max(ecutwfc)
@@ -579,7 +597,8 @@ def generate_convergence_test(input_file_name: Annotated[str, "Name of the templ
     job_list = list(set(old_job_list + job_list))
     CANVAS.write('ready_to_run_job_list',job_list, overwrite=True)
     CANVAS.write('jobs_K_and_ecut',job_list_dict)
-    return f"Job list is saved scucessfully, continue to submit the jobs"
+    # time.sleep(60)
+    return f"Job list is saved scucessfully. Please tell the supervisor in your response that convergence job has generated sucessfully, please continue to submit the jobs"
 
 @tool
 def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int, stepSize:float=0.025):
@@ -596,14 +615,14 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int, stepSize:
     # CANVAS.write('job_list', [], overwrite=True)
     CANVAS.canvas['jobs_K_and_ecut'] = {}
     
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     input_file = os.path.join(WORKING_DIRECTORY, input_file_name)
     prefix = input_file_name.split('.')[0]
     # Read the atom object from the input script
     try:
         atom = read(input_file)
     except:
-        INITIAL_FILE = os.environ.get("INITIAL_FILE")
+        # time.sleep(60)
         return f"Invalid input file, try inspect the shared CANVAS and use the inital pwi file as the input file"
     
     job_list = []
@@ -657,6 +676,7 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int, stepSize:
     job_list = list(set(old_job_list + job_list))
     CANVAS.write('ready_to_run_job_list',job_list, overwrite=True)
     
+    # time.sleep(60)
     return f"Job list is saved scucessfully, continue to submit the jobs. Files of interest are {job_list}"
 
 ###################################### DFT POST-PROCESSING TOOLS ######################################
@@ -669,10 +689,11 @@ def get_convergence_suggestions(
     "Get suggestions on how to resolve issues for a certain job, i.e. converge or not accurate enough."
     outFile = filename + ".pwo"
     errFile = filename + ".err"
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     # WORKING_DIRECTORY = "/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/out"
     
-    config = load_config(os.path.join('./config', "default.yaml"))
+    # config = load_config(os.path.join('./config', "default.yaml"))
+    config = var.OTHER_GLOBAL_VARIABLES
     # llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     workerllm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # llm = ChatAnthropic(model="claude-3-5-sonnet-20241022", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
@@ -694,7 +715,7 @@ def get_convergence_suggestions(
             with open(os.path.join(WORKING_DIRECTORY, myfile),"r") as file:
                 content = file.read()
             
-            task_formatted = f"{content}\n I have a question about the DFT calculation related to the file above: {question}. Please think about what could be the reason, and give me suggestions to address it."
+            task_formatted = f"{content}\n I have a question about the DFT calculation related to the file above: {question}. Please think about what could be the reason, and give me suggestions to address it. Never give suggestion to lower the accuracy of the calculation, such as loosen the convergence threshold."
             
             # for agent_response in dft_reader_agent.stream({"messages": [("user", task_formatted)]}, {"configurable": {"thread_id": thread_id}, "recursion_limit": 1000}):
             #     agent_response = next(iter(agent_response.values()))
@@ -715,19 +736,21 @@ Please use the format: parameterX: suggestionX, reasonX; parameterY: suggestionY
             print(agent_response.content + "\n\n")
             
     if finalSuggestion == "":
+        # time.sleep(60)
         return f"Job {filename} has no related files, please check the job list and make sure the job is finished."
         
-    finalSuggestion += "Please check the suggestions above and come up with a plan to fix the issue."
+    finalSuggestion += "Please check the suggestions above and come up with a plan to fix the issue. Never take suggestions that will lower the accuracy of the calculation."
+    # time.sleep(60)
     return finalSuggestion
         
 
 @tool
-def calculate_formation_E(slabFilePath: Annotated[str, "the slab calculation output file path"],
-                          adsorbateFilePath: Annotated[str, "the adsorbate calculation output file path"],
-                          systemFilePath: Annotated[str, "the slab with adsorbate calculation output file path"]
+def calculate_formation_E(slabFilePath: Annotated[str, "the slab calculation file name, ending in pwi"],
+                          adsorbateFilePath: Annotated[str, "the adsorbate calculation file name, ending in pwi"],
+                          systemFilePath: Annotated[str, "the slab with adsorbate calculation file name, ending in pwi"],
                           ):
     """using the energies of the slab, adsorbate, and slab with adsorbate, calculate the formation energy of the adsorbate on the slab. """
-    working_directory = os.environ.get("WORKING_DIR")
+    working_directory = var.my_WORKING_DIRECTORY
     slabFilePath = os.path.join(working_directory, slabFilePath + '.pwo')
     adsorbateFilePath = os.path.join(working_directory, adsorbateFilePath + '.pwo')
     systemFilePath = os.path.join(working_directory, systemFilePath + '.pwo')
@@ -748,6 +771,7 @@ def calculate_formation_E(slabFilePath: Annotated[str, "the slab calculation out
     
     formationEnergy = systemEnergy - slabEnergy * NslabInSystem - adsorbateEnergy
     
+    # time.sleep(60)
     return f"The formation energy of the adsorbate on the slab is {formationEnergy} eV"
 
 @tool
@@ -759,7 +783,7 @@ def calculate_lc(jobFileIdx: Annotated[List[int], "indexs of files in the finish
     for i in jobFileIdx:
         assert isinstance(i, int), "jobFileIdx should be a list of index of files of interest"
     
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     job_list = CANVAS.canvas.get('finished_job_list', []).copy()
     job_list = np.array(job_list, dtype=str)[jobFileIdx]
     print(f"actual job list: {job_list}")
@@ -771,6 +795,7 @@ def calculate_lc(jobFileIdx: Annotated[List[int], "indexs of files in the finish
         try:
             atom = read(os.path.join(WORKING_DIRECTORY, job+'.pwo'))
         except:
+            # time.sleep(60)
             return f"Job {job} is not finished or failed."
         volume_list.append(atom.get_volume())
         energy_list.append(atom.get_potential_energy())
@@ -808,6 +833,7 @@ def calculate_lc(jobFileIdx: Annotated[List[int], "indexs of files in the finish
     with open(json_file, "w") as file:
         json.dump(lc_dict, file)
 
+    # time.sleep(60)
     return f'The lattice constant is {lc}'
 
 @tool
@@ -843,6 +869,7 @@ def get_bulk_modulus(
     v, e, B = eos.fit()
     bulk_modulus = B / kJ * 1.0e24
 
+    # time.sleep(60)
     return bulk_modulus
 
 
@@ -873,6 +900,7 @@ def get_lattice_constant(
     print(f'{input_file} lattice constant is {lc}')
     with open(os.path.join(working_directory,input_file.split('.')[0]+'.out'),'w') as file:
         file.write(f'\n# {input_file} Lattice constant is {lc}')
+    # time.sleep(60)
     return lc
 
 @tool
@@ -884,7 +912,7 @@ def get_kspacing_ecutwfc(jobFileIdx: Annotated[List[int], "indexs of files in th
         threshold: float , the threshold mev/atom to determine the convergence
     output: str, the kspacing and ecutwfc used in the production
     '''
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     
     assert isinstance(jobFileIdx, list), "jobFileIdx should be a list"
     for i in jobFileIdx:
@@ -923,11 +951,14 @@ def get_kspacing_ecutwfc(jobFileIdx: Annotated[List[int], "indexs of files in th
     print(f"successfully read {len(kspacing)} kspacing and {len(ecutwfc)} ecutwfc")
     
     if len(set(kspacing)) == 1 and len(set(ecutwfc)) > 1:
-        return f"Only one kspacing is found, the rest of the jobs seems unfinished or not converged. Please check jobs with other kspacing"
+        # time.sleep(60)
+        return f"Only one kspacing is found, the rest of the jobs seems unfinished or not converged. DO NOT infer optimal parameters from converged jobs. Please regenerate the convergence test with finer kspacing. Also, adjust some other settings may help (regenerating template script is then needed). Remember, you NEED TO REDO the convergence test (tell the supervisor in your response that new convergence test need to be done and you've already generated the script)."
     if len(set(ecutwfc)) == 1 and len(set(kspacing)) > 1:
-        return f"Only one ecutwfc is found, the rest of the jobs seems unfinished or not converged. Please check jobs with other ecutwfc"
+        # time.sleep(60)
+        return f"Only one ecutwfc is found, the rest of the jobs seems unfinished or not converged. DO NOT infer optimal parameters from converged jobs. Please regenerate the convergence test with finer ecutwfc. Also, adjust some other settings may help (regenerating template script is then needed). Remember, you NEED TO REDO the convergence test (tell the supervisor in your response that new convergence test need to be done and you've already generated the script)."
     if len(set(kspacing)) == 1 and len(set(ecutwfc)) == 1:
-        return f"Only one job is good, the rest of the jobs seems unfinished or not converged."
+        # time.sleep(60)
+        return f"Only one job is good, the rest of the jobs seems unfinished or not converged. DO NOT infer optimal parameters from converged jobs. Please regenerate the convergence test with finer kspacing and ecutwfc. Also, adjust some other settings may help (regenerating template script is then needed). Remember, you NEED TO REDO the convergence test (tell the supervisor in your response that new convergence test need to be done and you've already generated the script)."
         
     convergence_df = pd.DataFrame({'job':goodJob,'kspacing':kspacing, 'ecutwfc':ecutwfc, 'energy':energy_list})
     ## Save the convergence test result if file exist then append to it
@@ -963,6 +994,7 @@ def get_kspacing_ecutwfc(jobFileIdx: Annotated[List[int], "indexs of files in th
     elif finnerKspacing:
         ans += f"\nHowever, the calculation is not converged, please consider redo the convergence test and using a finner kspacing"
     
+    # time.sleep(60)
     return ans
 
 ##################################################################################################
@@ -973,9 +1005,10 @@ def get_kspacing_ecutwfc(jobFileIdx: Annotated[List[int], "indexs of files in th
 def find_job_list() -> str:
     """Return the list of job files to be submitted."""
 
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
     
+    # time.sleep(60)
     return f'The files need to be submitted are {job_list}. Please continue to submit the job.'
 
 @tool
@@ -983,11 +1016,12 @@ def read_file(
     input_file: Annotated[str, "The file to be read."]
 ) -> Annotated[str, "read content"]:
     """read file content from the specified file path"""
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     ## Error when '/' in the content, manually delete
     path = os.path.join(WORKING_DIRECTORY, input_file)
     with open(path,"r") as file:
         content = file.read()
+    # time.sleep(60)
     return content
 
 @tool
@@ -1024,9 +1058,10 @@ echo "Job Ended at `date`"\n \
     ", "outputFilename": ""}}
     """
     if not isinstance(partition, str) or not isinstance(nnodes, int) or not isinstance(ntasks, int) or not isinstance(runtime, str):
+        # time.sleep(60)
         return "Invalid input, please check the input format"
     # craete the json file if it does not exist, otherwise load it
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
 
     new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 48, "runtime": 2800, "submissionScript": submissionScript, "outputFilename": outputFilename}}
     
@@ -1037,6 +1072,7 @@ echo "Job Ended at `date`"\n \
     
     add_to_database(new_resource_dict, db_file)
     
+    # time.sleep(60)
     return f"Resource suggestion for {qeInputFileName} saved scucessfully"
 
 
@@ -1045,22 +1081,15 @@ def submit_and_monitor_job(
     jobType: Annotated[str, "The type of job to be submitted, e.g. DFT, LAMMPS"]
     ) -> str:
     '''
-    Submit jobs in the job list to supercomputer, return the location of the output file once the job is done
+    Submit jobs in the job list to supercomputer, return the location of the output file once the job is done. Do not call this tool until you added the resource suggestion.
     '''
     
     # check if resource_suggestions.json exist
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     resource_suggestions = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
     if not os.path.exists(resource_suggestions):
+        # time.sleep(60)
         return "Resource suggestion file not found, please use the add_resource_suggestion tool to add the resource suggestion"
-    
-    print("checking pysqa prerequisites...")
-    # check if slurm.sh and queue.yaml exist in the working directory
-    if not os.path.exists(os.path.join(WORKING_DIRECTORY, "slurm.sh")) or not os.path.exists(os.path.join(WORKING_DIRECTORY, "queue.yaml")):
-        print("Creating pysqa prerequisites...")
-        create_pysqa_prerequisites(WORKING_DIRECTORY)
-    
-    qa = QueueAdapter(directory=WORKING_DIRECTORY)
         
     # job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
     job_list = []
@@ -1100,9 +1129,22 @@ def submit_and_monitor_job(
     ## Check resource key is valid
     for job in job_list:
         if job not in resource_dict.keys():
+            # time.sleep(60)
             return f"Resource suggestion for {job} is not found, please use the add_resource_suggestion tool to add the resource suggestion"
     
+    if len(job_list) == 0:
+        # time.sleep(60)
+        return f"Resource suggestion not found, please use the add_resource_suggestion tool to add the resource suggestion."
+    
     print(f"loaded {len(job_list)} jobs from job_list.json, and {len(resource_dict)} resource suggestions from resource_suggestions.json")
+    
+    print("checking pysqa prerequisites...")
+    # check if slurm.sh and queue.yaml exist in the working directory
+    if not os.path.exists(os.path.join(WORKING_DIRECTORY, "slurm.sh")) or not os.path.exists(os.path.join(WORKING_DIRECTORY, "queue.yaml")):
+        print("Creating pysqa prerequisites...")
+        create_pysqa_prerequisites(WORKING_DIRECTORY)
+    
+    qa = QueueAdapter(directory=WORKING_DIRECTORY)
     
     queueIDList = []
     notConvergedList = []
@@ -1111,6 +1153,7 @@ def submit_and_monitor_job(
             
             ## Check if the input file exists
             if not os.path.exists(os.path.join(WORKING_DIRECTORY, inputFile)):
+                # time.sleep(60)
                 return f"Input file {inputFile} does not exist, please use the find job list tool to submit the file in the job list"
             print("Generating batch script...")
 
@@ -1143,6 +1186,7 @@ def submit_and_monitor_job(
             )
             
             if job_id is None:
+                # time.sleep(60)
                 return "Job submission failed"
 
             queueIDList.append(job_id)
@@ -1290,18 +1334,26 @@ def submit_and_monitor_job(
     
     notConvergedListString = ""
     
+    numberOfSucc = 0
     for job in job_list:
         try:
             # temporay disable the read function to avoid the calculation
             tmp = read(os.path.join(WORKING_DIRECTORY, job + '.pwo'))
             _ = tmp.get_potential_energy()
             print(f"Job {job} has finished")
+            numberOfSucc += 1
         except:
             notConvergedListString += job + ", "
     
     if notConvergedListString != "":
         notConvergedListString = "However, the following jobs did not converge: " + notConvergedListString
-            
+    
+    # if all job failed
+    if numberOfSucc == 0:
+        # time.sleep(60)
+        return f"All jobs failed. Please regenerate the convergence test with finer kspacing and ecutwfc. Also, adjust some other settings may help (regenerating template script is then needed). Tell the supervisor in your response that new convergence test need to be regenerated and calculated."
+    
+    # time.sleep(60)
     return f"All job in job_list has finished. {notConvergedListString}please check the output file in the {WORKING_DIRECTORY}"
 
 @tool
@@ -1310,7 +1362,7 @@ def submit_single_job(
 ) -> str:
     '''Submit a single job to supercomputer, return the location of the output file once the job is done'''
     print("checking pysqa prerequisites...")
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     # check if slurm.sh and queue.yaml exist in the working directory
     if not os.path.exists(os.path.join(WORKING_DIRECTORY, "slurm.sh")) or not os.path.exists(os.path.join(WORKING_DIRECTORY, "queue.yaml")):
         print("Creating pysqa prerequisites...")
@@ -1327,6 +1379,7 @@ def submit_single_job(
     ## Check resource key is valid
     
     if inputFile not in resource_dict.keys():
+        # time.sleep(60)
         return f"Resource suggestion for {inputFile} is not found, please use the add_resource_suggestion tool to add the resource suggestion"
     
 
@@ -1336,12 +1389,14 @@ def submit_single_job(
 
     ## Check if the input file exists
     if not os.path.exists(os.path.join(WORKING_DIRECTORY, inputFile)):
+        # time.sleep(60)
         return f"Input file {inputFile} does not exist, please use the find job list tool to submit the file in the job list"
     print("Generating batch script...")
 
     ## Check if the output file exists 
     if os.path.exists(os.path.join(WORKING_DIRECTORY, f"{inputFile}.pwo")):
         ## Supervisor sometimes ask to submit the job again, so we need to check if the output file exists
+        # time.sleep(60)
         return f"Output file {inputFile}.pwo already exists, the calculation is done"
         
         
@@ -1370,6 +1425,7 @@ echo "Job Ended at `date`"
         )
         
     if job_id is None:
+        # time.sleep(60)
         return "Job submission failed"
 
     queueIDList.append(job_id)
@@ -1394,6 +1450,7 @@ echo "Job Ended at `date`"
         
     print(f"Job has finished")
 
+    # time.sleep(60)
     return f"Job has finished, please check the output file"   
 
 @tool
@@ -1405,7 +1462,7 @@ def read_energy_from_output(jobFileIdx: Annotated[List[int], "indexs of files in
     for i in jobFileIdx:
         assert isinstance(i, int), "jobFileIdx should be a list of index of files of interest"
     
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     # load job_list.jason
     job_list = CANVAS.canvas.get('finished_job_list', []).copy()
     job_list = np.array(job_list, dtype=str)[jobFileIdx]
@@ -1420,6 +1477,7 @@ def read_energy_from_output(jobFileIdx: Annotated[List[int], "indexs of files in
         # print(file_path)
         # Check if the output file exists
         if not os.path.exists(file_path):
+            # time.sleep(60)
             return f"Output file {output_file} does not exist, please check the job list"
         try:
             atoms = read(file_path)
@@ -1436,8 +1494,10 @@ def read_energy_from_output(jobFileIdx: Annotated[List[int], "indexs of files in
                         result += f"Job {job} did not converge\n"
                         break
                 if not notConverge:
+                    # time.sleep(60)
                     return f"Invalid output file {output_file} or calculation failed, please submit the {job} again."
             except:
+                # time.sleep(60)
                 return f"Invalid output file {output_file} or calculation failed, please submit the {job} again."
         result += f"Energy read from {job} is {atoms.get_potential_energy()}.\n"
         # print(result)
@@ -1448,6 +1508,7 @@ def read_energy_from_output(jobFileIdx: Annotated[List[int], "indexs of files in
     # atoms = read(file_path)
     # return f"Energy read from job {input_file} is {atoms.get_potential_energy()}"
         
+    # time.sleep(60)
     return result
 
 
@@ -1456,16 +1517,19 @@ def read_single_output(
     input_file: str
 ) -> str:
     '''Read the total energy from the file in job list and return it in a string'''
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     # load job_list.jason
     output_file = input_file + '.pwo'
     file_path = os.path.join(WORKING_DIRECTORY, output_file)
     # print(file_path)
     # Check if the output file exists
     if not os.path.exists(file_path):
+        # time.sleep(60)
         return f"Output file {output_file} does not exist, please check the job list"
     try:
         atoms = read(file_path)
     except:
+        # time.sleep(60)
         return f"Invalid output file {output_file} or calculation failed, please submit the {input_file} again."
+    # time.sleep(60)
     return f"Energy read from job {input_file} is {atoms.get_potential_energy()}"

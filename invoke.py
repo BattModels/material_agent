@@ -15,8 +15,9 @@ from src.planNexe2 import create_planning_graph as create_graph
 # from src.planNexeHighPlan import create_planning_graph as create_graph
 
 import time
-from src.utils import load_config, save_graph_to_file,check_config,initialize_database
+from src.utils import load_config, save_graph_to_file,initialize_database
 from src.myCANVAS import CANVAS
+from src import var
 
 
 if __name__ == "__main__":
@@ -90,19 +91,34 @@ if __name__ == "__main__":
     userMessage_9 = """
     Please find out the most perfered adsorbtion site and adsorbate orientation (up or down) for CO adsorbtion on Pt(111) surface with 1/4 coverage (2x2x4 supercell).
     """
-    userMessage_10 = """please find the adsorption energy difference between the most favorable configurations (different adsorbate orientations 0-180) at fcc site and
-    most favorable configuration (different adsorbate orientations 0-180) at ontop site for CO on Pt(111) surface with p(2x2) adsorbate overlayer (1/4 coverage). 
-    Literatures suggest that ontop site is 0.24 eV less stable than fcc site when using PBE xc. 
+    userMessage_10 = """please find the adsorption energy difference between the most favorable configurations (different adsorbate orientations 0, 90, 180) at fcc site and
+    most favorable configuration (different adsorbate orientations 0, 90, 180) at ontop site for CO on Pt(111) surface with p(2x2) adsorbate overlayer (1/4 coverage). 
+    Literatures suggest that ontop site is 0.45 eV less stable than fcc site when using LDA xc. 
     If your result is not within 10 percent of the literature, please find out possible reasons and resolve it."""
+    
     userMessage_11 = "I am trying to study adsorption of CO on Pt111 surface at fcc site. Job CO_Pt111_fcc_upright_k_0.3_ecutwfc_60.pwi did not converge, please figure out why and resolve the convergence issue."
+    
+    userMessage_12 = """please find the adsorption energy difference between the most favorable configurations (different adsorbate orientations 0-180) at fcc site and
+    most favorable configuration (different adsorbate orientations 0, 90, 180) at ontop site for CO on Pt(111) surface with p(2x2) adsorbate overlayer (1/4 coverage). 
+    Please use Bayesian Error Estimation Functional (BEEF) with PBE to analyze the result.
+    Literatures suggest that ontop site is 0.24 eV less stable than fcc site when using PBE xc."""
+    
+    userMessage_13 = "please keep give me your current working directory with the right tool until I say stop."
     
     testMessage = '''
     please generate a single input script for Li BCC structure with kspacing 0.1 and ecutwfc 40
     '''
     
     config = load_config(os.path.join('./config', "default.yaml"))
-    check_config(config)
-    WORKING_DIRECTORY = os.environ.get("WORKING_DIR")
+    # check_config(config)
+    
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+    # print N number of '#', where n = len("##  Working directory: " + WORKING_DIRECTORY + " ##")
+    print("#" * (len("##  Working directory: " + WORKING_DIRECTORY + " ##")))
+    print("##  Working directory: " + WORKING_DIRECTORY + " ##")
+    print("#" * (len("##  Working directory: " + WORKING_DIRECTORY + " ##")))
+    
+    assert WORKING_DIRECTORY is not None, "Please set the WORKING_DIRECTORY var"
     
     CANVAS.set_working_directory(WORKING_DIRECTORY)
     # CANVAS.canvas["finished_job_list"] = ["CO_Pt111_fcc_upright_k_0.3_ecutwfc_60.pwi"]
