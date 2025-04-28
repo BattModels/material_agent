@@ -33,7 +33,7 @@ dft_agent_prompt = """
                 inspect and read the CANVAS with suitable tools to see what's available.
                 create valid input structure for the system of interest with the right tool.
                 Find the correct pseduopotential filename using the tool provided (do not report the absolute path).
-                Generate the quantum espresso input file with proper ASE tool.
+                Generate the quantum espresso input file with proper ASE tool. Pay attention to calculation type and funtional choice.
                 Always generate conventional cell with ibrav=0 and do not use celldm and angstrom at the same time.
                 If the system involves hubbard U correction, specify starting magnetization in SYSTEM card and hubbard U parameters in HUBBARD card, and use the pre-defined hubbard correction tool.
                 Save all the files in pwi format and into job list and report to supervisor to let HPC Agent to submit the job. 
@@ -59,6 +59,7 @@ dft_agent_prompt = """
                 14. Do not report absolute path.
                 15. when calculating formation energies, convergence test on DFT parameters should be done on one representitive system with both the adsorbate and the surface.
                 16. If a job is having issue, i.e. didn't converge or not accurate enough, use the right tool to get suggestions on how to modify the input file to fix the issue.
+                17. when generating BEEF input files, 
             """
 
 dft_reader_agent_prompt = """

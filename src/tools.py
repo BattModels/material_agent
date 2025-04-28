@@ -1,5 +1,7 @@
 from copy import deepcopy
 from matplotlib import pyplot as plt
+from matplotlib import rcParams
+import pandas as pd
 from math import e
 from src.utils import *
 from src.myCANVAS import CANVAS
@@ -161,7 +163,8 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
                                         n_fixed_layers: Annotated[int, "typically 3. Number of fixed layers in the slab"] = 3
                                         ):
     """Generate a surface structure and get the available adsorption sites."""
-    a_dict = {'Pt': 4.0}
+    a_dict = {'Pt': 3.92}
+    supercell_dim[-1] = 6
     surface_dict = generate_surface_structures(
         species_list=[species],
         crystal_structures={species: crystal_structures},
@@ -321,28 +324,37 @@ def write_QE_script_w_ASE(
     listofElements: Annotated[List[str], "List of distinct element symbols in the unit cell"],
     ppfiles: Annotated[List[str], "List of pseudopotential files in the order of the elements"],
     filename: Annotated[str, "Name of the Quantum Espresso input file, end with .pwi"],
-    inputAtomsDir: Annotated[str, "Directory of the input Atoms object"],
-    calculation: Annotated[str, "Type of calculation to perform, e.g. 'scf' or 'relax'"],
+    inputAtomsDir: Annotated[str, "Directory of the input Atoms object (i.e. traj or xyz), or the name of the job that contains the relaxed structure (i.e. xxxx.pwi)."],
+    ensembleCalculation: Annotated[bool, "Whether this calculation is ensemble calculation"],
+    calculation: Annotated[str, "Type of calculation to perform, e.g. 'scf', 'relax', or 'ensemble'. Set to 'ensemble', when running ensemble calculation"],
     restart_mode: Annotated[Literal['from_scratch', 'restart'], "Restart mode"],
     prefix: Annotated[str, "Prefix for the output files"],
     disk_io: Annotated[Literal['none', 'minimal', 'nowf', 'low', 'medium', 'high'], "Disk I/O level"],
     ibrav: Annotated[int, "Bravais-lattice index. Optional only if space_group is set."],
     nat: Annotated[int, "Number of atoms in the unit cell"],
     ntyp: Annotated[int, "Number of atom types in the unit cell"],
-    ecutwfc: Annotated[float, "kinetic energy cutoff (Ry) for wavefunctions"],
-    ecutrho: Annotated[float, "Kinetic energy cutoff (Ry) for charge density and potential"],
+    ecutwfc: Annotated[float, "kinetic energy cutoff (Ry) for wavefunctions, typically between 30-100 Ry"],
+    ecutrho: Annotated[float, "Kinetic energy cutoff (Ry) for charge density and potential. typically ecutwfc*4"],
     occupations: Annotated[Literal['smearing', 'tetrahedra', 'tetrahedra_lin', 'tetrahedra_opt', 'fixed', 'from_input'], "Occupation type"],
-    smearing: Annotated[Literal['gaussian', 'methfessel-paxton', 'marzari-vanderbilt', 'fermi-dirac'], "Smearing type"],
+    smearing: Annotated[Literal['gaussian', 'methfessel-paxton', 'marzari-vanderbilt', 'fermi-dirac'], "Smearing type, please start with methfessel-paxton first"],
     degauss: Annotated[float, "value of the gaussian spreading (Ry) for brillouin-zone integration in metals."],
     conv_thr: Annotated[float, "Convergence threshold for self-consistent loop"],
     electron_maxstep: Annotated[int, "Maximum number of SCF iterations"],
     kspacing: Annotated[float, "K-point spacing (in Angstrom^-1)"],
+    input_dft: Annotated[Literal['LDA', 'PBE', 'BEEF-vdW'], "DFT functional. You'll be told which functional to use"],
     ready_to_run_job: Annotated[bool, "True if the job is intended to be run directly without further modification, False if this file is intended to be used to generate other files"] = False,
-    additional_input: Annotated[Dict[str, Any], "Additional input parameters to be added to the input script. Do not use unless you know what you are doing."] = {},
+    additional_input: Annotated[Dict[str, Any], "Additional input parameters to be added to the input script. Should be in the format of a flat dict, {'input_parameter_1': parameter_1, 'input_parameter_2': parameter_2, ...}, parameter_x remain in their native type, str, float, bool, etc. Do not use unless you know what you are doing."] = {},
 ):
-    """Write a Quantum Espresso input script using ASE. Bool value have no quote around them."""
+    """Write a Quantum Espresso input script using ASE. Bool value have no quote around them. For smearing start with methfessel-paxton. For ecutwfc choose between 30-100 Ry. When asked to run ensemble calculation, set calculation to 'ensemble'"""
 
     assert isinstance(additional_input, dict), "additional_input must be a dictionary"
+    
+    if ensembleCalculation:
+        assert calculation == 'ensemble', "When running ensemble calculation, please set calculation to 'ensemble'"
+    
+    if calculation == 'ensemble':
+        assert inputAtomsDir.endswith('.pwi'), "inputAtomsDir must be a .pwi file with relaxed structure when running ensemble calculation with BEEF-vdW functional"
+        assert input_dft == 'BEEF-vdW', "input_dft must be 'BEEF-vdW' when running ensemble calculation"
     
     disk_io = 'none'
     
@@ -360,13 +372,20 @@ def write_QE_script_w_ASE(
     
     DirOfInterests = WORKING_DIRECTORY.split('/')[-1]
     
+    tmpinputAtomsDir = inputAtomsDir
     try:
-        if inputAtomsDir.startswith(DirOfInterests) or inputAtomsDir.startswith(f'./{DirOfInterests}') or inputAtomsDir.startswith('/nfs'):
-            atoms = read(inputAtomsDir)
-        else:
-            atoms = read(os.path.join(WORKING_DIRECTORY, inputAtomsDir))
+        if not inputAtomsDir.startswith(DirOfInterests) and not inputAtomsDir.startswith(f'./{DirOfInterests}') and not inputAtomsDir.startswith('/nfs'):
+            inputAtomsDir = os.path.join(WORKING_DIRECTORY, inputAtomsDir)
+            
+        if inputAtomsDir.endswith('.pwi'):
+            inputAtomsDir += '.pwo'
+        atoms = read(inputAtomsDir)
     except:
-        raise ValueError(f"Invalid input atoms directory: {inputAtomsDir}. make sure to supply either absolute path, or relative path starting with './{DirOfInterests}'. Please check the path in canvas and try again.")
+        # check if file exists
+        if os.path.exists(inputAtomsDir):
+            raise ValueError(f"Job {tmpinputAtomsDir} failed or did not converge. Please only use converged jobs.")
+        else:
+            raise ValueError(f"Invalid input atoms directory: {tmpinputAtomsDir}. make sure to supply either absolute path, or relative path starting with './{DirOfInterests}'. Please check the path in canvas and try again.")
     
     filenameWDir = os.path.join(WORKING_DIRECTORY, filename)
     
@@ -403,6 +422,7 @@ def write_QE_script_w_ASE(
                 'degauss': degauss,
                 'conv_thr': conv_thr,
                 'electron_maxstep': electron_maxstep,
+                'input_dft': input_dft,
                 **additional_input
           },
           format='espresso-in',
@@ -491,8 +511,8 @@ def find_pseudopotential(element: str) -> str:
 
 @tool
 def generate_convergence_test(input_file_name: Annotated[str, "Name of the template quantum espresso input file"],
-                              kspacing:Annotated[list[float], "List of kspacing to be tested"],
-                              ecutwfc:Annotated[list[int], "List of ecutwfc to be tested"]
+                              kspacing:Annotated[list[float], "List of kspacing to be tested. Typically between 0.1-0.4"],
+                              ecutwfc:Annotated[list[int], "List of ecutwfc to be tested. Typically between 40-100"],
                               ):
     '''
     Generate the convergence test input scripts for quantum espresso calculation using another quantum espresso input file as a template and save the job list. 
@@ -539,7 +559,7 @@ def generate_convergence_test(input_file_name: Annotated[str, "Name of the templ
                 if 'ecutwfc' in line:
                     lines[i] = f'    ecutwfc = {ecutwfc_max},\n'
                 if 'ecutrho' in line:
-                    lines[i] = f"    ecutrho = {ecutwfc_max*8},\n"
+                    lines[i] = f"    ecutrho = {ecutwfc_max*4},\n"
                 
                 ## Find the kpoints line
                 if 'K_POINTS' in line:
@@ -577,7 +597,7 @@ def generate_convergence_test(input_file_name: Annotated[str, "Name of the templ
                 if 'ecutwfc' in line:
                     lines[i] = f'    ecutwfc = {e},\n'
                 if 'ecutrho' in line:
-                    lines[i] = f"    ecutrho = {e*8},\n"
+                    lines[i] = f"    ecutrho = {e*4},\n"
                 
                 ## Find the kpoints line
                 if 'K_POINTS' in line:
@@ -653,7 +673,7 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int, stepSize:
             if 'ecutwfc' in line:
                 lines[i] = f"    ecutwfc = {ecutwfc},\n"
             if 'ecutrho' in line:
-                lines[i] = f"    ecutrho = {ecutwfc*8},\n"
+                lines[i] = f"    ecutrho = {ecutwfc*4},\n"
             if 'CELL_PARAMETERS' in line:
                 lines[i+1] = f"{cell[0][0]*scale} {cell[0][1]*scale} {cell[0][2]*scale}\n"
                 lines[i+2] = f"{cell[1][0]*scale} {cell[1][1]*scale} {cell[1][2]*scale}\n"
@@ -985,17 +1005,131 @@ def get_kspacing_ecutwfc(jobFileIdx: Annotated[List[int], "indexs of files in th
         
     print("saved the chosen kspacing and ecutwfc")
     
-    ans = f"Please use kspacing {k_chosen} and ecutwfc {ecutwfc_chosen} for the production calculation"
     
-    if finnerEcut and finnerKspacing:
-        ans += f"\nHowever, the calculation is not converged, please consider redo the convergence test and using a finner ecutwfc and finner kspacing"
-    elif finnerEcut:
-        ans += f"\nHowever, the calculation is not converged, please consider redo the convergence test and using a finner ecutwfc"
-    elif finnerKspacing:
-        ans += f"\nHowever, the calculation is not converged, please consider redo the convergence test and using a finner kspacing"
-    
+    if finnerEcut and ecutwfc_chosen < 120 and finnerKspacing and k_chosen > 0.1:
+        ans = "Only the calculation with the finest settings is finished. Please regenerate the convergence test with finner ecutwfc and finner kspacing. Do not infer converged settings yourself!"
+        # ans += f"\nHowever, the calculation is not converged, please consider redo the convergence test and using a finner ecutwfc and finner kspacing"
+    elif finnerEcut and ecutwfc_chosen < 120:
+        ans = "Only calculations with the finest ecutwfc is finished. Please regenerate the convergence test with finner ecutwfc. Do not infer converged settings yourself!"
+    elif finnerKspacing and k_chosen > 0.1:
+        ans = "Only the calculation with the finest kspacing is finished. Please regenerate the convergence test with finner kspacing. Do not infer converged settings yourself!"
+    else:
+        ans = f"Please use kspacing {k_chosen} and ecutwfc {ecutwfc_chosen} for the production calculation"
     # time.sleep(60)
     return ans
+
+@tool
+def analyze_BEEF_result(
+    slabFilePath: Annotated[str, "the slab calculation file"],
+    adsorbateFilePath: Annotated[str, "the adsorbate calculation file"],
+    ontopFilePath: Annotated[str, "the slab with ontop adsorbate calculation file"],
+    fccFilePath: Annotated[str, "the slab with fcc adsorbate calculation file"],
+) -> str:
+    '''Read the BEEF output, calculate the abrosption energy and analyze the BEEF result'''
+    
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+    
+    DirOfInterests = WORKING_DIRECTORY.split('/')[-1]
+    
+    PathList = [slabFilePath, adsorbateFilePath, ontopFilePath, fccFilePath]
+    
+    for i in range(len(PathList)):
+        tmp = PathList[i]
+        try:
+            if not PathList[i].startswith(DirOfInterests) and not PathList[i].startswith(f'./{DirOfInterests}') and not PathList[i].startswith('/nfs'):
+                PathList[i] = os.path.join(WORKING_DIRECTORY, PathList[i]) + '.pwo'
+            _ = read(PathList[i])
+        except:
+            if os.path.exists(PathList[i]):
+                return f"{tmp} did not finish successfully."
+            return f"Invalid input atoms directory: {tmp}. make sure to supply either absolute path, or relative path starting with './{DirOfInterests}'. Please check the path in canvas and try again."
+
+    
+    ## Read energy
+    slab_e = read_BEEF_output(PathList[0])
+    if slab_e == "WrongCalc":
+        return f"Please run slab ensemble calculation using BEEF-vdW with relaxed slab structure! Do not proceed any further!"
+    adsorbate_e = read_BEEF_output(PathList[1])
+    if adsorbate_e == "WrongCalc":
+        return f"Please run adsorbate ensemble calculation using BEEF-vdW with relaxed adsorbate structure! Do not proceed any further!"
+    ontop_e = read_BEEF_output(PathList[2])
+    if ontop_e == "WrongCalc":
+        return f"Please run ontop ensemble calculation using BEEF-vdW with relaxed slab and adsorbate structure! Do not proceed any further!"
+    fcc_e = read_BEEF_output(PathList[3])
+    if fcc_e == "WrongCalc":
+        return f"Please run fcc ensemble calculation using BEEF-vdW with relaxed slab and adsorbate structure! Do not proceed any further!"
+    
+    ## Plot
+    try:
+        energy_dict = {}
+        energy_dict['clean'] = slab_e
+        energy_dict['CO'] = adsorbate_e
+        energy_dict['ontop_down'] = ontop_e
+        energy_dict['fcc_down'] = fcc_e
+        
+        fontsize=15
+        plot_settings = {
+            # "font.family": "times new roman",
+            "axes.labelsize": fontsize,
+            "axes.labelweight": "bold",
+            "xtick.labelsize": fontsize,
+            "ytick.labelsize": fontsize,
+            "xtick.major.size": 7,
+            "ytick.major.size": 7,
+            "xtick.major.width": 2.0,
+            "ytick.major.width": 2.0,
+            "xtick.direction": "in",
+            "ytick.direction": "in",
+            "font.size": fontsize,
+            "axes.linewidth": 2.0,
+            "lines.dashed_pattern": [5, 2.5],
+            "lines.markersize": 10,
+            "lines.linewidth": 2,
+            "lines.markeredgewidth": 1,
+            # "lines.markeredgecolor": "k",
+            "legend.fontsize": fontsize,
+            "legend.frameon": False,
+            'figure.figsize': [6, 6],
+        }
+
+        # Update rcParams with settings from JSON file
+        rcParams.update(plot_settings)
+        
+        df = pd.DataFrame(energy_dict)
+        df.to_csv('energies.csv', index=False)
+        ads_fcc = df['fcc_down'] - df['clean'] - df['CO']
+        ads_ontop = df['ontop_down'] - df['clean'] - df['CO']
+        # plot energy distribution
+        fig = plt.figure(figsize=(6, 5))
+        ax = fig.add_axes([0,0,1,1])
+        ax.hist(ads_fcc, bins=50, color='blue', alpha=0.7, label='FCC')
+        ax.axvline(ads_fcc.mean(), color='k', linestyle=':', linewidth=2, label='FCC mean')
+        ax.hist(ads_ontop, bins=50, color='red', alpha=0.7, label='Ontop')
+        ax.axvline(ads_ontop.mean(), color='k', linestyle='-.', linewidth=2, label='Ontop mean')
+        plt.legend()
+        plt.xlabel('Adsorption Energy (eV)')
+        plt.ylabel('Frequency')
+        plt.savefig('energy_distribution.png',dpi=300,bbox_inches='tight')
+    except:
+        print("Failed to plot the energy distribution.")
+
+    ## Formation
+    ontop_formation = ontop_e - slab_e - adsorbate_e
+    fcc_formation = fcc_e - slab_e - adsorbate_e
+
+    print(f"ontop formation energy: {ontop_formation.mean()} eV")
+    print(f"fcc formation energy: {fcc_formation.mean()} eV")
+    ## Formation Energy Difference
+    formation_energy_diff = ontop_formation - fcc_formation
+
+    ## Distribution of Formation energy differernce 
+    if formation_energy_diff.all() > 0:
+        result = f"fcc is more stable than ontop by average {formation_energy_diff.mean()} eV"
+    elif formation_energy_diff.all() < 0:
+        result = f"ontop is more stable than fcc by average {abs(formation_energy_diff.mean())} eV"
+    else:
+        result = f" {sum(formation_energy_diff>0)} xc functionals prefer fcc, {sum(formation_energy_diff<0)} xc functionals prefer ontop"
+    return result
 
 ##################################################################################################
 ##                                          HPC tools                                           ##
@@ -1351,7 +1485,7 @@ def submit_and_monitor_job(
     # if all job failed
     if numberOfSucc == 0:
         # time.sleep(60)
-        return f"All jobs failed. Please regenerate the convergence test with finer kspacing and ecutwfc. Also, adjust some other settings may help (regenerating template script is then needed). Tell the supervisor in your response that new convergence test need to be regenerated and calculated."
+        return f"All jobs failed. Please figure out why they failed, then regenerate the job. Tell the supervisor in your response that new runs, with problems resolved, need to be regenerated and calculated."
     
     # time.sleep(60)
     return f"All job in job_list has finished. {notConvergedListString}please check the output file in the {WORKING_DIRECTORY}"
@@ -1499,7 +1633,7 @@ def read_energy_from_output(jobFileIdx: Annotated[List[int], "indexs of files in
             except:
                 # time.sleep(60)
                 return f"Invalid output file {output_file} or calculation failed, please submit the {job} again."
-        result += f"Energy read from {job} is {atoms.get_potential_energy()}.\n"
+        result += f"Energy read from {job} is {atoms.get_potential_energy()} eV.\n"
         # print(result)
         time.sleep(1)
     print(result)

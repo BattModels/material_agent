@@ -281,8 +281,13 @@ def create_planning_graph(config: dict) -> StateGraph:
         You don't have to use all the members, nor all the capabilities of the members.
         This plan should involve individual tasks, that if executed correctly will yield the correct answer. Do not add any superfluous steps. 
         The result of the final step should be the final answer. Make sure that each step has all the information needed - do not skip steps.
-        Only generate structures needed for convergence test first. Once you determined the best parameters, generate the rest of the structures.
-        In the plan, you need to be clear what pseudopotential and xc to use for steps that need pseudopotential and xc.
+        
+        Runing ensemble calculation with BEEF-vdW functional and analyze the result can give you uncertainty information.
+        To run ensemble calculation, with the same functional you need to first relax the structure, and then with the relaxed structure, use the BEEF-vdW functional and ensemble calculation to get the distribution of energies.
+        
+        !!! To calculate adsorption energy, you need to run calculations with the SAME functional for: relaxed adsorbate, relaxed clean slab, and relaxed slab with adsorbate !!!
+        !!! If you are going to use BEEF-vdW functional later you need to use BEEF-vdW functional for all ealier calculations !!!
+        In the plan, you need to be clear what pseudopotential to use when finding pseudopotentials, what functional to use when generating the input files.
         
         If the plan is not empty, update the plan:
         Your objective was this:
@@ -303,8 +308,7 @@ def create_planning_graph(config: dict) -> StateGraph:
 <Requirements>:
     1.  Do not generate convergence test for all systems and all configurations.
     2.  Please only generate one batch of convergence test for the most complicated system using the most complicated configuration. 
-    3.  when trying to explore the configuration design space, try a couple of configurations first, and then refine the search based on the results.
-    4.  Do not touch the canvas unless you are reflecting.
+    3.  Do not touch the canvas unless you are reflecting.
         """
     )
     
@@ -349,6 +353,7 @@ def create_planning_graph(config: dict) -> StateGraph:
         generate_eos_test,
         read_energy_from_output,
         get_convergence_suggestions,
+        analyze_BEEF_result
         ]
     dft_agent = create_react_agent(workerllm, tools=dft_tools,
                                    state_modifier=dft_agent_prompt)   

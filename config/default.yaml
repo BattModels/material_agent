@@ -18,7 +18,7 @@ PSEUDO_DIR: '/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/all_lda_pbe_UPF'
 # PSEUDO_DIR: '/nfs/turbo/coe-venkvis/ziqiw-turbo/sssp'
 
 # Working directory
-WORKING_DIR: '/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/LDAProdNoReflecout'
-# WORKING_DIR: '/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/BEEFTestout'
+# WORKING_DIR: '/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/LDAProdNoReflecout'
+WORKING_DIR: '/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/BEEFtry3out'
 
 SAVE_DIALOGUE: 'True'

@@ -8,6 +8,9 @@ from langchain_core.runnables.graph import CurveStyle, MermaidDrawMethod, NodeSt
 import getpass
 import pandas as pd
 from src import var
+from ase.io import read
+import numpy as np
+
 def load_config(path: str):
     ## Load the configuration file
     with open(path) as f:
@@ -245,3 +248,38 @@ def add_to_database(resource_dict, db_file):
     # Commit and close the connection
     conn.commit()
     conn.close()
+    
+def read_BEEF_output(file_path: str):
+    """
+    Read the BEEF output file and extract relevant information.
+
+    Args:
+        file_path (str): Path to the BEEF output file.
+
+    Returns:
+        dict: Dictionary containing extracted information.
+        or error info
+    """
+    with open(file_path,'r') as f:
+        lines = f.readlines()
+    atoms = read(file_path)
+    reference = atoms.get_potential_energy()
+    start_index = 0
+    end_index = 0
+    for i,line in enumerate(lines):
+        if 'BEEFens 2000 ensemble energies' in line:
+            start_index = i + 1
+        if 'BEEF-vdW xc energy contributions' in line:
+            end_index = i - 2
+
+    if start_index == 0 or end_index == 0:
+        return "WrongCalc"
+    
+    energies = []
+    for i in range(start_index, end_index + 1):
+        line = lines[i].split()
+        energies.append(float(line[0])+reference)
+    
+    energies = np.array(energies)
+
+    return energies
