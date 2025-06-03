@@ -3,7 +3,7 @@ import os,yaml
 from xml.dom.minidom import Element
 from typing import Callable, List, Literal
 from pydantic import BaseModel
-from IPython.display import Image, display
+# from IPython.display import Image, display
 from langchain_core.runnables.graph import CurveStyle, MermaidDrawMethod, NodeStyles
 import getpass
 import pandas as pd

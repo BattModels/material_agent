@@ -124,6 +124,12 @@ def print_stream(s):
                     f.write(repr(message))
                     f.write("\n")
         else:
+            if hasattr(message, 'usage_metadata'):
+                var.TOKEN_USAGE.append(message.usage_metadata)
+                print(f"input_tokens: {message.usage_metadata['input_tokens']}, output_tokens: {message.usage_metadata['output_tokens']}")
+                if var.my_SAVE_DIALOGUE:
+                    with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+                        f.write(f"input_tokens: {message.usage_metadata['input_tokens']}, output_tokens: {message.usage_metadata['output_tokens']}\n")
             message.pretty_print()
             if var.my_SAVE_DIALOGUE:
                 with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
@@ -146,7 +152,7 @@ def supervisor_chain_node(state, chain, name):
     with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
         status = f.read()
     while status == "stop":
-        print(f"Calculation pause, supervisor is waiting")
+        print(f"Calculation pause, supervisor is waiting. cwd: {var.my_WORKING_DIRECTORY}")
         # wait for 5 second
         time.sleep(5)
         with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
@@ -179,7 +185,7 @@ def worker_agent_node(state, agent, name, past_steps_list):
     with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
         status = f.read()
     while status == "stop":
-        print(f"Calculation pause, {name} Agent is waiting")
+        print(f"Calculation pause, {name} Agent is waiting. cwd: {var.my_WORKING_DIRECTORY}")
         # wait for 5 second
         time.sleep(5)
         with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:

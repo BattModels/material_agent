@@ -50,7 +50,7 @@ def inspect_my_canvas():
     return CANVAS.inspect()
 
 @tool
-def read_my_canvas(key: str):
+def read_my_canvas(key: Annotated[str, "key"]):
     """Read a value from the working canvas"""
     # read a value from myCANVAS given a key
     return CANVAS.read(key)

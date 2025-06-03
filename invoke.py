@@ -93,7 +93,8 @@ if __name__ == "__main__":
     """
     userMessage_10 = """please find the adsorption energy difference between the most favorable configurations (different adsorbate orientations 0, 90, 180) at fcc site and
     most favorable configuration (different adsorbate orientations 0, 90, 180) at ontop site for CO on Pt(111) surface with p(2x2) adsorbate overlayer (1/4 coverage). 
-    Literatures suggest that ontop site is 0.45 eV less stable than fcc site when using LDA xc. 
+    Please use PBE pseudopotential and PBE exchange correlation function.
+    Literatures suggest that ontop site is 0.108 eV less stable than fcc site when using PBE xc. 
     If your result is not within 10 percent of the literature, please find out possible reasons and resolve it."""
     
     userMessage_11 = "I am trying to study adsorption of CO on Pt111 surface at fcc site. Job CO_Pt111_fcc_upright_k_0.3_ecutwfc_60.pwi did not converge, please figure out why and resolve the convergence issue."
@@ -196,7 +197,7 @@ if __name__ == "__main__":
         
         for s in graph.stream(
             {
-                "input": f"{userMessage_12}",
+                "input": f"{userMessage_10}",
                 "plan": [],
                 "past_steps": []
             }, llm_config):
