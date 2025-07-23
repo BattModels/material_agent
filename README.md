@@ -9,6 +9,18 @@
 
 It uses ASE and Quantum ESPRESSO to perform DFT calculations and is built on top of the Langgraph with Claude 3.5 and Claude 3.7 to enable agentic capabilities.
 
+## Sol27LC Benchmark Results
+The following figure shows the performance of DREAMS on the Sol27LC benchmark, which includes 27 different materials systems. 
+![Sol27LC Benchmark Results](./figures/sol27lc.png)
+
+
+## CO/Pt Puzzle Results
+
+The DREAMS framework has been tested on the CO/Pt puzzle, a well-known challenge in materials discovery that involves predicting the adsorption behavior of CO molecules on platinum surfaces. It has full capabilities to explore the potential configuration space. The following table shows the performance of DREAMS on the CO/Pt puzzle, which is a challenging test case for materials discovery.
+![CO/Pt Puzzle Results](./figures/copt.png)
+
+
+![BEEF Analysis](./figures/beef.png)
 
 ## How to Use
 1. Clone the repository:
