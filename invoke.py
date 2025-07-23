@@ -26,27 +26,25 @@ if __name__ == "__main__":
              'Fe (bcc)', 'Rh (fcc)', 'Ir (fcc)', 'Ni (fcc)'\
             , 'Pd (fcc)', 'Pt (fcc)', 'Cu (fcc)', 'Ag (fcc)', 'Au (fcc)', 'Al (fcc)', 'Pb (fcc)', 'C (dia)', 'Si (dia)', 'Ge (dia)', 'Sn (dia)']
     filelist = ['Li_bcc.in', 'Na_bcc.in', 'K_bcc.in', 'Si_dia.in', 'Pd_fcc.in', 'Ge_dia.in', 'Au_fcc.in', 'C_dia.in', 'Cu_fcc.in', 'Fe_bcc.in', 'Ca_fcc.in', 'Pb_fcc.in', 'W_bcc.in', 'Mo_bcc.in', 'Pt_fcc.in', 'Ag_fcc.in', 'Rh_fcc.in', 'Sr_fcc.in', 'Nb_bcc.in', 'Al_fcc.in', 'Rb_bcc.in', 'Ta_bcc.in', 'Ir_fcc.in', 'Sn_dia.in', 'Ba_bcc.in', 'V_bcc.in', 'Ni_fcc.in']
+    
+    structure = 'Li (bcc)'
+    # structure = 'Li (bcc)'
 
     ## Convergence Test
-    userMessage_1 = '''
-    You are going to do cenvergence test for Li BCC structure. Compute the the total energy for different kpoints based on kspacing 0.1,0.2 ,0.3 and 40,60,80 ecutwfc. Run the calculation through slurm and report the result.
+    userMessage_1 = f'''
+    You are going to do cenvergence test for {structure} structure, use initial lattice constant 3.451. Compute the the total energy for different kpoints based on kspacing 0.1,0.15,0.2,0.25 ,0.3 and 40,60,80,100,120 ecutwfc. Run the calculation through slurm and report the result.
     '''
 
-    userMessage_2 = '''
-    Based on previous result, calculate the lattice constant for Li BCC structure.
-
-    1. choose appropriate kpoints and ecutwfc.
-    2. Generate input script with different scale factor 
-    3. Submit the job through slurm
-    4. Calculate the lattice constant
+    userMessage_2 = f'''
+    Based on previous result, Choose appropriate kpoints and ecutwfc, generate input script with different scale factor and Submit the job through slurm
     '''
    
 
-    userMessage_3 = '''
-    Calculate the lattice constant for Li BCC structure, from previous result, use 0.1 kspacing and 100 ecutwfc.
-    First generate 5 input script with different scale factor in order to calculate EOS, then run the calculation through slurm. When the calculation is done, calculate the lattice constant
+    userMessage_3 = f'''
+    Now we have all the result, please calculate the lattice constant of {structure} structure and report the result.
     '''
 
+<<<<<<< HEAD
     userMessage_4 = '''
     You are going to calculate the lattic constant for FCC Ca through DFT, the experiment value is 5.556. 
     1. Compute the the total energy for different kpoints based on kspacing 0.1,0.2 ,0.3 and 40,60,80,100,120 ecutwfc. Run the calculation through slurm and report the result.
@@ -107,6 +105,13 @@ if __name__ == "__main__":
     testMessage = '''
     please generate a single input script for Li BCC structure with kspacing 0.1 and ecutwfc 40
     '''
+=======
+    # userMessage_4 = '''
+    # You are going to do cenvergence test for Li BCC structure. 
+    # 1. Compute the the total energy for different kpoints based on kspacing 0.1,0.2 ,0.3 and 40,60,80,100,120 ecutwfc. Run the calculation through slurm and report the result.
+    # 2. After the first batch calculation, choose appropriate kpoints and ecutwfc. Then generate input script for EOS and submit the job. When the calculation is done, calculate the lattice constant
+    # '''
+>>>>>>> main
     
     config = load_config(os.path.join('./config', "default.yaml"))
     # check_config(config)
@@ -147,6 +152,7 @@ if __name__ == "__main__":
     # exit()
 
     
+<<<<<<< HEAD
     # for s in graph.stream(
     # {
     #     "messages": [
@@ -219,3 +225,34 @@ if __name__ == "__main__":
             with open(f"{WORKING_DIRECTORY}/his.txt", "a") as f:
                 f.write(f"=== Session ended at {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n\n")
     print("End, check the log file for details")
+=======
+    for s in graph.stream(
+    {
+        "messages": [
+            HumanMessage(content=f"{userMessage_1}")
+        ]
+    },llm_config):
+        if "__end__" not in s:
+            print(s)
+            print("----")
+
+    for s in graph.stream(
+    {
+        "messages": [
+            HumanMessage(content=f"{userMessage_2}")
+        ]
+    },llm_config):
+        if "__end__" not in s:
+            print(s)
+            print("----")
+    
+    for s in graph.stream(
+    {
+        "messages": [
+            HumanMessage(content=f"{userMessage_3}")
+        ]
+    },llm_config):
+        if "__end__" not in s:
+            print(s)
+            print("----")
+>>>>>>> main

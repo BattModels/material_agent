@@ -3,6 +3,8 @@ from matplotlib import pyplot as plt
 from matplotlib import rcParams
 import pandas as pd
 from math import e
+from networkx import predecessor
+import pandas as pd
 from src.utils import *
 from src.myCANVAS import CANVAS
 from ase import Atoms, Atom
@@ -18,6 +20,8 @@ import ast
 import re
 import io
 from ase.io import read, write
+from ase.lattice.cubic import FaceCenteredCubic, BodyCenteredCubic, SimpleCubic, Diamond
+from ase.io import read
 from ase.calculators.espresso import Espresso, EspressoProfile
 from ase.eos import calculate_eos,EquationOfState
 from ase.units import kJ

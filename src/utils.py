@@ -1,5 +1,6 @@
 import sqlite3
 import os,yaml
+import pandas as pd
 from xml.dom.minidom import Element
 from typing import Callable, List, Literal
 from pydantic import BaseModel
