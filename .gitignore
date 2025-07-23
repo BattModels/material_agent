@@ -1,12 +1,1 @@
-/SSSP_1.3.0_PBE_precision
-**/__pycache__/
-**/out/
-config
-espresso.*
-*.ipynb
-asdf.*
-md_files
-test
-test.py
-Sol27LC.csv
-CRASH
+*

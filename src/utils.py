@@ -1,23 +1,30 @@
+import sqlite3
 import os,yaml
 import pandas as pd
 from xml.dom.minidom import Element
 from typing import Callable, List, Literal
 from pydantic import BaseModel
-from IPython.display import Image, display
+# from IPython.display import Image, display
 from langchain_core.runnables.graph import CurveStyle, MermaidDrawMethod, NodeStyles
 import getpass
+import pandas as pd
+from src import var
+from ase.io import read
+import numpy as np
+
 def load_config(path: str):
     ## Load the configuration file
     with open(path) as f:
         config = yaml.load(f, Loader=yaml.FullLoader)
     ## Set up environment variables
     for key, value in config.items():
-        os.environ[key] = value
+        var.OTHER_GLOBAL_VARIABLES[key] = value
+    var.my_WORKING_DIRECTORY = config["WORKING_DIR"]
     return config
-def check_config(config: dict):
-    for key, value in config.items():
-        _set_if_undefined(key)
-    return 'Loaded config successfully'
+# def check_config(config: dict):
+#     for key, value in config.items():
+#         _set_if_undefined(key)
+#     return 'Loaded config successfully'
 class AtomsDict(BaseModel):
     numbers: List[int]
     positions: List[List[float]]
@@ -25,13 +32,13 @@ class AtomsDict(BaseModel):
     pbc: List[bool]
 
 
-def _set_if_undefined(var: str):
-    if not os.environ.get(var):
-        os.environ[var] = getpass.getpass(f"Please provide your {var}")
+# def _set_if_undefined(var: str):
+#     if not os.environ.get(var):
+#         os.environ[var] = getpass.getpass(f"Please provide your {var}")
 
 def save_graph_to_file(graph, path: str, name: str):
     try:
-        im = graph.get_graph().draw_mermaid_png()
+        im = graph.get_graph(xray=True).draw_mermaid_png()
         # print(graph.get_graph().draw_mermaid())
         with open(os.path.join(path, f"{name}.png"), "wb") as f:
             f.write(im)
@@ -132,8 +139,8 @@ def create_pysqa_prerequisites(WORKING_DIRECTORY: str):
 #SBATCH --time={{run_time_max | int}}
 #SBATCH -p {{partition}}
 #SBATCH --mem-per-cpu={{memory_max}}M # Memory pool for all cores in MB
-#SBATCH -e sqa.err #change the name of the err file 
-#SBATCH -o sqa.out # File to which STDOUT will be written %j is the job #
+#SBATCH -e {{errNoutName}}.err #change the name of the err file 
+#SBATCH -o {{errNoutName}}.out # File to which STDOUT will be written %j is the job #
 
 {{command}}
 
@@ -153,7 +160,7 @@ queues:
     script: slurm.sh
     }
                    """)
-        
+
 def select_k_ecut(convergence_data: pd.DataFrame, error_threshold: float, natom: int):
     """
     Select the k-point and ecut based on the provided error threshold from DFT convergence test results.
@@ -166,6 +173,9 @@ def select_k_ecut(convergence_data: pd.DataFrame, error_threshold: float, natom:
     Returns: 
     (int/float, int/float): The selected k-point and ecut values.
     """
+    finnerEcut = False
+    finnerKspacing = False
+    
     # sorted_data = convergence_data.sort_values(by=['ecutwfc', 'kspacing'],ascending=[False,True])
     min_kspacing = convergence_data['kspacing'].min()
     max_ecutwfc = convergence_data['ecutwfc'].max()
@@ -176,6 +186,8 @@ def select_k_ecut(convergence_data: pd.DataFrame, error_threshold: float, natom:
     ecutwfc_chosen = df_kspacing[df_kspacing['Acceptable'] == True].iloc[0]['ecutwfc']
     print(df_kspacing)
     print(f'Chosen ecutwfc: {ecutwfc_chosen}')
+    if ecutwfc_chosen == max_ecutwfc:
+        finnerEcut = True
 
 
     df_ecutwfc = convergence_data.loc[convergence_data['ecutwfc'] == max_ecutwfc].sort_values(by='kspacing',ascending=False)
@@ -184,9 +196,91 @@ def select_k_ecut(convergence_data: pd.DataFrame, error_threshold: float, natom:
     df_ecutwfc['Acceptable'] = df_ecutwfc['error'] < error_threshold
     k_chosen = df_ecutwfc[df_ecutwfc['Acceptable'] == True].iloc[0]['kspacing']
 
+    if k_chosen == min_kspacing:
+        finnerKspacing = True
+        
     print(df_ecutwfc)
     print(f'Chosen kspacing: {k_chosen}')
 
 
-    return k_chosen, ecutwfc_chosen
+    return k_chosen, ecutwfc_chosen, finnerEcut, df_kspacing, df_ecutwfc, finnerKspacing
 
+
+def initialize_database(db_file):
+    # Connect to the SQLite database (create it if it doesn't exist)
+    conn = sqlite3.connect(db_file)
+    cursor = conn.cursor()
+    
+    # Create the table if it doesn't exist
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS resources (
+        filename TEXT PRIMARY KEY,
+        partition TEXT,
+        nnodes INTEGER,
+        ntasks INTEGER,
+        runtime INTEGER,
+        submissionScript TEXT,
+        outputFilename TEXT
+    )
+    ''')
+    
+    # Commit and close the connection for initialization
+    conn.commit()
+    conn.close()
+
+def add_to_database(resource_dict, db_file):
+    # Connect to the SQLite database
+    conn = sqlite3.connect(db_file)
+    cursor = conn.cursor()
+    
+    # Insert or update each item in the resource_dict
+    for filename, resources in resource_dict.items():
+        cursor.execute('''
+        INSERT OR REPLACE INTO resources (filename, partition, nnodes, ntasks, runtime, submissionScript, outputFilename)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (filename,
+              resources['partition'],
+              resources['nnodes'],
+              resources['ntasks'],
+              resources['runtime'],
+              resources['submissionScript'],
+              resources['outputFilename']))
+    
+    # Commit and close the connection
+    conn.commit()
+    conn.close()
+    
+def read_BEEF_output(file_path: str):
+    """
+    Read the BEEF output file and extract relevant information.
+
+    Args:
+        file_path (str): Path to the BEEF output file.
+
+    Returns:
+        dict: Dictionary containing extracted information.
+        or error info
+    """
+    with open(file_path,'r') as f:
+        lines = f.readlines()
+    atoms = read(file_path)
+    reference = atoms.get_potential_energy()
+    start_index = 0
+    end_index = 0
+    for i,line in enumerate(lines):
+        if 'BEEFens 2000 ensemble energies' in line:
+            start_index = i + 1
+        if 'BEEF-vdW xc energy contributions' in line:
+            end_index = i - 2
+
+    if start_index == 0 or end_index == 0:
+        return "WrongCalc"
+    
+    energies = []
+    for i in range(start_index, end_index + 1):
+        line = lines[i].split()
+        energies.append(float(line[0])+reference)
+    
+    energies = np.array(energies)
+
+    return energies
