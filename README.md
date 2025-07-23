@@ -1,37 +1,40 @@
-# Agent for scientific computattion
+# DREAMS: Density Functional Theory Based Research Engine for Agentic Materials Simulation
 
-<div style="text-align: center;">
-  <img src="./figures/graph.png" alt="plot">
-</div>
+[\[arxiv\]](https://arxiv.org/abs/2507.14267)  
+## Overview
+
+![DREAMS Overview](./figures/plan_agent_pipeline.png)
+
+**DREAMS** (Density Functional Theory Based Research Engine for Agentic Materials Simulation) is a comprehensive framework designed to facilitate autonomous materials discovery and simulation workflows through artificial intelligence agents.
+
+It uses ASE and Quantum ESPRESSO to perform DFT calculations and is built on top of the Langgraph with Claude 3.5 and Claude 3.7 to enable agentic capabilities.
 
 
-## Using Example
-0. ```bash bin/invoke.sh``` if runnning on Artemis.
-1. Set up model key in config/default.yaml
-2. Edit working directory and pseudo_dir config/default.yaml
-3. ```python invoke.py```
+## How to Use
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/BattModels/material_agent.git
+   ```
+2. Install the required dependencies: [autocat](https://aced-differentiate.github.io/auto_cat/), [langgraph](https://langchain-ai.github.io/langgraph/concepts/why-langgraph/), quantum-espresso and other dependencies.
+3. Add your API keys to the `config/default.yaml` file. Change the pseudopotentials in the `config/default.yaml` and the working directory to the one you want to use.
+4. Edit the usermessage in the `invoke.py` file to specify the task you want to perform.
+5. Run the agent:
+    ```bash
+    python invoke.py
+    ```
 
-## Agent Prompt template(TODO)
+## References 
+If you use DREAMS in your research, please cite the following paper:
+
+```bibtex
+@misc{wang2025dreamsdensityfunctionaltheory,
+      title={DREAMS: Density Functional Theory Based Research Engine for Agentic Materials Simulation}, 
+      author={Ziqi Wang and Hongshuo Huang and Hancheng Zhao and Changwen Xu and Shang Zhu and Jan Janssen and Venkatasubramanian Viswanathan},
+      year={2025},
+      eprint={2507.14267},
+      archivePrefix={arXiv},
+      primaryClass={cs.AI},
+      url={https://arxiv.org/abs/2507.14267}, 
+}
 ```
-<Role>: 
-    You are a very powerful assistant that performs density functional theory calculations and working in a team, but don't know current events. 
-<Objective>: 
-    You are responsible for generating the quantum espresso input file for the given material and parameter setting with provided tools. 
-    You can only respond with a single complete 'Thought, Action, Action Input' format OR a single 'Final Answer' format. 
-<Instructions>: 
-    1. Validate that the input file contains chemical elements from the periodic table.
-    2. Include CONTROL, SYSTEM, ELECTRONS, ATOMIC_SPECIES, K_POINTS, ATOMIC_POSITIONS, and CELL. 
-    3. Always generate conventional cell with ibrav=0 and do not use celldm and angstrom at the same time.
-    4. Use the right smearing based on the material.
-    5. If the system involves hubbard U correction, specify starting magnetization in SYSTEM card and hubbard U parameters in HUBBARD card, and use the pre-defined hubbard correction tool.
-    6. Find the pseduopotential filename using the tool provided.
-    7. Report to supervisor you have finished writing the quantum espressi script. Specify the script name.
-<Requirements>: 
-    1. The electron conv_thr should be 1e-6.
-    2. Try different scale factor if you have no minimum error.
-```
-## Tool prompt template(TODO)
 
-## Developement Guide
-
-1. Always check file exist
