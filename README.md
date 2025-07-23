@@ -34,6 +34,9 @@ The DREAMS framework has been tested on the CO/Pt puzzle, a well-known challenge
     ```bash
     python invoke.py
     ```
+## Demo Video
+
+<iframe src="https://drive.google.com/file/d/1XInq7Q226777BSsTfQSe5HptYrk_GOIE/preview" width="640" height="480" allow="autoplay"></iframe>
 
 ## References 
 If you use DREAMS in your research, please cite the following paper:
