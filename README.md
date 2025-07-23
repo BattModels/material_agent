@@ -35,8 +35,8 @@ The DREAMS framework has been tested on the CO/Pt puzzle, a well-known challenge
     python invoke.py
     ```
 ## Demo Video
+You can watch a demo video of DREAMS in action, showcasing its capabilities in materials discovery and simulation workflows. \[[demo](https://drive.google.com/file/d/1XInq7Q226777BSsTfQSe5HptYrk_GOIE/preview)\]
 
-<iframe src="https://drive.google.com/file/d/1XInq7Q226777BSsTfQSe5HptYrk_GOIE/preview" width="640" height="480" allow="autoplay"></iframe>
 
 ## References 
 If you use DREAMS in your research, please cite the following paper:
