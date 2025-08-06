@@ -68,6 +68,50 @@ def write_my_canvas(key: Annotated[str, "key"],
     return CANVAS.write(key, value, overwrite)
 
 ##################################################################################################
+##                                           MD tools                                           ##
+##################################################################################################
+
+@tool
+def write_LAMMPS_script(
+    content: Annotated[str, "Text content to be written into the document."],
+    file_name: Annotated[str, "Name of the file to be saved."],
+) -> Annotated[str, "Path of the saved document file."]:
+    """Save the LAMMPS input script to the specified file path"""
+    ## Error when '/' in the content, manually delete
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+    
+    os.makedirs(WORKING_DIRECTORY, exist_ok=True)
+    path = os.path.join(WORKING_DIRECTORY, f'{file_name}')
+    
+    job_list_dict = {}
+    job_list = []
+
+    ## If content ends with '/' then remove it
+    if content.endswith('/'):
+        content = content[:-1]
+    
+    with open(path,"w",encoding="ascii") as file:
+        file.write(content)
+    
+    os.environ['INITIAL_FILE'] = file_name
+    
+    job_list.append(file_name)
+    
+    old_job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
+    job_list = list(set(old_job_list + job_list))
+    CANVAS.write('ready_to_run_job_list',job_list, overwrite=True)
+        
+    # time.sleep(60)
+    return f"Initial file is created named {file_name}"
+
+@tool
+def find_classical_potential(element: str) -> str:
+    """Return classical potential file path for given element symbol."""
+    # time.sleep(60)
+    return f'The classcial potential file for {element} is located at /nfs/turbo/coe-venkvis/ziqiw-turbo/mint-PD/PD/EAM/Li_v2.eam.fs'
+
+
+##################################################################################################
 ##                                          DFT tools                                           ##
 ##################################################################################################
 
@@ -447,45 +491,6 @@ def write_QE_script_w_ASE(
     
     # time.sleep(60)
     return f"Quantum Espresso input script is written to {filename}"
-
-@tool
-def write_LAMMPS_script(
-    content: Annotated[str, "Text content to be written into the document."],
-    file_name: Annotated[str, "Name of the file to be saved."],
-) -> Annotated[str, "Path of the saved document file."]:
-    """Save the LAMMPS input script to the specified file path"""
-    ## Error when '/' in the content, manually delete
-    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
-    
-    os.makedirs(WORKING_DIRECTORY, exist_ok=True)
-    path = os.path.join(WORKING_DIRECTORY, f'{file_name}')
-    
-    job_list_dict = {}
-    job_list = []
-
-    ## If content ends with '/' then remove it
-    if content.endswith('/'):
-        content = content[:-1]
-    
-    with open(path,"w",encoding="ascii") as file:
-        file.write(content)
-    
-    os.environ['INITIAL_FILE'] = file_name
-    
-    job_list.append(file_name)
-    
-    old_job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
-    job_list = list(set(old_job_list + job_list))
-    CANVAS.write('ready_to_run_job_list',job_list, overwrite=True)
-        
-    # time.sleep(60)
-    return f"Initial file is created named {file_name}"
-
-@tool
-def find_classical_potential(element: str) -> str:
-    """Return classical potential file path for given element symbol."""
-    # time.sleep(60)
-    return f'The classcial potential file for {element} is located at /nfs/turbo/coe-venkvis/ziqiw-turbo/mint-PD/PD/EAM/Li_v2.eam.fs'
 
 @tool
 def find_pseudopotential(element: str) -> str:
