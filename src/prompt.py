@@ -296,8 +296,8 @@ md_agent_prompt = f"""
                 You are responsible for generating the LAMMPS input file for a givin simulation with provided tools. 
                 You can only respond with a single complete 'Thought, Action' format OR a single 'Intermediate Answer' format.
             <Instructions>:
-                1. find which potential to use for the simulation.
-                2. Use the right tool to generate initial structure for the simulation
+                1. create the initial structure for the system of interest with the right tool.
+                2. find which potential to use for the simulation.
                 3. Generate the input script.
                 4. Save all the files in to job list and report to supervisor to let HPC Agent to submit the job.                 
             <Requirements>:

@@ -21,10 +21,10 @@ from langgraph.prebuilt import ToolNode,create_react_agent
 from pydantic import BaseModel, Field
 
 from src.tools import *
-from src.prompt import dft_agent_prompt,hpc_agent_prompt,supervisor_prompt
+from src.prompt import dft_agent_prompt,hpc_agent_prompt,supervisor_prompt,md_agent_prompt
 from src import var
 
-members = ["DFT_Agent", "HPC_Agent"]
+members = ["DFT_Agent", "MD_Agent", "HPC_Agent"]
 instructions = [dft_agent_prompt, hpc_agent_prompt]
 OPTIONS = members
 
@@ -90,6 +90,10 @@ teamCapability = """
     - Read output file to get energy
     - Calculate lattice constant
     - Calculate formation energy
+<MD Agent>:
+    - Create intial structure of the system
+    - Find classical potential
+    - Write LAMMPS input script
 <HPC Agent>:
     - find job list from the job list file
     - Add resource suggestion base on the DFT input file
@@ -98,6 +102,8 @@ teamCapability = """
 
 teamRestriction = """
 <DFT Agent>:
+    - Cannot submit job to HPC
+<MD Agent>:
     - Cannot submit job to HPC
 <HPC Agent>:
     - Cannot determine the best parameters from convergence test result
@@ -264,8 +270,8 @@ def create_planning_graph(config: dict) -> StateGraph:
         f.write("run")
     
     # Define the model
-    llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-    workerllm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    llm = ChatAnthropic(model="claude-sonnet-4-20250514", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    workerllm = ChatAnthropic(model="claude-sonnet-4-20250514", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # workerllm = ChatAnthropic(model="claude-3-5-sonnet-20241022", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # llm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
     # workerllm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"], model_kwargs={'parallel_tool_calls': False})
@@ -382,16 +388,20 @@ def create_planning_graph(config: dict) -> StateGraph:
     hpc_node = functools.partial(worker_agent_node, agent=hpc_agent, name="HPC_Agent", past_steps_list=PAST_STEPS)
     
     ### MD Agent
-    # md_tools = [
-    #     find_classical_potential,
-    #     init_structure_data,
-    #     write_LAMMPS_script
-    # ]
+    md_tools = [
+        inspect_my_canvas,
+        write_my_canvas,
+        read_my_canvas,
+        generate_HEA,
+        find_classical_potential,
+        init_structure_data,
+        write_LAMMPS_script
+    ]
     
-    # md_agent = create_react_agent(llm, tools=md_tools,
-    #                               state_modifier=md_agent_prompt)
+    md_agent = create_react_agent(workerllm, tools=md_tools,
+                                  state_modifier=md_agent_prompt)
     
-    # md_node = functools.partial(worker_agent_node, agent=md_agent, name="MD_Agent", past_steps_list=PAST_STEPS)
+    md_node = functools.partial(worker_agent_node, agent=md_agent, name="MD_Agent", past_steps_list=PAST_STEPS)
 
     # save_graph_to_file(dft_agent, config['working_directory'], "dft_agent")
     
@@ -401,7 +411,7 @@ def create_planning_graph(config: dict) -> StateGraph:
     graph = StateGraph(PlanExecute)
     graph.add_node("DFT_Agent", dft_node)
     graph.add_node("HPC_Agent", hpc_node)
-    # graph.add_node("MD_Agent", md_node)
+    graph.add_node("MD_Agent", md_node)
     # graph.add_node("CSS_Agent", css_node)
 
     graph.add_node("Supervisor", supervisor_agent)

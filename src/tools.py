@@ -30,6 +30,7 @@ from ase.optimize import BFGS, FIRE
 from ase.io.trajectory import Trajectory
 from ase.io.lammpsdata import write_lammps_data
 from ase.build import bulk, surface, add_adsorbate
+from ase.data import atomic_numbers
 import ase.build
 from ase import Atoms
 import subprocess
@@ -43,6 +44,14 @@ import contextlib
 from autocat.surface import generate_surface_structures
 from autocat.adsorption import get_adsorption_sites, get_adsorbate_height_estimate
 from src import var
+
+# from mp_api.client import MPRester
+from pymatgen.io.ase import AseAtomsAdaptor
+from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+
+from ase.calculators.calculator import kptdensity2monkhorstpack as kdens2mp
+
+# mpr = MPRester("qXCDyimzb2em8yzTjxuRxi3xEX0PKmXQ")
 
 ##################################################################################################
 ##                                        Common tools                                          ##
@@ -70,6 +79,70 @@ def write_my_canvas(key: Annotated[str, "key"],
 ##################################################################################################
 ##                                           MD tools                                           ##
 ##################################################################################################
+
+# @tool
+# def get_structure_from_MP(material_id: Annotated[str, "Material Project ID, starting with mp-"]):
+#     """Get a structure from the Materials Project database by its material ID and save it into xyz file."""
+    
+#     assert material_id.startswith("mp-"), "Material ID must start with 'mp-'"
+    
+#     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+    
+#     structure = mpr.get_structure_by_material_id(material_id)
+#     sg_analyzer = SpacegroupAnalyzer(structure)
+#     conventional_structure = sg_analyzer.get_conventional_standard_structure()
+#     ase_atoms0 = AseAtomsAdaptor.get_atoms(conventional_structure)
+    
+#     # get unqiue element symbols from ase_atoms0
+#     unique_elements = set(ase_atoms0.get_chemical_symbols())
+    
+#     structureName = ""
+#     for element in unique_elements:
+#         ele_num = ase_atoms0.get_atomic_numbers().count(ase_atoms0.get_atomic_number(element))
+#         structureName += element + str(ele_num)
+    
+#     saveDir = os.path.join(WORKING_DIRECTORY, f"{material_id}-{structureName}.xyz")
+#     write(saveDir, ase_atoms0)
+#     # time.sleep(60)
+#     return f"Created atoms saved in {saveDir}"
+
+@tool
+def generate_HEA(elements: Annotated[Dict[str, float], "elements and their compositions in the HEA, e.g. {'Fe': 10, 'Co': 5, 'Ni': 2}"],
+                 lattice: Annotated[str, "Lattice type. Must be one of sc, fcc, bcc, tetragonal, bct, hcp, rhombohedral, orthorhombic, mcl, diamond, zincblende, rocksalt, cesiumchloride, fluorite or wurtzite."],
+                 a: Annotated[float, "Lattice constant a"],
+                 b: Annotated[float, "Lattice constant b. If only a and b is given, b will be interpreted as c instead."] = None,
+                 c: Annotated[float, "Lattice constant c"] = None,
+                 supercell: Annotated[Tuple[int, int, int], "Supercell size in the form of (x, y, z). "] = (4,4,4),
+                 ) -> Annotated[str, "Path of the saved HEA structure data file."]:
+    """Generate a high entropy alloy (HEA) structure based on the given elements and their compositions, crystal lattice, lattice info, save to the working dir, and return filename."""
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+    
+    parentElements = list(elements.keys())[0]
+    
+    atoms = bulk(parentElements, lattice, a=a, b=b, c=c, cubic=True)
+    atoms *= supercell
+    
+    print(list(elements.values()))
+    
+    assert len(atoms) > np.lcm.reduce([int(x) for x in list(elements.values())]), "The total number of atoms in the supercell must be greater than the least common multiple of the element compositions."
+    
+    pool = list(np.arange(len(atoms)))
+    for element, composition in elements.items():
+        num_atoms_to_replace = int((composition / sum(elements.values())) * len(atoms))
+        if len(pool) > num_atoms_to_replace:
+            indices_to_replace = np.random.choice(pool, num_atoms_to_replace, replace=False)
+            atoms.numbers[indices_to_replace] = atomic_numbers[element]
+            pool = [x for x in pool if x not in indices_to_replace]
+        else:
+            atoms.numbers[pool] = atomic_numbers[element]
+        
+    saveDir = os.path.join(WORKING_DIRECTORY, "".join(f"{elem}{count}" for elem, count in elements.items()) + ".xyz")
+    write(saveDir, atoms)
+    # time.sleep(60)
+    return f"Created atoms saved in {saveDir}"
+    
+    
+    
 
 @tool
 def write_LAMMPS_script(
