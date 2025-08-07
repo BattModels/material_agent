@@ -94,6 +94,7 @@ teamCapability = """
     - Create intial structure of the system
     - Find classical potential
     - Write LAMMPS input script
+    - Calcualte strain stress curve from lammps output once the calculation is done
 <HPC Agent>:
     - find job list from the job list file
     - Add resource suggestion base on the DFT input file
@@ -104,6 +105,7 @@ teamRestriction = """
 <DFT Agent>:
     - Cannot submit job to HPC
 <MD Agent>:
+    - Cannot run lammps script
     - Cannot submit job to HPC
 <HPC Agent>:
     - Cannot determine the best parameters from convergence test result
@@ -393,9 +395,9 @@ def create_planning_graph(config: dict) -> StateGraph:
         write_my_canvas,
         read_my_canvas,
         generate_HEA,
+        generate_LAMMPS_input_for_strain_stress,
+        strain_stress_calc,
         find_classical_potential,
-        init_structure_data,
-        write_LAMMPS_script
     ]
     
     md_agent = create_react_agent(workerllm, tools=md_tools,

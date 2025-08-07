@@ -141,7 +141,87 @@ def generate_HEA(elements: Annotated[Dict[str, float], "elements and their compo
     # time.sleep(60)
     return f"Created atoms saved in {saveDir}"
     
+@tool
+def strain_stress_calc(
+    input_file: Annotated[str, "LAMMPS input file"],
+    log_file: Annotated[str, "LAMMPS log file"],
+    dump_file: Annotated[str, "LAMMPS dump file"],
+    elastic_tensor_component: Annotated[str, "types of strain to apply, please choose from C11C12 and C44. Usually, people use C11C22 and C44"],
+    strains: Annotated[List[float], "strain to apply"],
+) -> Annotated[str, "Path of the saved elastic tensor data file."]:
+    """Calculate strain stress curve from LAMMPS MD simulation output files."""
     
+    assert elastic_tensor_component in ['C11C12', 'C44'], "elastic_tensor_component must be either 'C11C12' or 'C44'"
+    
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+    
+    # # read the log file to get the stress data
+    # stress_data = pd.read_csv(os.path.join(WORKING_DIRECTORY, log_file), delim_whitespace=True, comment='#')
+    
+    # # read the dump file to get the volume data
+    # volume_data = pd.read_csv(os.path.join(WORKING_DIRECTORY, dump_file), delim_whitespace=True, comment='#', header=None)
+    
+    # # get the last volume value
+    # volume = volume_data.iloc[-1, -1]
+    
+    # # calculate the stress in GPa
+    # stress_data = stress_data * 0.0001
+    
+    return "Done with strain_stress_calc."
+
+
+@tool
+def generate_LAMMPS_input_for_strain_stress(
+    atoms_file_name: Annotated[str, "Name of the initial structure file in xyz format"],
+    timestep: Annotated[float, "MD simulation timestep, in fs unit"] = 0.001,
+    run_nsteps: Annotated[int, "Number of MD simulation steps to run"] = 100000,
+    temperature: Annotated[float, "Temperature to run the MD simulation, in Kelvin"]  = 300.0,
+    potential_file: Annotated[str, "Potential filename"] = 'MEAM_LAMMPS_SharifiWick_2025_FeMnNiTiCuCrCoAl__MO_675947402254_000',
+    potential_dir: Annotated[str, "Directory of the potential files"] = '/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/MD_potentials',
+    # elastic_tensor_components: Annotated[List[str], "types of strain to apply, please choose from C11C12 and C44. Usually, people use ['C11C22', 'C44']"] = ['C11C12','C44'],
+    # all_strains: Annotated[List[List[float]], "strain to apply"] = [
+    #     [-0.02, -0.01, 0.0, 0.01, 0.02],
+    #     [-0.06, -0.03, 0.0, 0.03, 0.06],
+    # ],
+):
+    """Prepare input files for LAMMPS MD simulation to calculate elastic tensor components."""
+    potential_dir = "/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/MD_potentials"
+    elastic_tensor_components = ['C11C12','C44']
+    all_strains = [
+        [-0.02, -0.01, 0.0, 0.01, 0.02],
+        [-0.06, -0.03, 0.0, 0.03, 0.06],
+    ]
+    for i, elastic_tensor_component in enumerate(elastic_tensor_components):
+        if not os.path.exists(elastic_tensor_component):
+            os.makedirs(elastic_tensor_component)
+        os.chdir(elastic_tensor_component)
+        strains = all_strains[i] if i < len(all_strains) else all_strains[0]
+        allLmpJobs = []
+        for strain in strains:
+            lmpInFileName = generate_single_input_file(
+                atoms_file_name=atoms_file_name,
+                timestep = timestep,
+                run_nsteps = run_nsteps,
+                temperature = temperature,
+                elastic_tensor_component=elastic_tensor_component,
+                strain=strain,
+                potential_dir=potential_dir,
+                potential_file=potential_file,
+                input_file_name=f'input_{strain:.3f}.in',
+                dump_file_name=f'dump_{strain:.3f}.lammpstrj',
+                lammps_input_data = f'structure_input_{strain:.3f}.data',
+                log_file_name=f'output_{strain:.3f}.log',
+            )
+            allLmpJobs.append(lmpInFileName)
+            print(allLmpJobs)
+        
+        # write ready to run job to CANVAS
+        old_job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
+        allLmpJobs = list(set(old_job_list + allLmpJobs))
+        CANVAS.write('ready_to_run_job_list', allLmpJobs, overwrite=True)
+    
+        os.chdir('../')
+    return "Done with generating LAMMPS input files for strain stress calculation. Please check the working directory for the generated files and Let HPC agent to run the calculations."
     
 
 @tool
@@ -178,10 +258,10 @@ def write_LAMMPS_script(
     return f"Initial file is created named {file_name}"
 
 @tool
-def find_classical_potential(element: str) -> str:
+def find_classical_potential(element: Annotated[List[str], "List of elements involved in the simulation"]) -> str:
     """Return classical potential file path for given element symbol."""
     # time.sleep(60)
-    return f'The classcial potential file for {element} is located at /nfs/turbo/coe-venkvis/ziqiw-turbo/mint-PD/PD/EAM/Li_v2.eam.fs'
+    return f'The classcial potential file is located at /nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/MD_potentials with name LJ_ElliottAkerson_2015_Universal__MO_959249795837_003'
 
 
 ##################################################################################################
@@ -1251,9 +1331,9 @@ def add_resource_suggestion(
     outputFilename: Annotated[str, "the output filename of the job"],
 ) -> Annotated[str, "source suggestion saved location"]:
     """
-    After agent generate resource suggestions and submission script based on the DFT input file, add it to the json file "resource_suggestions.json" in the WORKING_DIRECTORY.
+    After agent generate resource suggestions and submission script based on the input file, add it to the json file "resource_suggestions.json" in the WORKING_DIRECTORY.
     output filename must be <full input filename with extension>.<output_file_type>, 
-    For example: {"input1.pwi": {"nnodes": 2, "ntasks": 4, "runtime": 60, "submissionScript": "
+    For QE example: {"input1.pwi": {"nnodes": 1, "ntasks": 16, "runtime": 60, "submissionScript": "
 spack load quantum-espresso@7.2\n \
 \n \
 echo "Job started on `hostname` at `date`"\n \
@@ -1262,16 +1342,19 @@ mpirun pw.x -i input1.pwi > input1.pwi.pwo\n \
 \n \
 echo " "\n \
 echo "Job Ended at `date`"
-    ", "outputFilename": "input1.pwi.pwo"}, "gpawScript.py": {"nnodes": 1, "ntasks": 1, "runtime": 30, "submissionScript": "
+    ", "outputFilename": "input1.pwi.pwo"}},
+    For LAMMPS example: {"input.in": {"nnodes": 1, "ntasks": 16, "runtime": 60, "submissionScript": "
+export OMP_NUM_THREADS=1 \n \
+module load openmpi \n \
+module load gcc \n \
+\n \
 echo "Job started on `hostname` at `date`"\n \
 \n \
-export GPAW_SETUP_PATH=/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/gpaw-setups-24.11.0\n \
-spack load py-gpaw\n \
+mpirun lmp -in input.in > input.in.out\n \
 \n \
-python gpawScript.py\n \
 echo " "\n \
 echo "Job Ended at `date`"\n \
-    ", "outputFilename": ""}}
+    ", "outputFilename": "input.in.out"}}
     """
     if not isinstance(partition, str) or not isinstance(nnodes, int) or not isinstance(ntasks, int) or not isinstance(runtime, str):
         # time.sleep(60)
@@ -1279,7 +1362,7 @@ echo "Job Ended at `date`"\n \
     # craete the json file if it does not exist, otherwise load it
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
 
-    new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 48, "runtime": 2800, "submissionScript": submissionScript, "outputFilename": outputFilename}}
+    new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 16, "runtime": 60, "submissionScript": submissionScript, "outputFilename": outputFilename}}
     
     # check if resource_suggestions.db exist in the working directory
     db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
@@ -1309,7 +1392,7 @@ def submit_and_monitor_job(
         
     # job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
     job_list = []
-    
+        
     # load reousrce suggestions
     # resource_suggestions = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.json')
     # with open(resource_suggestions, "r") as file:

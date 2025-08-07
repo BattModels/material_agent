@@ -11,6 +11,9 @@ import pandas as pd
 from src import var
 from ase.io import read
 import numpy as np
+from ase.io import read,write
+from ase.io.lammpsdata import write_lammps_data
+import ase
 
 def load_config(path: str):
     ## Load the configuration file
@@ -284,3 +287,135 @@ def read_BEEF_output(file_path: str):
     energies = np.array(energies)
 
     return energies
+
+
+def generate_single_input_file(
+    atoms_file_name,
+    timestep,
+    run_nsteps,
+    temperature,
+    elastic_tensor_component,
+    strain,
+    potential_dir,
+    potential_file,
+    input_file_name,
+    dump_file_name,
+    log_file_name,
+    lammps_input_data = 'structure_input.data',
+):
+    # note down the cwd
+    cwd = os.getcwd()
+    
+    # change the cwd to var.my_WORKING_DIRECTORY
+    os.chdir(var.my_WORKING_DIRECTORY)
+    
+    atoms = read(atoms_file_name)
+    # repeat number of atoms if len(atoms) is too small to ensure statistical significance of pressure
+    if len(atoms) < 100:
+        repeat_factor = np.floor((100 / len(atoms))**(1.0/3.0)).astype(int) + 1
+        atoms = atoms.repeat((repeat_factor, repeat_factor, repeat_factor))
+    atoms.positions = atoms.positions.round(4)
+    atoms.cell = atoms.cell.round(4)
+    lx = atoms.cell[0, 0]
+    ly = atoms.cell[1, 1]
+    lz = atoms.cell[2, 2]
+    write_lammps_data(lammps_input_data, atoms, force_skew=True)
+    if not dump_file_name:
+        dump_file_name = f"dump_{strain:.3f}.lammpstrj"
+    if not log_file_name:
+        log_file_name = f"output_{strain:.3f}.log"
+    input_content = ""
+    input_content += f"log {log_file_name}\n"    
+    input_content += f"""variable        nsteps          equal {run_nsteps:d}
+variable        thermo_freq     equal 1000
+variable        dump_freq       equal 10000
+variable        restart_freq    equal 5000000
+variable        nevery          equal 10000
+variable        nrepeat         equal 10
+variable        pres            equal 1.0000
+variable        Tproduction     equal {temperature:.2f}
+ 
+variable    strain      equal {strain:.3f}
+ 
+# grab the old bounds
+# variable    xlo_old     equal xlo
+# variable    xhi_old     equal xhi
+# variable    ylo_old     equal ylo
+# variable    yhi_old     equal yhi
+# variable    zlo_old     equal zlo
+# variable    zhi_old     equal zhi
+"""
+    input_content += """variable        nfreq           equal ${nevery}*${nrepeat}
+"""
+    input_content += f"""variable        strain          equal {strain:.4f}
+"""
+    input_content += f"""
+# define units
+boundary p p p
+atom_style atomic
+kim init {potential_file} metal unit_conversion_mode
+# initial structure
+read_data "{lammps_input_data}"
+"""
+    elements = set([atom.symbol for atom in atoms])
+    atomic_numbers = [ase.data.atomic_numbers[element] for element in elements]
+    atomic_masses = [ase.data.atomic_masses[atomic_number] for atomic_number in atomic_numbers]
+    kim_interaction_elements = " ".join(elements)
+    input_content += f"""kim interactions {kim_interaction_elements}"""
+    input_content += """
+neighbor    0.3 bin
+neigh_modify    delay 10
+"""
+    for i, mass in enumerate(atomic_masses):
+        input_content += f"mass {i+1} {mass:.4f}\n"
+    input_content += f"""\n"""
+    input_content += f"timestep {timestep:.4f}\n"
+ 
+    if elastic_tensor_component == 'C11C12':
+        input_content += f"""change_box all x scale {1.0 + strain:.3f} y scale {1.0 + strain:.3f} z scale 1.0 remap units box\n"""
+    elif elastic_tensor_component == 'C44':
+        input_content += f"""change_box all xy delta {lx*strain/2.0:.3f} remap units box\n
+        """
+    input_content += """
+# initial velocities
+velocity all create 100.0 2845 rot yes dist gaussian
+reset_timestep 0
+fix nvt all nvt temp ${Tproduction} ${Tproduction} $(100.0*dt)
+fix avp all ave/time 1 10 10 c_thermo_press mode vector ave running start 2000 file f_avp.out overwrite
+compute msd all msd
+thermo 10
+thermo_style custom step time temp pe ke etotal fmax fnorm lx press pxx pyy pzz pxy pxz pyz c_msd[4] f_avp[1] f_avp[2] f_avp[3] f_avp[4] f_avp[5] f_avp[6]
+"""
+    input_content += f"""
+dump 1 all custom 100 {dump_file_name} id type mass x y z fx fy fz vx vy vz
+"""
+    input_content += "restart ${restart_freq} nvt.restart\n"
+    input_content += "run ${nsteps}\n"
+    input_content += """
+# Calculate stress
+variable pxx1 equal f_avp[1]
+variable pyy1 equal f_avp[2]
+variable pzz1 equal f_avp[3]
+variable pyz1 equal f_avp[4]
+variable pxz1 equal f_avp[5]
+variable pxy1 equal f_avp[6]
+print "pxx1 = ${pxx1}"
+print "pyy1 = ${pyy1}"
+print "pzz1 = ${pzz1}"
+print "pxy1 = ${pxy1}"
+print "pxz1 = ${pxz1}"
+print "pyz1 = ${pyz1}"
+ 
+ 
+    """
+    if not input_file_name:
+        input_file_name = f"input_{strain:.3f}.in"
+    with open(input_file_name, 'w') as f:
+        f.write(input_content)
+    print(f"Input file '{input_file_name}' generated successfully.")
+    
+    # change cwd to the original cwd
+    os.chdir(cwd)
+    
+    print(f"lammps input data file '{lammps_input_data}' generated successfully.")
+    return input_file_name

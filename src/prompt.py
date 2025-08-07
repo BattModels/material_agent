@@ -148,6 +148,20 @@ echo " "
 echo "Job Ended at `date`"
 """
 
+LAMMPS_submission_example = """
+export OMP_NUM_THREADS=1
+
+module load openmpi
+module load gcc
+
+echo "Job started on `hostname` at `date`"
+
+mpirun lmp -in [LAMMPS_input_script_name.in] > [LAMMPS_input_script_name.in].out
+
+echo " "
+echo "Job Ended at `date`"
+"""
+
 
 hpc_agent_prompt = f"""
             <Role>: 
@@ -164,7 +178,7 @@ hpc_agent_prompt = f"""
                 2. Use the right tool to read one quantum espresso input file from the working directory and, one job by one job, determinie how much resources to request, which partition to submit that job to, and what would be the submission scipt based on the resources info {HPC_resources}. Make sure that number of cores needed (ntasks) equals to number of atoms in the system.
                 3. Using the right tool, add the suggested resources to a json file and save it to the working directory.
                 4. repeat the process until all resource suggestions are created.
-                5. Use appropriate tool to submit all the jobs in the job_list.json to the supercomputer based on the suggested resource. here's an example submission script for quantum espresso {QE_submission_example}
+                5. Use appropriate tool to submit all the jobs in the job_list.json to the supercomputer based on the suggested resource. here's an example submission script for quantum espresso {QE_submission_example}. here is an example slurm sbatch script for LAMMPS:
                 6. Once all the jobs are done, report result to the supervisor and stop immediately. 
                 7. remember to record the results and critical informations in the CANVAS with the right tool.
             <Requirements>:
