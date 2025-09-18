@@ -105,6 +105,24 @@ if __name__ == "__main__":
     please generate a single input script for Li BCC structure with kspacing 0.1 and ecutwfc 40
     '''
     
+    userMessage_13 = """Please calculate the strain stress curve for the following material with LAMMPS:
+Refractory HEA Hf21Nb25Ti15V15Zr24
+Crystal Structure: Body-centered cubic (BCC)
+Lattice Parameter: a = 3.401 Å (as measured by X-ray diffraction)
+Space Group: (Typical for disordered BCC) Im-3m
+    """
+    
+    userMessage_14 = """Please calculate the strain stress curve for the following material with LAMMPS:
+AlCrTiV
+-Starting Structure: Produced by melting and rapid solidification such that at high temperature the alloy solidifies into a disordered state.
+-Crystal Structures: 
+	- High-temperature phase: Disordered BCC (A2 structure, Pearson symbol cI2) 
+	- Upon cooling an order-disorder transition yields an ordered CsCl-type phase (B2 structure, Pearson symbol cP2)
+-Space Groups:
+	- A2 (disordered BCC): Im-3m
+	- B2 (ordered CsCl type): Pm-3m
+-Lattice Parameters: (Not given explicitly in the extract; one may expect values in the range of ~3.3-3.4 Å typical of refractory BCC systems.)"""
+    
     config = load_config(os.path.join('./config', "default.yaml"))
     # check_config(config)
     
@@ -194,7 +212,7 @@ if __name__ == "__main__":
         
         for s in graph.stream(
             {
-                "input": f"{userMessage_10}",
+                "input": f"{userMessage_14}",
                 "plan": [],
                 "past_steps": []
             }, llm_config):

@@ -156,7 +156,7 @@ module load gcc
 
 echo "Job started on `hostname` at `date`"
 
-mpirun lmp -in [LAMMPS_input_script_name.in] > [LAMMPS_input_script_name.in].out
+mpirun /nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/lammps/lammps-mint/build/lmp -in [LAMMPS_input_script_name.in] > [LAMMPS_input_script_name.in].out
 
 echo " "
 echo "Job Ended at `date`"

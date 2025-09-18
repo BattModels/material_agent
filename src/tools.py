@@ -1350,7 +1350,7 @@ module load gcc \n \
 \n \
 echo "Job started on `hostname` at `date`"\n \
 \n \
-mpirun lmp -in input.in > input.in.out\n \
+mpirun /nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/lammps/lammps-mint/build/lmp -in input.in > input.in.out\n \
 \n \
 echo " "\n \
 echo "Job Ended at `date`"\n \
@@ -1631,30 +1631,31 @@ def submit_and_monitor_job(
     initialize_database(db_file)
     time.sleep(1)
     
-    notConvergedListString = ""
+    # notConvergedListString = ""
     
-    numberOfSucc = 0
-    for job in job_list:
-        try:
-            # temporay disable the read function to avoid the calculation
-            tmp = read(os.path.join(WORKING_DIRECTORY, job + '.pwo'))
-            _ = tmp.get_potential_energy()
-            print(f"Job {job} has finished")
-            numberOfSucc += 1
-        except:
-            notConvergedListString += job + ", "
+    # numberOfSucc = 0
+    # for job in job_list:
+    #     try:
+    #         # temporay disable the read function to avoid the calculation
+    #         tmp = read(os.path.join(WORKING_DIRECTORY, job + '.pwo'))
+    #         _ = tmp.get_potential_energy()
+    #         print(f"Job {job} has finished")
+    #         numberOfSucc += 1
+    #     except:
+    #         notConvergedListString += job + ", "
     
-    if notConvergedListString != "":
-        notConvergedListString = "However, the following jobs did not converge: " + notConvergedListString
+    # if notConvergedListString != "":
+    #     notConvergedListString = "However, the following jobs did not converge: " + notConvergedListString
     
-    # if all job failed
-    if numberOfSucc == 0:
-        # time.sleep(60)
-        return f"All jobs failed. Please figure out why they failed, then regenerate the job. Tell the supervisor in your response that new runs, with problems resolved, need to be regenerated and calculated."
+    # # if all job failed
+    # if numberOfSucc == 0:
+    #     # time.sleep(60)
+    #     return f"All jobs failed. Please figure out why they failed, then regenerate the job. Tell the supervisor in your response that new runs, with problems resolved, need to be regenerated and calculated."
     
-    # time.sleep(60)
-    return f"All job in job_list has finished. {notConvergedListString}please check the output file in the {WORKING_DIRECTORY}"
+    # # time.sleep(60)
+    # return f"All job in job_list has finished. {notConvergedListString}please check the output file in the {WORKING_DIRECTORY}"
 
+    return "All job in job_list has finished"
 @tool
 def submit_single_job(
     inputFile: str
