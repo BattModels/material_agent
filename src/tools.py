@@ -4,8 +4,10 @@ from matplotlib import rcParams
 import pandas as pd
 from math import e
 from src.utils import *
+from src.postProcessUtils import post_0_1_process
 from src.myCANVAS import CANVAS
 from ase import Atoms, Atom
+from ase.data import atomic_numbers
 from langchain.agents import tool
 from langgraph.prebuilt import create_react_agent
 from langchain_anthropic import ChatAnthropic
@@ -39,6 +41,7 @@ import contextlib
 from autocat.surface import generate_surface_structures
 from autocat.adsorption import get_adsorption_sites, get_adsorbate_height_estimate
 from src import var
+from pymatgen.io.ase import AseAtomsAdaptor
 
 ##################################################################################################
 ##                                        Common tools                                          ##
@@ -150,6 +153,41 @@ def init_structure_data(
     
     # save the atoms into working dir
     saveDir = os.path.join(WORKING_DIRECTORY, f"{element}-{lattice}.xyz")
+    write(saveDir, atoms)
+    # time.sleep(60)
+    return f"Created atoms saved in {saveDir}"
+
+@tool
+def generate_HEA(elements: Annotated[Dict[str, float], "elements and their compositions in the HEA, e.g. {'Fe': 10, 'Co': 5, 'Ni': 2}"],
+                 lattice: Annotated[str, "Lattice type. Must be one of sc, fcc, bcc, tetragonal, bct, hcp, rhombohedral, orthorhombic, mcl, diamond, zincblende, rocksalt, cesiumchloride, fluorite or wurtzite."],
+                 a: Annotated[float, "Lattice constant a"],
+                 b: Annotated[float, "Lattice constant b. If only a and b is given, b will be interpreted as c instead."] = None,
+                 c: Annotated[float, "Lattice constant c"] = None,
+                 supercell: Annotated[Tuple[int, int, int], "Supercell size in the form of (x, y, z). "] = (4,4,4),
+                 ) -> Annotated[str, "Path of the saved HEA structure data file."]:
+    """Generate a high entropy alloy (HEA) structure based on the given elements and their compositions, crystal lattice, lattice info, save to the working dir, and return filename."""
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+    
+    parentElements = list(elements.keys())[0]
+    
+    atoms = bulk(parentElements, lattice, a=a, b=b, c=c, cubic=True)
+    atoms *= supercell
+    
+    print(list(elements.values()))
+    
+    assert len(atoms) > np.lcm.reduce([int(x) for x in list(elements.values())]), "The total number of atoms in the supercell must be greater than the least common multiple of the element compositions."
+    
+    pool = list(np.arange(len(atoms)))
+    for element, composition in elements.items():
+        num_atoms_to_replace = int((composition / sum(elements.values())) * len(atoms))
+        if len(pool) > num_atoms_to_replace:
+            indices_to_replace = np.random.choice(pool, num_atoms_to_replace, replace=False)
+            atoms.numbers[indices_to_replace] = atomic_numbers[element]
+            pool = [x for x in pool if x not in indices_to_replace]
+        else:
+            atoms.numbers[pool] = atomic_numbers[element]
+        
+    saveDir = os.path.join(WORKING_DIRECTORY, "".join(f"{elem}{count}" for elem, count in elements.items()) + ".xyz")
     write(saveDir, atoms)
     # time.sleep(60)
     return f"Created atoms saved in {saveDir}"
@@ -295,6 +333,93 @@ def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure
     # time.sleep(60)
     return f"Surface with adsorbate saved at {relaPath}"
 
+
+@tool
+def get_ground_state(
+    unrelaxedStructuresPath: Annotated[List[str], "Path to all the unrelaxed structures you want to find the ground state"],
+    initRelax: Annotated[bool, "Wether to perform initial relaxation before Monte Carlo simulated annealing"] = True,
+):
+    """
+    Generate python jobs for geeting the ground state structure through Monte Carlo simulated annealing.
+    """
+    
+    for i in len(unrelaxedStructuresPath):
+        for j in range(3):
+    
+            pythonFileScript = f"""import sys
+sys.path.append('/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent')
+
+from src.utils import *
+from mattersim.forcefield import MatterSimCalculator
+import copy
+
+SAVING_DIR = var.my_WORKING_DIRECTORY
+
+mattersimModel = 'MatterSim-v1.0.0-1M.pth'
+myCalc = MatterSimCalculator(load_path=mattersimModel, device='cuda')
+
+def gen_ground_state(nonGroundAtoms, myCalc, trialID, initRelax=True):
+    currAtoms = copy.deepcopy(nonGroundAtoms)
+    currAtoms.calc = myCalc
+
+    if initRelax:
+        eos = calculate_eos(currAtoms, eps=0.1)
+        try:
+            v, _, _ = eos.fit()
+        except:
+            print("EOS fit failed")
+            write(os.path.join(SAVING_DIR, str(trialID), "eos-failed.xyz"), currAtoms)
+            raise ValueError("EOS fit failed")
+        currAtoms.set_cell(currAtoms.get_cell() * (v / currAtoms.get_volume())**(1/3), scale_atoms=True)
+    
+    annealer = CanonicalSwapAnnealer(currAtoms, myCalc)
+
+    best_atoms, log = annealer.run(
+        AnnealSettings(target_accept_uphill=0.8, alpha=0.92, min_temperature=2.0, sweeps_per_T=20, max_T_steps=150, seed=None),
+        RelaxSettings(do_relax=True, fmax=0.03, steps=800),
+        verbose=True,
+    )
+
+    fig, ax = plt.subplots(2, 2, figsize=(12, 12))
+    ax[0, 0].plot(log['T'])
+    ax[0, 0].set_title("Temperature")
+    ax[0, 1].plot(log['E'])
+    ax[0, 1].set_title('Energy')
+    ax[1, 0].plot(log['accept_rate'])
+    ax[1, 0].set_title('Acceptance Ratio')
+    ax[1, 1].plot(log['best_E_progress'])        
+    ax[1, 1].set_title('Best Energy Progress')
+    plt.tight_layout()
+    
+
+    fileIdx = 0
+    
+    # while os.path.isfile(os.path.join(SAVING_DIR, str(trialID), f"monteCarlo_log_{fileIdx}.png")):
+    #     fileIdx += 1
+    plt.savefig(os.path.join(SAVING_DIR, str(trialID), f"monteCarlo_log_{fileIdx}.png"))
+    plt.close(fig)
+
+    fileIdx = 0
+    # while os.path.isfile(os.path.join(SAVING_DIR, str(trialID), f"monteCarlo_traj_{fileIdx}.xyz")):
+    #     fileIdx += 1
+    write(os.path.join(SAVING_DIR, str(trialID), f"monteCarlo_traj_{fileIdx}.xyz"), log['MCtraj'])
+
+    fileIdx = 0
+    # while os.path.isfile(os.path.join(SAVING_DIR, str(trialID), f"monteCarlo_out_{fileIdx}.xyz")):
+    #     fileIdx += 1  
+    write(os.path.join(SAVING_DIR, str(trialID), f"monteCarlo_out_{fileIdx}.xyz"), best_atoms)
+    
+    return best_atoms
+    
+myAtom = read({unrelaxedStructuresPath[i]})
+gen_ground_state(myAtom, myCalc, {j}, initRelax={initRelax})
+            """
+            
+            with open(os.path.join(var.my_WORKING_DIRECTORY, f'gen_ground_state_{i}_{j}.py'), 'w') as f:
+                f.write(pythonFileScript)
+            
+    return f"Python scripts for generating ground state structures are created in {var.my_WORKING_DIRECTORY}, please run them in the cluster."
+    
 @tool
 def write_script(
     content: Annotated[str, "Text content to be written into the document."],
@@ -855,6 +980,14 @@ def calculate_lc(jobFileIdx: Annotated[List[int], "indexs of files in the finish
 
     # time.sleep(60)
     return f'The lattice constant is {lc}'
+
+@tool
+def get_convex_hull(dir: Annotated[str, "Directory containing the finished jobs to generate the convex hull"]):
+    """
+    Generate the convex hull using the data in the given directory.
+    """
+    post_0_1_process(dir)
+    return f'Convex hull is generated in {dir}/convex_hull'
 
 @tool
 def get_bulk_modulus(
