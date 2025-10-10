@@ -159,13 +159,14 @@ def init_structure_data(
     return f"Created atoms saved in {saveDir}"
 
 @tool
-def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"],
-                                        crystal_structures: Annotated[str, "Crystal structure. Must be one of sc, fcc, bcc, tetragonal, bct, hcp, rhombohedral, orthorhombic, mcl, diamond, zincblende, rocksalt, cesiumchloride, fluorite or wurtzite."],
-                                        a_dict: Annotated[Dict[str, float], "Dictionary of lattice parameters for the crystal structure: Dict[species, lattice_parameter_a]. i.e. {'Pt': 4.0}"],
-                                        facets: Annotated[str, "Facet of the surface. Must be one of 100, 110, 111, 210, 211, 310, 311, 320, 321, 410, 411, 420, 421, 510, 511, 520, 521, 530, 531, 540, 541, 610, 611, 620, 621, 630, 631, 640, 641, 650, 651, 660, 661"],
-                                        supercell_dim: Annotated[List[int], "typically [int, int, 6]. Supercell dimension, how many times do you want to repeat the primitive cell in each direction: [int, int, int]"],
-                                        n_fixed_layers: Annotated[int, "typically 3. Number of fixed layers in the slab"] = 3
-                                        ):
+def generateSurface_and_getPossibleSite(
+    species: Annotated[str, "Element symbol"],
+    crystal_structures: Annotated[str, "Crystal structure. Must be one of sc, fcc, bcc, tetragonal, bct, hcp, rhombohedral, orthorhombic, mcl, diamond, zincblende, rocksalt, cesiumchloride, fluorite or wurtzite."],
+    a_dict: Annotated[Dict[str, float], "Dictionary of lattice parameters for the crystal structure: Dict[species, lattice_parameter_a]. i.e. {'Pt': 4.0}"],
+    facets: Annotated[str, "Facet of the surface. Must be one of 100, 110, 111, 210, 211, 310, 311, 320, 321, 410, 411, 420, 421, 510, 511, 520, 521, 530, 531, 540, 541, 610, 611, 620, 621, 630, 631, 640, 641, 650, 651, 660, 661"],
+    supercell_dim: Annotated[List[int], "typically [int, int, 6]. Supercell dimension, how many times do you want to repeat the primitive cell in each direction: [int, int, int]"],
+    n_fixed_layers: Annotated[int, "typically 3. Number of fixed layers in the slab"] = 3
+    ):
     """Generate a surface structure and get the available adsorption sites."""
     a_dict = {'Pt': 3.92}
     supercell_dim[-1] = 6
@@ -209,10 +210,11 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
     return f"the surface generated is saved at {relaPath}, available adsorbate sites are: {mySites_str}"
 
 @tool
-def generate_myAdsorbate(symbols: Annotated[str, "Element symbols of the adsorbate (Do not use any delimiters)"],
-                         positions: Annotated[List[List[float]], "Positions of the atoms in the adsorbate, e.g. [[x1, y1, z1], [x2, y2, z2], ...], following the same order as the symbols."],
-                         AdsorbateFileName: Annotated[str, "Name (not a path) of the adsorbate file to be saved in traj format"]
-                         ):
+def generate_myAdsorbate(
+    symbols: Annotated[str, "Element symbols of the adsorbate (Do not use any delimiters)"],
+    positions: Annotated[List[List[float]], "Positions of the atoms in the adsorbate, e.g. [[x1, y1, z1], [x2, y2, z2], ...], following the same order as the symbols."],
+    AdsorbateFileName: Annotated[str, "Name (not a path) of the adsorbate file to be saved in traj format"]
+    ):
     """Generate an adsorbate structure and save it."""
     assert AdsorbateFileName.endswith('.traj'), "AdsorbateFileName should end with .traj"
     assert not '/' in AdsorbateFileName, "AdsorbateFileName should not contain '/'"
@@ -227,12 +229,13 @@ def generate_myAdsorbate(symbols: Annotated[str, "Element symbols of the adsorba
     return f"Adsorbate saved under working directory at adsorbates/{AdsorbateFileName}"
 
 @tool
-def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure"],
-                    adsorbatePath: Annotated[str, "Path to the adsorbate structure"],
-                    mySites: Annotated[List[List[float]], "List of adsorption sites you want to put adsorbates on, e.g. [[x1, y1], [x2, y2], ...]"],
-                    rotations: Annotated[List[Tuple[float, str]], "List of rotations for the ith adsorbates, e.g. [[90.0, 'x'], [180.0, 'y'], ...]"],
-                    surfaceWithAdsorbateFileName: Annotated[str, "Name (not a path) of the surface adsorbated with adsorbate to be saved in traj format"]
-                    ):
+def add_myAdsorbate(
+    mySurfacePath: Annotated[str, "Path to the surface structure"],
+    adsorbatePath: Annotated[str, "Path to the adsorbate structure"],
+    mySites: Annotated[List[List[float]], "List of adsorption sites you want to put adsorbates on, e.g. [[x1, y1], [x2, y2], ...]"],
+    rotations: Annotated[List[Tuple[float, str]], "List of rotations for the ith adsorbates, e.g. [[90.0, 'x'], [180.0, 'y'], ...]"],
+    surfaceWithAdsorbateFileName: Annotated[str, "Name (not a path) of the surface adsorbated with adsorbate to be saved in traj format"]
+    ):
     """
     Add adsorbate to the surface structure and save it.
     The third argument must be a list in the form of [[x1, y1], [x2, y2], ...], where x and y are the coordinates of the adsorption sites.
