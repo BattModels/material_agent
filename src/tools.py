@@ -12,6 +12,7 @@ from langchain.agents import tool
 from langgraph.prebuilt import create_react_agent
 from langchain_anthropic import ChatAnthropic
 from langchain_openai import AzureChatOpenAI
+from langchain_core.callbacks import UsageMetadataCallbackHandler, BaseCallbackHandler
 import os 
 from typing import Annotated, Dict, Literal, Optional, Sequence, Tuple, Any
 import numpy as np
@@ -43,6 +44,19 @@ import contextlib
 from autocat.surface import generate_surface_structures
 from autocat.adsorption import get_adsorption_sites, get_adsorbate_height_estimate
 from src import var
+
+class DebugHandler(BaseCallbackHandler):
+    def on_llm_end(self, response, **kwargs):
+        usage = response.generations[0][0].message.response_metadata.get("usage", None)
+        print(usage)
+        inputToken = usage["input_tokens"]
+        outputToken = usage["output_tokens"]
+        var.TOTAL_TOKEN_USED += usage["input_tokens"] + usage["output_tokens"]
+        if var.my_SAVE_DIALOGUE:
+            with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+                f.write(f"input_tokens: {inputToken}, output_tokens: {outputToken}, total_tokens: {var.TOTAL_TOKEN_USED}\n")
+            with open(f"{var.my_WORKING_DIRECTORY}/token_cost.txt", "a") as f:
+                f.write(f"input_tokens: {inputToken}, output_tokens: {outputToken}, total_tokens: {var.TOTAL_TOKEN_USED}\n")
 
 ##################################################################################################
 ##                                        Common tools                                          ##
@@ -168,7 +182,7 @@ def generateSurface_and_getPossibleSite(
     n_fixed_layers: Annotated[int, "typically 3. Number of fixed layers in the slab"] = 3
     ):
     """Generate a surface structure and get the available adsorption sites."""
-    a_dict = {'Pt': 3.92}
+    a_dict = {'Pt': 3.99}
     supercell_dim[-1] = 6
     surface_dict = generate_surface_structures(
         species_list=[species],
@@ -417,7 +431,7 @@ def write_QE_script_w_ASE(
                 'restart_mode': restart_mode,
                 'prefix': prefix,
                 'pseudo_dir': "/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/all_lda_pbe_UPF",
-                'outdir': './out',
+                'outdir': f"./{filename[:-4]}-out",
                 'disk_io': disk_io,
                 'ibrav': ibrav,
                 'nat': nat,
@@ -561,6 +575,8 @@ def generate_convergence_test(input_file_name: Annotated[str, "Name of the templ
                 ## Change the prefix of the output file
                 # if 'outdir' in line:
                 #     lines[i] = f"    outdir = './out_k_{k}_ecutwfc_{ecutwfc_max}'\n"
+                if 'calculation' in line and 'scf' not in line:
+                    return f"Input template for convergence test should be an scf calculation. Please inspect CANVAS and select the correct template file, or generate a correct one."
 
                 ## Find the ecutwfc line
                 if 'ecutwfc' in line:
@@ -722,7 +738,7 @@ def get_convergence_suggestions(
     # config = load_config(os.path.join('./config', "default.yaml"))
     config = var.OTHER_GLOBAL_VARIABLES
     # llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-    workerllm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    workerllm = ChatAnthropic(model=config['ANTHROPIC_MODEL'], api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # llm = ChatAnthropic(model="claude-3-5-sonnet-20241022", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # workerllm = ChatAnthropic(model="claude-3-5-sonnet-20241022", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # llm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
@@ -757,7 +773,24 @@ Please use the format: parameterX: suggestionX, reasonX; parameterY: suggestionY
                 ("system", system_msg),
                 ("user", task_formatted)
             ]
-            agent_response = workerllm.invoke(invokingMsg)
+            
+            callback = DebugHandler()
+            
+            agent_response = workerllm.invoke(invokingMsg, config={"callbacks": [callback]})
+            
+            # print(callback.usage_metadata)
+            # if callback.usage_metadata:
+            #     inputTokenUsed = callback.usage_metadata["claude-sonnet-4-20250514"]["input_tokens"]
+            #     outputTokenUsed = callback.usage_metadata["claude-sonnet-4-20250514"]["output_tokens"]
+            #     var.TOTAL_TOKEN_USED = inputTokenUsed + outputTokenUsed
+            #     print(f"input_tokens: {inputToken}, output_tokens: {outputToken}, total_tokens: {var.TOTAL_TOKEN_USED}")
+                
+            #     if var.my_SAVE_DIALOGUE:
+            #         with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+            #             f.write(f"input_tokens: {inputToken}, output_tokens: {outputToken}, total_tokens: {var.TOTAL_TOKEN_USED}\n")
+            #         with open(f"{var.my_WORKING_DIRECTORY}/token_cost.txt", "a") as f:
+            #             f.write(f"input_tokens: {inputToken}, output_tokens: {outputToken}, total_tokens: {var.TOTAL_TOKEN_USED}\n")
+            
             
             finalSuggestion += agent_response.content + "\n\n"
             print(agent_response.content + "\n\n")
@@ -932,13 +965,21 @@ def get_lattice_constant(
 
 @tool
 def get_kspacing_ecutwfc(jobFileIdx: Annotated[List[int], "indexs of files in the finished job list of files of interest, which will be used to determine the kspacing and ecutwfc"],
-                         threshold: Annotated[float, "the threshold mev/atom to determine the convergence"] = 1.0) -> str:
+                         threshold: Annotated[float, "the threshold mev/atom to determine the convergence"] = 10.0) -> str:
     '''Read the convergen test result and determine the kspacing and ecutwfc used in the production
     Input:
         jobFileIdx: list, the indexs of files in the finished job list, which will be used to determine the kspacing and ecutwfc
-        threshold: float , the threshold mev/atom to determine the convergence
+        threshold: float , the threshold mev/atom to determine the convergence, typically 10 mev/atom
     output: str, the kspacing and ecutwfc used in the production
     '''
+    def extract_values(filename: str) -> Tuple[float, float]:
+        NUM = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
+        pattern = re.compile(rf"_k_(?P<k>{NUM})_ecutwfc_(?P<e>{NUM})(?:\.[^.]+)*$")
+        m = pattern.search(filename)
+        if not m:
+            raise ValueError(f"{filename} does not match expected pattern: ..._k_<num>_ecutwfc_<num>.<ext>")
+        return float(m.group("k")), float(m.group("e"))
+    
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     
     assert isinstance(jobFileIdx, list), "jobFileIdx should be a list"
@@ -971,8 +1012,15 @@ def get_kspacing_ecutwfc(jobFileIdx: Annotated[List[int], "indexs of files in th
         energy_list.append(energy)
         Natom = atom.get_number_of_atoms()
         
-        kspacing.append(job_dict[job]['k'])
-        ecutwfc.append(job_dict[job]['ecutwfc'])
+        try:
+            k_tmp = job_dict[job]['k']
+            e_tmp = job_dict[job]['ecutwfc']
+        except:
+            k_tmp, e_tmp = extract_values(job)
+            print(f"Extracted kspacing: {k_tmp}, ecutwfc: {e_tmp} from filename {job}")
+        
+        kspacing.append(k_tmp)
+        ecutwfc.append(e_tmp)
         goodJob.append(job)
     
     print(f"successfully read {len(kspacing)} kspacing and {len(ecutwfc)} ecutwfc")
@@ -1287,6 +1335,8 @@ def submit_and_monitor_job(
     
     qa = QueueAdapter(directory=WORKING_DIRECTORY)
     
+    startTime = time.time()
+    
     queueIDList = []
     notConvergedList = []
     while True:
@@ -1304,8 +1354,8 @@ def submit_and_monitor_job(
                 ## Supervisor sometimes ask to submit the job again, so we need to check if the output file exists
                 try:
                     # temporay disable the read function to avoid the calculation
-                    # tmp = read(os.path.join(WORKING_DIRECTORY, outputFile))
-                    # _ = tmp.get_potential_energy()
+                    tmp = read(os.path.join(WORKING_DIRECTORY, outputFile))
+                    _ = tmp.get_potential_energy()
                     print(f"Output file {inputFile}.pwo already exists, the calculation is done")
                     continue
                 except:
@@ -1485,6 +1535,10 @@ def submit_and_monitor_job(
             numberOfSucc += 1
         except:
             notConvergedListString += job + ", "
+            
+    print(f"HPC time used: {time.time() - startTime} seconds")
+    with open(os.path.join(WORKING_DIRECTORY, 'time_cost.txt'), 'a') as f:
+        f.write(f"HPC time used: {time.time() - startTime} seconds\n")
     
     if notConvergedListString != "":
         notConvergedListString = "However, the following jobs did not converge: " + notConvergedListString

@@ -101,6 +101,8 @@ if __name__ == "__main__":
     Literatures suggest that ontop site is 0.18 eV less stable than fcc site when using PBE xc.
     If your result is not within 10 percent of the literature, please find out possible reasons and resolve it."""
     
+    userMessage_13 = "Please calculate the lattice constant for Li in a BCC structure. The experiment value suggests 3.5 Angstrom."
+    
     testMessage = '''
     please generate a single input script for Li BCC structure with kspacing 0.1 and ecutwfc 40
     '''
@@ -184,6 +186,9 @@ if __name__ == "__main__":
     #         print(s)
     #         print("----")
 
+    startTime = time.time()
+    with open(os.path.join(WORKING_DIRECTORY, 'time_cost.txt'), 'a') as f:
+        f.write(f"=== Session started at {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n\n")
     print("Start, check the log file for details")
     log_filename = f"./log/agent_stream_{int(time.time())}.log"  # Add timestamp to filename
     with open(log_filename, "a") as log_file:
@@ -215,4 +220,7 @@ if __name__ == "__main__":
         if eval(config["SAVE_DIALOGUE"]):
             with open(f"{WORKING_DIRECTORY}/his.txt", "a") as f:
                 f.write(f"=== Session ended at {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n\n")
+        print(f"Total time used: {time.time() - startTime} seconds")
+    with open(os.path.join(WORKING_DIRECTORY, 'time_cost.txt'), 'a') as f:
+        f.write(f"Total time used: {time.time() - startTime} seconds\n")
     print("End, check the log file for details")

@@ -59,7 +59,6 @@ dft_agent_prompt = """
                 14. Do not report absolute path.
                 15. when calculating formation energies, convergence test on DFT parameters should be done on one representitive system with both the adsorbate and the surface.
                 16. If a job is having issue, i.e. didn't converge or not accurate enough, use the right tool to get suggestions on how to modify the input file to fix the issue.
-                17. when generating BEEF input files, 
             """
 
 dft_reader_agent_prompt = """

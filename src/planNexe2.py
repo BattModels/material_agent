@@ -19,6 +19,7 @@ from langgraph.graph import END, StateGraph, START
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import ToolNode,create_react_agent
 from pydantic import BaseModel, Field
+from langchain_core.callbacks import UsageMetadataCallbackHandler, BaseCallbackHandler
 
 from src.tools import *
 from src.prompt import dft_agent_prompt,hpc_agent_prompt,supervisor_prompt
@@ -33,6 +34,19 @@ OPTIONS = members
 # class AgentState(TypedDict):
 #     messages: Annotated[Sequence[BaseMessage], operator.add]
 #     next: str
+
+class DebugHandler(BaseCallbackHandler):
+    def on_llm_end(self, response, **kwargs):
+        usage = response.generations[0][0].message.response_metadata.get("usage", None)
+        print(usage)
+        inputToken = usage["input_tokens"]
+        outputToken = usage["output_tokens"]
+        var.TOTAL_TOKEN_USED += usage["input_tokens"] + usage["output_tokens"]
+        if var.my_SAVE_DIALOGUE:
+            with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+                f.write(f"input_tokens: {inputToken}, output_tokens: {outputToken}, total_tokens: {var.TOTAL_TOKEN_USED}\n")
+            with open(f"{var.my_WORKING_DIRECTORY}/token_cost.txt", "a") as f:
+                f.write(f"input_tokens: {inputToken}, output_tokens: {outputToken}, total_tokens: {var.TOTAL_TOKEN_USED}\n")
 
 class myStep(BaseModel):
     """Step in the plan."""
@@ -126,10 +140,15 @@ def print_stream(s):
         else:
             if hasattr(message, 'usage_metadata'):
                 var.TOKEN_USAGE.append(message.usage_metadata)
-                print(f"input_tokens: {message.usage_metadata['input_tokens']}, output_tokens: {message.usage_metadata['output_tokens']}")
+                inputToken = message.usage_metadata['input_tokens']
+                outputToken = message.usage_metadata['output_tokens']
+                var.TOTAL_TOKEN_USED += inputToken + outputToken
+                print(f"input_tokens: {inputToken}, output_tokens: {outputToken}, total_tokens: {var.TOTAL_TOKEN_USED}")
                 if var.my_SAVE_DIALOGUE:
                     with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-                        f.write(f"input_tokens: {message.usage_metadata['input_tokens']}, output_tokens: {message.usage_metadata['output_tokens']}\n")
+                        f.write(f"input_tokens: {inputToken}, output_tokens: {outputToken}, total_tokens: {var.TOTAL_TOKEN_USED}\n")
+                    with open(f"{var.my_WORKING_DIRECTORY}/token_cost.txt", "a") as f:
+                        f.write(f"input_tokens: {inputToken}, output_tokens: {outputToken}, total_tokens: {var.TOTAL_TOKEN_USED}\n")
             message.pretty_print()
             if var.my_SAVE_DIALOGUE:
                 with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
@@ -168,8 +187,11 @@ def supervisor_chain_node(state, chain, name):
         with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
             f.write(str(state))
             f.write("\n")
-
-    output = chain.invoke(state)
+            
+    cb = DebugHandler()
+    
+    chainWithConfig = chain.with_config(callbacks = [cb])
+    output = chainWithConfig.invoke(state)
 
     if isinstance(output.action, Response):
         return {"response": output.action.response, "next": "FINISH"}
@@ -264,8 +286,8 @@ def create_planning_graph(config: dict) -> StateGraph:
         f.write("run")
     
     # Define the model
-    llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-    workerllm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    llm = ChatAnthropic(model=config['ANTHROPIC_MODEL'], api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    workerllm = ChatAnthropic(model=config['ANTHROPIC_MODEL'], api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # workerllm = ChatAnthropic(model="claude-3-5-sonnet-20241022", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # llm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
     # workerllm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"], model_kwargs={'parallel_tool_calls': False})
