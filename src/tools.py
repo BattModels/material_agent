@@ -11,7 +11,7 @@ from ase import Atoms, Atom
 from langchain.agents import tool
 from langgraph.prebuilt import create_react_agent
 from langchain_anthropic import ChatAnthropic
-from langchain_openai import AzureChatOpenAI
+# from langchain_openai import AzureChatOpenAI
 import os 
 from typing import Annotated, Dict, Literal, Optional, Sequence, Tuple, Any
 import numpy as np

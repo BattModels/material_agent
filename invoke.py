@@ -194,7 +194,7 @@ if __name__ == "__main__":
         
         for s in graph.stream(
             {
-                "input": f"{userMessage_10}",
+                "input": f"{userMessage_6}",
                 "plan": [],
                 "past_steps": []
             }, llm_config):
