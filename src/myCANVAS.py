@@ -39,7 +39,7 @@ def _myDictPP(myDict, indent=4, nindent=0, toDisk=False, filename=None):
 class myCANVAS():
         
     def __init__(self, working_directory = os.getcwd()):
-        self.SpecialKeys = ["ready_to_run_job_list", "finished_job_list"]
+        self.SpecialKeys = ["ready_to_run_job_list", "finished_job_list", "afdb"]
         self.canvas = {}
         self.working_directory = working_directory
     
@@ -59,14 +59,14 @@ class myCANVAS():
             returning_finished_job_list = {i: job for i, job in enumerate(self.canvas[key])}
             return repr(returning_finished_job_list)
         
-        return f"{self.canvas.get(key, notFoundMsg)}"
+        return self.canvas.get(key, notFoundMsg)
         
     def write(self, key, value, overwrite=False):
         writeDir = os.path.join(self.working_directory, 'canvas.pickle')
         # if key not in self.canvas:
         
         if key in self.SpecialKeys:
-            if key == "finished_job_list":
+            if key == "finished_job_list" or key == "afdb":
                 return f"Key '{key}' is read-only and cannot be overwritten."
             assert isinstance(value, list), f"Value for key '{key}' must be a list."
             assert all(isinstance(i, str) for i in value), f"All elements in the list for key '{key}' must be strings of job names."

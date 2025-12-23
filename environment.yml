@@ -11,4 +11,7 @@ dependencies:
       - langchain-anthropic==0.3.0
       - pysqa
       - autocat
+      - seaborn
+      - custodian
+      - mace-torch
 prefix: /nfs/turbo/coe-venkvis/ziqiw-turbo/conda

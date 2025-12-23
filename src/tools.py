@@ -1,3 +1,5 @@
+import sys
+sys.path.append('/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/GNoME_DREAMS_OER_screening/src/GNoME_DREAMS_OER_screening')
 from copy import deepcopy
 from matplotlib import pyplot as plt
 from matplotlib import rcParams
@@ -13,7 +15,7 @@ from langgraph.prebuilt import create_react_agent
 from langchain_anthropic import ChatAnthropic
 # from langchain_openai import AzureChatOpenAI
 import os 
-from typing import Annotated, Dict, Literal, Optional, Sequence, Tuple, Any
+from typing import Annotated, Dict, Literal, Optional, Sequence, Tuple, Any, Union, Iterable
 import numpy as np
 from ase.lattice.cubic import FaceCenteredCubic
 import ast
@@ -42,8 +44,319 @@ from filecmp import cmp
 import contextlib
 from autocat.surface import generate_surface_structures
 from autocat.adsorption import get_adsorption_sites, get_adsorbate_height_estimate
+from pymatgen.io.ase import AseAtomsAdaptor
 from src import var
 
+from GNoME_aqueous_stability.src.gnome_aqueous_stability.data_utils import Data_Handler
+from GNoME_aqueous_stability.src.gnome_aqueous_stability.analysis_utils import (
+    plot_periodic_table_with_values, get_col_dict_for_atoms, 
+    Stable_Entries, Stability_Criteria, get_simplified_df, 
+    atoms_from_db
+)
+from oer.OER_study import OER_catalyst_study
+from vasp.pre_defined_vasp_sets import (
+    RPBE_relax_bulk_set, RPBE_relax_surface_set 
+)
+from vasp.vasp_calculation import (
+    run_vasp_via_custodian, read_vasp_results, clean_up_vasp_directory
+)
+
+
+try:
+    import torch
+    if torch.cuda.is_available():
+        try:
+            from mace.calculators import MACECalculator, mace_mp 
+            print("MACE imported successfully")
+        except:
+            mace_mp = None
+    else:
+        mace_mp = None
+except ImportError:
+    mace_mp = None 
+    
+##################################################################################################
+##                                         OER tools                                            ##
+##################################################################################################
+# @tool
+def OER_data_analasis_v2(
+    dir_of_data: Annotated[Optional[str], "Path to data directory. If None, use default data directory."] = None,
+    solid_filter: Annotated[bool, "Whether to apply solid filter: "] = True,
+    gga_only: Annotated[bool, "Whether to use only GGA calculations (True), or include r2SCAN data via the MP-mixing scheme (False)."] = True,
+    elements_to_exclude: Annotated[List[str], "List of element symbols to exclude from the analysis."] = [],
+    elements_whic_must_be_included: Annotated[List[str], "List of element symbols that must be included in the analysis."] = [],
+    pHs: Annotated[Union[List[float], float], "Potential pH values for stability criteria."] = 0.0,
+    Us: Annotated[List[float], "Potential values for stability criteria."] = [1.2, 2.0],
+    decomposition_threshold: Annotated[float, "Decomposition energy threshold for stability criteria."] = 0.5,
+    filters: Annotated[List[str], """List of filter expressions other than solid_filter, gga_only, elements_to_exclude, elements_whic_must_be_included, pHs, Us, and decomposition_threshold to apply to the stable entries dataframe. i.e. ["`Disorder Probability` < 0.2"]"""] = []
+    ) -> None:
+    """Perform data analysis on stable entries for OER based on specified criteria and filters, and save the results to a CSV file."""
+
+    dh = Data_Handler(
+    # Whether to apply solid filter:
+        solid_filter = solid_filter, 
+    # Whether to use only GGA calculations (True), or include r2SCAN data via the MP-mixing scheme (False):
+        gga_only = gga_only,
+    # Path to data directory:
+        path_to_data_directory = "/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/GNoME_aqueous_stability/data"
+        )
+    
+    if len(elements_to_exclude) > 0:
+        dh.remove_entries_with_elements(elements_to_exclude)
+    if len(elements_whic_must_be_included) > 0:
+        dh.remove_entries_without_elements(elements_whic_must_be_included, True)
+    
+    SCS = [Stability_Criteria(pHs=pHs, Us=Us, decomposition_threshold=decomposition_threshold),
+       # Stability_Criteria(pHs=0, Us=[1.2, 1.6], decomposition_threshold=0.05),
+       # Stability_Criteria(pHs=[2, 5], Us=[0., 2], decomposition_threshold=1),
+       ]
+    
+    se = Stable_Entries(dh, SCS)
+    df = se.get_stable_df()
+    
+    def apply_filter_strings_eval(df: pd.DataFrame, filters: Iterable[str]) -> pd.DataFrame:
+        out = df
+        for expr in filters:
+            mask = out.eval(expr, engine="python")
+            if mask.dtype != bool:
+                raise ValueError(f"Filter did not produce a boolean mask: {expr}")
+            out = out.loc[mask]
+        return out
+    
+    df = apply_filter_strings_eval(df, filters)
+    # get_simplified_df(df)
+    
+    # save df
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+    save_path = os.path.join(WORKING_DIRECTORY, 'stable_entries.csv')
+    df.to_csv(save_path, index=False)
+    
+    # write to canvas
+    CANVAS.write('OER_stable_entries_df', df, overwrite=True)
+    
+    # if dataframe is too long
+    if len(df) > 20:
+        return f"Stable entries data analysis completed. Results saved to {save_path}. The dataframe has {len(df)} entries, too long to display here. Please check the dataframe in canvas with key 'OER_stable_entries_df' using read dataframe tool."
+    else:
+        return f"Stable entries data analysis completed. Results saved to {save_path}. Below shows the dataframe with row index: \n{df.to_string(index=True)}"
+    
+@tool
+def read_df(
+    df_name: Annotated[str, "Name of the dataframe in canvas to read."],
+    startIdx: Annotated[int, "Starting index of the dataframe to read."] = 0,
+    endIdx: Annotated[int, "Ending index of the dataframe to read."] = 10,
+    ) -> str:
+    """Read a portion of a dataframe from canvas and return it as a string with row index."""
+    if endIdx - startIdx > 50:
+        return "Read no more than 50 rows at a time."
+    df = CANVAS.read(df_name)
+    print(df)
+    return df.iloc[startIdx:endIdx].to_string(index=True)
+
+def get_facets(
+    df_name: Annotated[str, "Name of the dataframe in canvas to read."],
+    MaterialId: Annotated[str, "MaterialId of the dataframe to get the atoms object from."],
+    max_miller: Annotated[int, "Maximum miller index to consider for surface generation."] = 1,
+    ) -> str:
+    """Determine which facet to study: from the dataframe saved in CANVAS, generate facets for a catalyst study of a system with a certain MaterialId, and save the results to canvas. The result is different facets with corresponding score of likelihood"""
+    afdb = CANVAS.canvas.get('afdb', None)
+    if afdb is None:
+        afdb = atoms_from_db(None)
+        CANVAS.canvas['afdb'] = afdb
+    df = CANVAS.read(df_name)
+    atoms = afdb.get_atoms_material_id(MaterialId, df)
+    # atoms_list = afdb.get_atoms_objects_from_df(df.iloc[dfIdx])
+    # atoms = atoms_list[0]
+    CANVAS.write(f"{MaterialId}_OER_catalyst_study_atoms", atoms, overwrite=True)
+    
+    # get facets for the catalyst study
+
+    catalyst_study = OER_catalyst_study(
+        bulk = atoms, 
+        H2O_gas_free_energy = -14.217, # <--- should be the DFT energy + free energy corrections, at the relevant level of theory
+        H2_gas_free_energy = -6.77, # <--- should be the DFT energy + free energy corrections, at the relevant level of theory
+                                        )
+
+    catalyst_study.identify_distinct_surfaces(max_miller = max_miller)
+    catalyst_study.predict_most_likely_surfaces(method = 'coordination', stoichiometry='stoichiometric') # An method should be chosen
+    catalyst_study_df = catalyst_study.get_df_with_surface_rankings().sort_values(by='Normalized Score', ascending=False)
+    CANVAS.write(f"{MaterialId}_OER_catalyst_study", catalyst_study, overwrite=True)
+    CANVAS.write(f"{MaterialId}_OER_catalyst_study_surface_ranking_df", catalyst_study_df, overwrite=True)
+    return f"Facets for the catalyst study have been generated and saved in canvas with key '{MaterialId}_OER_catalyst_study_surface_ranking_df'. Below shows the dataframe with row index: \n{catalyst_study_df.to_string(index=True)} \nHigher Normalized Score means more likely surface."
+
+@tool
+def get_terminations(
+    MaterialId: Annotated[str, "MaterialId of the dataframe to get the atoms object from."],
+    facets: Annotated[Tuple[int, int, int], "Miller indices of the facet to get terminations for."],
+)-> str:
+    """Determin which termination to study: get available terminations for a specific facet in the catalyst study, and save the results to canvas."""
+    catalyst_study = CANVAS.read(f"{MaterialId}_OER_catalyst_study")
+    catalyst_study.initialize_OER_surface_studies(facets)
+    surface_study_dict = catalyst_study.get_surface_studies() # dict with miller as key and list of surface studies as value
+    CANVAS.write(f"{MaterialId}_{facets[0]}{facets[1]}{facets[2]}_OER_catalyst_study_surface_study_dict", surface_study_dict, overwrite=True)
+    return f"available terminations for material {MaterialId} facet {facets} are: {repr(surface_study_dict[facets])}"
+        
+def study_termination(
+    MaterialId: Annotated[str, "MaterialId of the dataframe to get the atoms object from."],
+    facets: Annotated[Tuple[int, int, int], "Miller indices of the facet to study."],
+    termination_index: Annotated[int, "Index of the termination to study."],
+    calculationType: Annotated[Literal['MLIP', 'VASP'], "Type of calculation to perform for relaxation and adsorption site determination. use MLIP or VASP" ] = 'MLIP',
+):
+    """Once you've determined which termination of which facet, Study a specific termination of a facet for OER catalysis, including relaxation and adsorption site determination, and save the results to canvas."""
+    # relax a given termination and determine adsorption sites
+    surface_study_dict = CANVAS.read(f"{MaterialId}_{facets[0]}{facets[1]}{facets[2]}_OER_catalyst_study_surface_study_dict")
+    sur_study = surface_study_dict[facets][termination_index] # Get the frist termination of the (1,1,0) surfaces
+    atoms = sur_study.get_non_relaxed_surface()
+    if calculationType == 'VASP':
+        # prepare VASP calculation for relaxation
+        structure = AseAtomsAdaptor.get_structure(atoms)
+        vasp_set = RPBE_relax_bulk_set(structure = structure)
+        # write VASP input files
+        calculation_dir = os.path.join(var.my_WORKING_DIRECTORY, f"{MaterialId}_{facets[0]}{facets[1]}{facets[2]}_termination{termination_index}_bulk_relaxation")
+        os.makedirs(calculation_dir, exist_ok=True)
+        vasp_set.write_input(output_dir = calculation_dir, potcar_spec=True)
+        # run VASP calculation
+        # run_vasp_via_custodian(
+        #     directory = calculation_dir,
+        # #   handlers = [...], # You can specify custom custodian error handlers 
+        # # - see https://materialsproject.github.io/custodian/custodian.vasp.handlers.html
+        #     auto_npar = True, # Will choose optimal NPAR based on number of available cores
+        #     max_errors = 5 # Maximum number of errors to tolerate before stopping the calculation
+        # )
+
+        # # After the calculation is complete, you can read the results:
+        # atoms_list = read_vasp_results(
+        #     directory = calculation_dir,
+        #     return_only_final = True # Set to False if you want all intermediate structures
+        # )
+        # sur_study.set_relaxed_base_surface(atoms_list[-1], energy = atoms_list[-1].get_potential_energy())
+        
+        # fake
+        relaxed_atoms = atoms.copy() # Fake relaxed structure for testing purposes
+        sur_study.set_relaxed_base_surface(relaxed_atoms, energy = -100.0) # should this energy be the DFT energy of the relaxed surface? include free energy corrections?
+        
+    elif calculationType == 'MLIP':
+        if not var.GPU_AVAILABLE:
+            relaxed_atoms = atoms.copy() # Fake relaxed structure for testing purposes
+            sur_study.set_relaxed_base_surface(relaxed_atoms, energy = -100.0) # should this energy be the DFT energy of the relaxed surface? include free energy corrections?
+        else:
+            # relax the structure
+            try:
+                relaxed_atoms = atoms.copy()
+                relaxed_atoms.calc = mace_mp(model="medium", dispersion=False, default_dtype="float32", device="cuda")
+                opt = FIRE(relaxed_atoms, logfile=None)
+                converged = opt.run(fmax=0.02, steps=2000)
+                if not converged:
+                    print(f"FIRE MAXSTEP REACHED!!!")
+                eos = calculate_eos(relaxed_atoms, eps=0.15)
+                try:
+                    v, e, _ = eos.fit()
+                except:
+                    print("EOS fit failed")
+                    write(f"eos-failed.xyz", relaxed_atoms)
+                    raise ValueError("EOS fit failed")
+                relaxed_atoms.set_cell(relaxed_atoms.get_cell() * (v / relaxed_atoms.get_volume())**(1/3), scale_atoms=True)
+                sur_study.set_relaxed_base_surface(relaxed_atoms, energy = relaxed_atoms.get_potential_energy()) # should this energy be the DFT energy of the relaxed surface? include free energy corrections?
+            except Exception as e:
+                print(f"Relaxation with MACE failed: {e}")
+                relaxed_atoms = atoms.copy() # Fake relaxed structure for testing purposes
+                sur_study.set_relaxed_base_surface(relaxed_atoms, energy = -100.0) # should this energy be the DFT energy of the relaxed surface? include free energy corrections?
+    else:
+        return "calculationType must be either 'MLIP' or 'VASP'"
+    
+    sur_study.determine_adsorption_sites(use_relaxed_surface = True)
+    sites_df = sur_study.get_adsorption_sites_df()
+    site_studies_dict = sur_study.get_adsorption_site_studies_dict()
+
+    for index, row in sites_df.iterrows():
+
+        # Skip initialized sites:
+        if index in site_studies_dict:
+            continue
+
+        # Initialize other sites:
+        sur_study.initialize_adsorption_site_study(index)
+
+    list_of_atoms_to_relax = []
+    for site_index, site_study in site_studies_dict.items():
+
+        adsorbed_energies_dict = site_study.get_adsorption_site_energies()
+        if adsorbed_energies_dict['O_adsorbed_energy'] is not None:
+            continue
+
+        list_of_atoms_to_relax.append(
+            [site_index, site_study.get_initial_surface_with_O()]
+            )
+        
+    for site_index, atoms in list_of_atoms_to_relax:
+        # Here you would normally relax the structure and get the energy
+        # For testing purposes we just set a fake energy
+        # fake_energy = -104 - 2*np.random.rand()
+        if calculationType == 'VASP':
+            # prepare VASP calculation for relaxation
+            structure = AseAtomsAdaptor.get_structure(atoms)
+            vasp_set = RPBE_relax_surface_set(structure = structure)
+            # write VASP input files
+            calculation_dir = os.path.join(var.my_WORKING_DIRECTORY, f"{MaterialId}_{facets[0]}{facets[1]}{facets[2]}_termination{termination_index}_site{site_index}_surface_relaxation")
+            os.makedirs(calculation_dir, exist_ok=True)
+            vasp_set.write_input(output_dir = calculation_dir, potcar_spec=True)
+            # run VASP calculation
+            # run_vasp_via_custodian(
+            #     directory = calculation_dir,
+            # #   handlers = [...], # You can specify custom custodian error handlers 
+            # # - see https://materialsproject.github.io/custodian/custodian.vasp.handlers.html
+            #     auto_npar = True, # Will choose optimal NPAR based on number of available cores
+            #     max_errors = 5 # Maximum number of errors to tolerate before stopping the calculation
+            # )
+
+            # # After the calculation is complete, you can read the results:
+            # atoms_list = read_vasp_results(
+            #     directory = calculation_dir,
+            #     return_only_final = True # Set to False if you want all intermediate structures
+            # )
+            # site_studies_dict[site_index].set_relaxed_surface_with_O(atoms_list[-1], energy = atoms_list[-1].get_potential_energy())
+            
+            # fake relaxation for testing purposes
+            relaxed_atoms = atoms.copy() # Fake relaxed structure for testing purposes
+            fake_energy = -104 - 2*np.random.rand()
+            site_studies_dict[site_index].set_relaxed_surface_with_O(relaxed_atoms, energy = fake_energy)
+            
+        elif calculationType == 'MLIP':
+            if not var.GPU_AVAILABLE:
+                relaxed_atoms = atoms.copy() # Fake relaxed structure for testing purposes
+                fake_energy = -104 - 2*np.random.rand()
+                site_studies_dict[site_index].set_relaxed_surface_with_O(relaxed_atoms, energy = fake_energy)
+            else:
+                # relax the structure
+                try:
+                    relaxed_atoms = atoms.copy()
+                    relaxed_atoms.calc = mace_mp(model="medium", dispersion=False, default_dtype="float32", device="cuda")
+                    opt = FIRE(relaxed_atoms, logfile=None)
+                    converged = opt.run(fmax=0.02, steps=2000)
+                    if not converged:
+                        print(f"FIRE MAXSTEP REACHED!!!")
+                    eos = calculate_eos(relaxed_atoms, eps=0.15)
+                    try:
+                        v, e, _ = eos.fit()
+                    except:
+                        print("EOS fit failed")
+                        write(f"eos-failed.xyz", relaxed_atoms)
+                        raise ValueError("EOS fit failed")
+                    relaxed_atoms.set_cell(relaxed_atoms.get_cell() * (v / relaxed_atoms.get_volume())**(1/3), scale_atoms=True)
+                    site_studies_dict[site_index].set_relaxed_surface_with_O(relaxed_atoms, energy = relaxed_atoms.get_potential_energy())
+                except Exception as e:
+                    print(f"Relaxation with MACE failed: {e}")
+                    relaxed_atoms = atoms.copy() # Fake relaxed structure for testing purposes
+                    site_studies_dict[site_index].set_relaxed_surface_with_O(relaxed_atoms, energy = fake_energy)
+        else:
+            return "calculationType must be either 'MLIP' or 'VASP'"
+            
+        
+    sur_study.update_adsorption_energies()
+    sur_study_resultdf = sur_study.get_adsorption_sites_df()
+    CANVAS.write(f"{calculationType}_{MaterialId}_{facets[0]}{facets[1]}{facets[2]}_termination{termination_index}_OER_catalyst_study_surface_study", sur_study, overwrite=True)
+    CANVAS.write(f"{calculationType}_{MaterialId}_{facets[0]}{facets[1]}{facets[2]}_termination{termination_index}_OER_catalyst_study_surface_study_resultdf", sur_study_resultdf, overwrite=True)
+    return f"Termination study completed. Below shows the study result dataframe with row index: \n{sur_study_resultdf.to_string(index=True)}"
 ##################################################################################################
 ##                                        Common tools                                          ##
 ##################################################################################################

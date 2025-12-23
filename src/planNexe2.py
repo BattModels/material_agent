@@ -21,11 +21,11 @@ from langgraph.prebuilt import ToolNode,create_react_agent
 from pydantic import BaseModel, Field
 
 from src.tools import *
-from src.prompt import dft_agent_prompt,hpc_agent_prompt,supervisor_prompt
+from src.prompt import dft_agent_prompt,hpc_agent_prompt,supervisor_prompt, oer_agent_prompt
 from src import var
 
-members = ["DFT_Agent", "HPC_Agent"]
-instructions = [dft_agent_prompt, hpc_agent_prompt]
+members = ["DFT_Agent", "HPC_Agent", "OER_Agent"]
+instructions = [dft_agent_prompt, hpc_agent_prompt, oer_agent_prompt]
 OPTIONS = members
 
 # This defines the object that is passed between each node
@@ -90,6 +90,13 @@ teamCapability = """
     - Read output file to get energy
     - Calculate lattice constant
     - Calculate formation energy
+<OER Agent>:
+    - Analyze OER data with a initial screening and suggest initial candidates and save into a dataframe
+    - read rows from a dataframe
+    - pick a candidate from the dataframe
+    - get possible facets from a given maximum miller index of a candiate
+    - get possible terminations for a given facet
+    - determine adsorption site and study the adsorption behavior of a given termination using either MLIP or VASP, without the need of neither DFT Agent nor HPC Agent
 <HPC Agent>:
     - find job list from the job list file
     - Add resource suggestion base on the DFT input file
@@ -99,8 +106,12 @@ teamCapability = """
 teamRestriction = """
 <DFT Agent>:
     - Cannot submit job to HPC
+    - Cannot run VASP calculations
 <HPC Agent>:
     - Cannot determine the best parameters from convergence test result
+    - Cannot handle VASP jobs
+<OER Agent>:
+    - Cannot run Quantum ESPRESSO calculations
 """
 
 
@@ -283,7 +294,7 @@ def create_planning_graph(config: dict) -> StateGraph:
 <Objective>
     Given the following user request, decide which the member to act next, and do what
 <Instructions>:
-    1.  If the plan is empty, For the given objective, come up with a simple, high level plan based on the capability of the team listed here: {teamCapability} and the restrictions listed here: {teamRestriction} 
+    1.  If the plan is empty, For the given objective, first discuss with your worker agents, then come up with a simple, high level plan based on the capability of the team listed here: {teamCapability} and the restrictions listed here: {teamRestriction} 
         You don't have to use all the members, nor all the capabilities of the members.
         This plan should involve individual tasks, that if executed correctly will yield the correct answer. Do not add any superfluous steps. 
         The result of the final step should be the final answer. Make sure that each step has all the information needed - do not skip steps.
@@ -365,6 +376,19 @@ def create_planning_graph(config: dict) -> StateGraph:
                                    state_modifier=dft_agent_prompt)   
     dft_node = functools.partial(worker_agent_node, agent=dft_agent, name="DFT_Agent", past_steps_list=PAST_STEPS)
 
+    
+    oer_tools = [
+        inspect_my_canvas,
+        write_my_canvas,
+        read_my_canvas,
+        OER_data_analasis_v2,
+        read_df,
+        get_facets,
+        get_terminations,
+        study_termination]
+    oer_agent = create_react_agent(workerllm, tools=oer_tools,
+                                   state_modifier=oer_agent_prompt)
+    oer_node = functools.partial(worker_agent_node, agent=oer_agent, name="OER_Agent", past_steps_list=PAST_STEPS)
 
     ### HPC Agent
     # hpc_tools = [read_script, submit_and_monitor_job, read_energy_from_output]
@@ -401,6 +425,7 @@ def create_planning_graph(config: dict) -> StateGraph:
     graph = StateGraph(PlanExecute)
     graph.add_node("DFT_Agent", dft_node)
     graph.add_node("HPC_Agent", hpc_node)
+    graph.add_node("OER_Agent", oer_node)
     # graph.add_node("MD_Agent", md_node)
     # graph.add_node("CSS_Agent", css_node)
 

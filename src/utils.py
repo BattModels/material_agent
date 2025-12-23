@@ -12,6 +12,10 @@ from src import var
 from ase.io import read
 import numpy as np
 
+
+
+
+
 def load_config(path: str):
     ## Load the configuration file
     with open(path) as f:
@@ -20,6 +24,13 @@ def load_config(path: str):
     for key, value in config.items():
         var.OTHER_GLOBAL_VARIABLES[key] = value
     var.my_WORKING_DIRECTORY = config["WORKING_DIR"]
+    try:
+        import torch
+        print("Setting GPU_AVAILABLE == True")
+        var.GPU_AVAILABLE = torch.cuda.is_available()
+        print(f"GPU_AVAILABLE: {var.GPU_AVAILABLE}")
+    except ImportError:
+        var.GPU_AVAILABLE = False
     return config
 # def check_config(config: dict):
 #     for key, value in config.items():

@@ -101,6 +101,11 @@ if __name__ == "__main__":
     Literatures suggest that ontop site is 0.18 eV less stable than fcc site when using PBE xc.
     If your result is not within 10 percent of the literature, please find out possible reasons and resolve it."""
     
+    userMessage_13 = """please conduct a initial screening on the default dataset on potential candidates as a catalyst for OER reaction. Please only consider O only and skip the study of OH and OOH for now. Please save the cadidates dataframe into a csv file."""
+    
+    userMessage_14 = """please conduct a OER screening study to find out the best system to use as catalyst for OER reaction. You must evaluate more less than 3 different systems. Please only consider O only and skip the study of OH and OOH for now. Available systems can be found in the default dataset. you must include Ir, with Nsite < 20. Please use VASP as the calculator. 
+"""
+    
     testMessage = '''
     please generate a single input script for Li BCC structure with kspacing 0.1 and ecutwfc 40
     '''
@@ -194,7 +199,7 @@ if __name__ == "__main__":
         
         for s in graph.stream(
             {
-                "input": f"{userMessage_6}",
+                "input": f"{userMessage_14}",
                 "plan": [],
                 "past_steps": []
             }, llm_config):
