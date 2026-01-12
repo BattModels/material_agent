@@ -1,8 +1,10 @@
 import sys
 sys.path.append('/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/GNoME_DREAMS_OER_screening/src/GNoME_DREAMS_OER_screening')
 from copy import deepcopy
+from pathlib import Path
 from matplotlib import pyplot as plt
 from matplotlib import rcParams
+from executorlib import SlurmClusterExecutor
 import pandas as pd
 from math import e
 from networkx import predecessor
@@ -58,7 +60,7 @@ from vasp.pre_defined_vasp_sets import (
     RPBE_relax_bulk_set, RPBE_relax_surface_set 
 )
 from vasp.vasp_calculation import (
-    run_vasp_via_custodian, read_vasp_results, clean_up_vasp_directory
+    run_vasp_via_custodian, read_vasp_results, clean_up_vasp_directory, exlib_run_vasp
 )
 
 
@@ -207,6 +209,7 @@ def study_termination(
     surface_study_dict = CANVAS.read(f"{MaterialId}_{facets[0]}{facets[1]}{facets[2]}_OER_catalyst_study_surface_study_dict")
     sur_study = surface_study_dict[facets][termination_index] # Get the frist termination of the (1,1,0) surfaces
     atoms = sur_study.get_non_relaxed_surface()
+    slurm_template = Path("slurm_templates/test_template.sh").read_text()
     if calculationType == 'VASP':
         # prepare VASP calculation for relaxation
         structure = AseAtomsAdaptor.get_structure(atoms)
@@ -215,25 +218,57 @@ def study_termination(
         calculation_dir = os.path.join(var.my_WORKING_DIRECTORY, f"{MaterialId}_{facets[0]}{facets[1]}{facets[2]}_termination{termination_index}_bulk_relaxation")
         os.makedirs(calculation_dir, exist_ok=True)
         vasp_set.write_input(output_dir = calculation_dir, potcar_spec=True)
-        # run VASP calculation
-        # run_vasp_via_custodian(
-        #     directory = calculation_dir,
-        # #   handlers = [...], # You can specify custom custodian error handlers 
-        # # - see https://materialsproject.github.io/custodian/custodian.vasp.handlers.html
-        #     auto_npar = True, # Will choose optimal NPAR based on number of available cores
-        #     max_errors = 5 # Maximum number of errors to tolerate before stopping the calculation
+        
+        # --- Setup of VASP directories ---
+        # vasp_calc_main_dir = Path("VASP_calculations/test_run_" + run_id)
+        # calc_paths = [vasp_calc_main_dir / f"calc_{i}" for i in range(5)]
+
+        # for path in calc_paths:
+        #     vasp_set = TestRelaxSet(test_structure)
+        #     vasp_set.write_input(output_dir = path) 
+
+        # --- Cache location (for executorlib) ---
+        # cache_dir = (
+        #     Path("/home/scratch3/")
+        #     / 'matnis'
+        #     / "executorlib"
+        #     / "first_VASP_test"
+        #     / run_id
         # )
 
-        # # After the calculation is complete, you can read the results:
-        # atoms_list = read_vasp_results(
-        #     directory = calculation_dir,
-        #     return_only_final = True # Set to False if you want all intermediate structures
-        # )
-        # sur_study.set_relaxed_base_surface(atoms_list[-1], energy = atoms_list[-1].get_potential_energy())
+        # --- Submit job ---
+        print("--- Submitting job to Slurm cluster... ---", flush=True)
+        with SlurmClusterExecutor(cache_directory=os.path.join(calculation_dir, "cache")) as exe:
+            futures = []
+
+            for i, calc_path in enumerate([calculation_dir]):
+                calc_path = Path(calc_path)
+                f = exe.submit(
+                    exlib_run_vasp,
+                    calc_path.resolve(),
+                    resource_dict={
+                        "submission_template": slurm_template,
+                    },
+                )
+                futures.append(f)
+                print(f"Submitted job {i}, future: {f}", flush=True)
+            print("--- All jobs submitted ---", flush=True)
+
+            results = [f.result() for f in futures]
+            print("Results:", results)
+
+        for result in results:
+            print("VASP run result:", result['E'])
+        
+        # out = {"atoms_result": atoms_result, "E": E, "error": None}
+        if results[0].get("atoms_result", None) is None:
+            return f"VASP calculation failed for relaxation of {MaterialId} {facets} termination {termination_index}: {results[0].get('error', 'Unknown error')}"
+        
+        sur_study.set_relaxed_base_surface(results[0].get("atoms_result"), energy = results[0].get("E", None))
         
         # fake
-        relaxed_atoms = atoms.copy() # Fake relaxed structure for testing purposes
-        sur_study.set_relaxed_base_surface(relaxed_atoms, energy = -100.0) # should this energy be the DFT energy of the relaxed surface? include free energy corrections?
+        # relaxed_atoms = atoms.copy() # Fake relaxed structure for testing purposes
+        # sur_study.set_relaxed_base_surface(relaxed_atoms, energy = -100.0) # should this energy be the DFT energy of the relaxed surface? include free energy corrections?
         
     elif calculationType == 'MLIP':
         if not var.GPU_AVAILABLE:
@@ -300,26 +335,53 @@ def study_termination(
             calculation_dir = os.path.join(var.my_WORKING_DIRECTORY, f"{MaterialId}_{facets[0]}{facets[1]}{facets[2]}_termination{termination_index}_site{site_index}_surface_relaxation")
             os.makedirs(calculation_dir, exist_ok=True)
             vasp_set.write_input(output_dir = calculation_dir, potcar_spec=True)
-            # run VASP calculation
-            # run_vasp_via_custodian(
-            #     directory = calculation_dir,
-            # #   handlers = [...], # You can specify custom custodian error handlers 
-            # # - see https://materialsproject.github.io/custodian/custodian.vasp.handlers.html
-            #     auto_npar = True, # Will choose optimal NPAR based on number of available cores
-            #     max_errors = 5 # Maximum number of errors to tolerate before stopping the calculation
+                    
+            # --- Setup of VASP directories ---
+            # vasp_calc_main_dir = Path("VASP_calculations/test_run_" + run_id)
+            # calc_paths = [vasp_calc_main_dir / f"calc_{i}" for i in range(5)]
+
+            # for path in calc_paths:
+            #     vasp_set = TestRelaxSet(test_structure)
+            #     vasp_set.write_input(output_dir = path) 
+
+            # --- Cache location (for executorlib) ---
+            # cache_dir = (
+            #     Path("/home/scratch3/")
+            #     / 'matnis'
+            #     / "executorlib"
+            #     / "first_VASP_test"
+            #     / run_id
             # )
 
-            # # After the calculation is complete, you can read the results:
-            # atoms_list = read_vasp_results(
-            #     directory = calculation_dir,
-            #     return_only_final = True # Set to False if you want all intermediate structures
-            # )
-            # site_studies_dict[site_index].set_relaxed_surface_with_O(atoms_list[-1], energy = atoms_list[-1].get_potential_energy())
+            # --- Submit job ---
+            print("--- Submitting job to Slurm cluster... ---", flush=True)
+            with SlurmClusterExecutor(cache_directory=os.path.join(calculation_dir, "cache")) as exe:
+                futures = []
+
+                for i, calc_path in enumerate([calculation_dir]):
+                    calc_path = Path(calc_path)
+                    f = exe.submit(
+                        exlib_run_vasp,
+                        calc_path.resolve(),
+                        resource_dict={
+                            "submission_template": slurm_template,
+                        },
+                    )
+                    futures.append(f)
+                    print(f"Submitted job {i}, future: {f}", flush=True)
+                print("--- All jobs submitted ---", flush=True)
+
+                results = [f.result() for f in futures]
+                print("Results:", results)
+
+            for result in results:
+                print("VASP run result:", result['E'])
             
-            # fake relaxation for testing purposes
-            relaxed_atoms = atoms.copy() # Fake relaxed structure for testing purposes
-            fake_energy = -104 - 2*np.random.rand()
-            site_studies_dict[site_index].set_relaxed_surface_with_O(relaxed_atoms, energy = fake_energy)
+            # out = {"atoms_result": atoms_result, "E": E, "error": None}
+            if results[0].get("atoms_result", None) is None:
+                return f"VASP calculation failed for relaxation of {MaterialId} {facets} termination {termination_index}: {results[0].get('error', 'Unknown error')}"
+
+            site_studies_dict[site_index].set_relaxed_surface_with_O(results[0].get("atoms_result"), energy = results[0].get("E", None))
             
         elif calculationType == 'MLIP':
             if not var.GPU_AVAILABLE:
