@@ -11,4 +11,6 @@ dependencies:
       - langchain-anthropic==0.3.0
       - pysqa
       - autocat
+      - executorlib
+      - h5py
 prefix: /nfs/turbo/coe-venkvis/ziqiw-turbo/conda
