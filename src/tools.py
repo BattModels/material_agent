@@ -49,6 +49,8 @@ from autocat.adsorption import get_adsorption_sites, get_adsorbate_height_estima
 from pymatgen.io.ase import AseAtomsAdaptor
 from src import var
 
+from ursa.agents import ArxivAgent
+
 from GNoME_aqueous_stability.src.gnome_aqueous_stability.data_utils import Data_Handler
 from GNoME_aqueous_stability.src.gnome_aqueous_stability.analysis_utils import (
     plot_periodic_table_with_values, get_col_dict_for_atoms, 
