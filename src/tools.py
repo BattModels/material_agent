@@ -80,7 +80,32 @@ except ImportError:
 ##################################################################################################
 ##                                         OER tools                                            ##
 ##################################################################################################
-# @tool
+import asyncio  # If needed for defining async_func
+
+async def _arXiv_search(arxiv_search_query, context):  # Your async operation
+    config = var.OTHER_GLOBAL_VARIABLES
+    llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    agent = ArxivAgent(llm=llm, process_images=False, max_results=2)
+    result = await agent.ainvoke(
+        arxiv_search_query="oxygen evolution reaction catalyst", 
+        context="What is the best catalyst for oxygen evolution reaction?"
+    )
+    return result["final_summary"]
+
+
+@tool
+def arXiv_search(
+    arxiv_search_query: Annotated[str, "key word search query for arXiv."],
+    context: Annotated[str, "The context or question to focus the search on."]
+    ) -> str:
+    """Perform an arXiv search for papers with a given arxiv_search_query and context and provide a summary"""
+
+    result = asyncio.run(_arXiv_search(arxiv_search_query, context))
+
+    return result
+
+
+@tool
 def OER_data_analasis_v2(
     dir_of_data: Annotated[Optional[str], "Path to data directory. If None, use default data directory."] = None,
     solid_filter: Annotated[bool, "Whether to apply solid filter: "] = True,
