@@ -106,6 +106,45 @@ def arXiv_search(
 
     return result
 
+@tool
+def enter_candidate_in_log(
+    reason_or_hypothesis: Annotated[str, "Reason or hypothesis for selecting this candidate."],
+    df_name: Annotated[str, "Name of the dataframe in canvas to read."],
+    MaterialId: Annotated[str, "MaterialId of the candidate in the dataframe."],
+    note: Annotated[str | None, "Any notes you want to add."] = None,
+    ) -> str:
+    """
+    Initialize a catalyst candidate in the experiment-log, such that it
+    can be studied further.
+    """
+
+    afdb = CANVAS.canvas.get('afdb', None)
+    if afdb is None:
+        afdb = atoms_from_db(None)
+        CANVAS.canvas['afdb'] = afdb
+    
+    df = CANVAS.read(df_name)
+    atoms = afdb.get_atoms_material_id(MaterialId, df)
+    
+    CANVAS.write(f"{MaterialId}_OER_catalyst_study_atoms", atoms, 
+                 overwrite=True)
+
+    catalyst_study = OER_catalyst_study(
+        init_atoms = atoms, 
+        H2O_gas_free_energy = -14.217, # <--- should be the DFT energy + free energy corrections, at the relevant level of theory
+        H2_gas_free_energy = -6.77, # <--- should be the DFT energy + free energy corrections, at the relevant level of theory
+                                        )
+
+    EXPLOG.candidates.add_row(
+    {"candidate_id": MaterialId, "reason_or_hypothesis": reason_or_hypothesis,
+      "notes": note, "study_obj": catalyst_study},
+    allow_update=False)
+
+    message = f"Material {MaterialId} added to the experiment log with \
+    reason: {reason_or_hypothesis} and note: {note}. Candidate can now \
+    be studied further applying DFT"
+
+    return message
 
 @tool
 def OER_data_analasis_v2(
