@@ -373,7 +373,7 @@ def create_planning_graph(config: dict) -> StateGraph:
         analyze_BEEF_result
         ]
     dft_agent = create_react_agent(workerllm, tools=dft_tools,
-                                   state_modifier=dft_agent_prompt)   
+                                   prompt=dft_agent_prompt)   
     dft_node = functools.partial(worker_agent_node, agent=dft_agent, name="DFT_Agent", past_steps_list=PAST_STEPS)
 
     
@@ -387,7 +387,7 @@ def create_planning_graph(config: dict) -> StateGraph:
         get_terminations,
         study_termination]
     oer_agent = create_react_agent(workerllm, tools=oer_tools,
-                                   state_modifier=oer_agent_prompt)
+                                   prompt=oer_agent_prompt)
     oer_node = functools.partial(worker_agent_node, agent=oer_agent, name="OER_Agent", past_steps_list=PAST_STEPS)
 
     ### HPC Agent
@@ -401,7 +401,7 @@ def create_planning_graph(config: dict) -> StateGraph:
         ]
 
     hpc_agent = create_react_agent(workerllm, tools=hpc_tools,
-                                   state_modifier=hpc_agent_prompt)
+                                   prompt=hpc_agent_prompt)
 
     hpc_node = functools.partial(worker_agent_node, agent=hpc_agent, name="HPC_Agent", past_steps_list=PAST_STEPS)
     

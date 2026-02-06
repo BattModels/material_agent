@@ -12,7 +12,7 @@ import pandas as pd
 from src.utils import *
 from src.myCANVAS import CANVAS
 from ase import Atoms, Atom
-from langchain.agents import tool
+from langchain.tools import tool
 from langgraph.prebuilt import create_react_agent
 from langchain_anthropic import ChatAnthropic
 # from langchain_openai import AzureChatOpenAI
