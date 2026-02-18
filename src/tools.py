@@ -258,6 +258,68 @@ def submit_dft_job(
     
     return f"Submitted {calculation_type} for candidate {MaterialId}"
 
+
+@tool
+def get_terminations_ranking(
+    candidate_id: Annotated[str, "MaterialId of the candidate to get termination rankings for."],
+    max_miller: Annotated[int, "Maximum miller index to consider for surface generation."] = 1,
+):
+    """
+    Get a ranking of suface terminations for a given candidate. The ranking is based on the reduced
+    coordination of the surface atoms, with respect to the coorsponding bulk coordination. The smaller
+    the diffrence the higher the Normalized ranking, equaling a higher likelihood of being the most 
+    stable termination. Uniqe surfaces will be created up to the maximum miller index specified.
+    This function must be run before any surface relaxation or adsorption calculations are performed, 
+    since this fucntion creates all initial surfaces and the corresponding terminations. Any number
+    of terminations may be studied after the ranking is preformed. One the ranking has been 
+    performed once, it will not be performed again, and the same ranking will be used for any 
+    subsequent calls of this function. Since this function can be called repeatedly, there is no need to write the result
+     to the canvas.
+    """
+    
+    # Args to leve out (for now):
+    method = 'all'      # What coordination to consider
+    stoichiometry_tolerance = 0.2 # Allowed stoichiometry diviation from bulk
+    all_species_present = True # Only surfaces with all bulk species present
+    symmetrize = True # Whether to symmetrize the surfaces
+    select_closest_O_stoichiometry = True # Select surfaces with closest O stoichiometry to bulk
+    min_slab_thickness = 9 # Minimum slab thickness in Å
+    max_slab_thickness = 20 # Maximum slab thickness in Å
+    min_atoms = 20 # Minimum number of atoms in the slab
+    max_atoms = 120 # Maximum number of atoms in the slab
+    max_layers = 6 # Maximum number of layers, considered when building the slabs
+
+    study = EXPLOG.relational_frame.candidates[candidate_id].df['study_obj'][0]
+
+    out_string = ''
+
+    ranking = study.get_termination_rankings() # None on first call
+    if ranking is None:
+        out_string += f"This is the first termination ranking for candidate {candidate_id}:"\
+        # No arguments needs to be provided (all have defaults as shown above):
+        study.predict_most_likely_surfaces(
+        max_miller = max_miller,
+        method = method,
+        stoichiometry_tolerance = stoichiometry_tolerance,
+        all_species_present = all_species_present,
+        symmetrize = symmetrize,
+        select_closest_O_stoichiometry = select_closest_O_stoichiometry,
+        min_slab_thickness = min_slab_thickness,
+        max_slab_thickness = max_slab_thickness,
+        min_atoms = min_atoms,
+        max_atoms = max_atoms,
+        max_layers = max_layers
+        )
+        ranking = study.get_termination_rankings()
+    else:
+        out_string += f"Termination ranking for candidate {candidate_id} has already been determined, "\
+             "hence the same ranking is provided as before:"
+        
+    ranking.sort_values('Normalized score', ascending=False)
+    
+    out_string += ranking.to_string(index=True)
+    return out_string
+
 @tool
 def list_adsorption_sites(
     candidate_id: Annotated[str, "MaterialId of the candidate to list adsorption sites for."],
@@ -273,7 +335,8 @@ def list_adsorption_sites(
     these neighbors given as (neighbor element, distance [Å]). For 'lattice O' sites, the reduced coordination of the 
     lattice O is given, which is a measure of how many neighboring atoms the lattice O has compared to a fully 
     coordinated lattice O in the bulk structure (e.g., a reduced coordination of 1 means that the lattice O atom has a
-     decreased coordination of 1.)
+     decreased coordination of 1.). Since this function can be called repeatedly, there is no need to write the result
+     to the canvas.
     """
 
 
