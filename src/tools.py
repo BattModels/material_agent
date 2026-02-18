@@ -174,7 +174,35 @@ The following systems is still in progress:
         finalAnswer += cand_status + "\n"
 
     return finalAnswer
+
+@tool
+def read_explog(
+    candidate_id: Annotated[str, "MaterialId of the candidate to read the experiment log for."],
+    ) -> str:
+    """Read the experiment log for a specific candidate and return all information about the candidate together with all related jobs info"""
+    cadidate_row_df = EXPLOG.relational_frame.candidates[candidate_id].df
+    cadidate_row_df = cadidate_row_df.copy().drop(columns=["study_obj"])
+    related_process_df = EXPLOG.relational_frame.candidates[candidate_id].processes.df
+    related_process_df = related_process_df.copy().drop(columns=["VASP_dir"])    
     
+    answer = f"Candidate information:\n{cadidate_row_df.to_string(index=False)}\n\nRelated processes information:\n{related_process_df.to_string(index=False)}"
+    return answer
+
+@tool
+def get_top_k_candidates(
+    k: Annotated[int, "Number of top candidates to retrieve based on ideal overpotential."],
+    ) -> str:
+    """Get the top k candidates with the lowest ideal overpotential from the experiment log."""
+    candidates_df = EXPLOG.relational_frame.candidates.df.copy()
+    candidates_df = candidates_df[candidates_df['idealOverPotential'].notna()]
+    if len(candidates_df) == 0:
+        return "No candidates has ideal overpotential information."
+    candidates_df["idealOverPotential"] = candidates_df["idealOverPotential"].apply(lambda x: float(x))
+    N_finished = len(candidates_df)
+    top_k_candidates = candidates_df.nsmallest(k, 'idealOverPotential')
+    top_k_candidates = top_k_candidates.copy().drop(columns=["study_obj"])
+    answer = f"Top {k} out of {N_finished} candidates with the lowest ideal overpotential:\n{top_k_candidates.to_string(index=False)}\n\nYou may run more calculations on those candidates at different terminations and sites, or you can also run more calculations on other candidates to expand the pool and find more promising candidates."
+    return answer
 
 @tool
 def enter_candidate_in_log(
@@ -207,8 +235,7 @@ def enter_candidate_in_log(
 
     EXPLOG.add_candidate(
     {"candidate_id": MaterialId, "reason_or_hypothesis": reason_or_hypothesis,
-      "notes": note, "study_obj": catalyst_study},
-    allow_update=False)
+      "notes": note, "study_obj": catalyst_study})
 
     message = f"Material {MaterialId} added to the experiment log with \
     reason: {reason_or_hypothesis} and note: {note}. Candidate can now \
