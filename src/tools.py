@@ -318,6 +318,11 @@ def get_terminations_ranking(
     ranking.sort_values('Normalized score', ascending=False)
     
     out_string += ranking.to_string(index=True)
+
+    if True:
+        out_string += '\n\n Original reason or hypothesis for selecting this candidate:\n'
+        out_string += EXPLOG.relational_frame.candidates[candidate_id].df['reason_or_hypothesis'][0]
+
     return out_string
 
 @tool
@@ -389,6 +394,11 @@ def list_adsorption_sites(
     "type of adsorption site"}, inplace=True)
 
     out_string += df.to_string(index=True)
+
+    if True:
+        out_string += '\n\n Original reason or hypothesis for selecting this candidate:\n'
+        out_string += EXPLOG.relational_frame.candidates[candidate_id].df['reason_or_hypothesis'][0]
+
     return out_string
 
 
@@ -430,7 +440,7 @@ def OER_data_analasis_v2(
     df = se.get_stable_df()
     
     df = df_query(df, filters, sort)
-    # get_simplified_df(df)
+    df = get_simplified_df(df) # <<<<---- new change 2026-02-18
     if len(df) == 0:
         return "No stable entries found based on the specified criteria and filters."
     
