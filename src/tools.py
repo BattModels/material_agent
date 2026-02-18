@@ -88,7 +88,7 @@ async def _arXiv_search(arxiv_search_query, context):  # Your async operation
     config = var.OTHER_GLOBAL_VARIABLES
     ursaWorkspace = Path(os.path.join(var.my_WORKING_DIRECTORY, "ursa_workspace"))
     llm = ChatAnthropic(model="claude-haiku-4-5-20251001", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-    agent = ArxivAgent(llm=llm, process_images=False, max_results=5, workspace=ursaWorkspace)
+    agent = ArxivAgent(llm=llm, process_images=False, max_results=2, workspace=ursaWorkspace)
     result = await agent.ainvoke(
         arxiv_search_query=arxiv_search_query, 
         context=context
@@ -205,7 +205,7 @@ def enter_candidate_in_log(
         H2_gas_free_energy = -6.77, # <--- should be the DFT energy + free energy corrections, at the relevant level of theory
                                         )
 
-    EXPLOG.candidates.add_row(
+    EXPLOG.add_candidate(
     {"candidate_id": MaterialId, "reason_or_hypothesis": reason_or_hypothesis,
       "notes": note, "study_obj": catalyst_study},
     allow_update=False)
