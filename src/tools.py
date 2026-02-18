@@ -227,27 +227,34 @@ def submit_dft_job(
 ):
     """Submit different types of DFT jobs to the cluster for a cadidate"""
     
-    # study = EXPLOG.relational_frame.candidates.df['study_obj'][0]
+    study = EXPLOG.relational_frame.candidates.df['study_obj'][0]
+
+    # --- Sanity checks for input arguments ----------------------------
+    if ad_site_index is not None and termination_index is None:
+        raise ValueError("termination_index must be provided for" \
+        " adsorption calculations")
     
-    # try:       
-    # if termination_index is not None:
-    #     surface_study_dict = study.get_surface_studies()
-    #     if termination_index not in surface_study_dict.keys():
-    #         surface_study.initialize_oer_surface_study(termination_index)
-        
-    #     surface_study = study.get_surface_studies()[termination_index]
-    # if ad_site_index is not None:
-    #     ad_site_studies_dict = surface_study.get_adsorption_site_studies_dict()
-    # if ad_site_index not in ad_site_studies_dict.keys(
-    #     surface_study.initialize_adsorption_site_study(ad_site_index)
-    # surface_studies = study.get_surface_studies()
+    # MORE CHECKS NEEDED...!!!
+
+    # ------------------------------------------------------------------
     
-    # if termination_index not in surface_studies.keys():
-    #     study.initialize_oer_surface_study(termination_index)
+    # --- Initializing surface- and adsorption studies if not 
+    # already initialized ----------------------------------------------
+    if termination_index is not None:
+        surface_study_dict = study.get_surface_studies()
+        if termination_index not in surface_study_dict.keys():
+            surface_study.initialize_oer_surface_study(termination_index)
+        surface_study = study.get_surface_studies()[termination_index]
+
+        if ad_site_index is not None:
+            ad_site_studies_dict = surface_study.get_adsorption_site_studies_dict()
+            if ad_site_index not in ad_site_studies_dict.keys():
+                surface_study.initialize_adsorption_site_study(ad_site_index)
+            ad_site_study = surface_study.get_adsorption_site_studies_dict()[ad_site_index]
+    # ------------------------------------------------------------------
+            
     id = EXPLOG.add_process(MaterialId, calculation_type, termination_index, ad_site_index, note)
-    EXPLOG.submit_process(id, partition)
-        
-        
+    EXPLOG.submit_process(id, partition)  
     
     return f"Submitted {calculation_type} for candidate {MaterialId}"
 
