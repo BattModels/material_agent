@@ -1,5 +1,5 @@
 import sys
-sys.path.append('/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/GNoME_DREAMS_OER_screening/src/GNoME_DREAMS_OER_screening')
+sys.path.append('/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/GNoME_DREAMS_OER_screening/src')
 from copy import deepcopy
 from pathlib import Path
 from matplotlib import pyplot as plt
@@ -57,14 +57,14 @@ from GNoME_aqueous_stability.src.gnome_aqueous_stability.analysis_utils import (
     Stable_Entries, Stability_Criteria, get_simplified_df, 
     atoms_from_db
 )
-from oer.OER_study import OER_catalyst_study
-from vasp.pre_defined_vasp_sets import (
+from gnome_dreams_oer_screening.oer.oer_study import OER_catalyst_study
+from gnome_dreams_oer_screening.vasp.pre_defined_vasp_sets import (
     RPBE_relax_bulk_set, RPBE_relax_surface_set 
 )
-from vasp.vasp_calculation import (
-    run_vasp_via_custodian, read_vasp_results, clean_up_vasp_directory, exlib_run_vasp
+from gnome_dreams_oer_screening.vasp.vasp_calculation import (
+    run_vasp_via_custodian, read_vasp_results, clean_up_vasp_directory
 )
-
+from gnome_dreams_oer_screening.explog.explog import EXPLOG
 
 try:
     import torch
@@ -86,12 +86,18 @@ import asyncio  # If needed for defining async_func
 
 async def _arXiv_search(arxiv_search_query, context):  # Your async operation
     config = var.OTHER_GLOBAL_VARIABLES
-    llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-    agent = ArxivAgent(llm=llm, process_images=False, max_results=2)
+    ursaWorkspace = Path(os.path.join(var.my_WORKING_DIRECTORY, "ursa_workspace"))
+    llm = ChatAnthropic(model="claude-haiku-4-5-20251001", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    agent = ArxivAgent(llm=llm, process_images=False, max_results=5, workspace=ursaWorkspace)
     result = await agent.ainvoke(
-        arxiv_search_query="oxygen evolution reaction catalyst", 
-        context="What is the best catalyst for oxygen evolution reaction?"
+        arxiv_search_query=arxiv_search_query, 
+        context=context
     )
+    os.makedirs(ursaWorkspace/"arxiv_papers_used", exist_ok=True)
+    # move all files under ursaWorkspace / "arxiv_papers" into ursaWorkspace/"arxiv_papers_used"
+    for file in os.listdir(ursaWorkspace/"arxiv_papers"):
+        os.rename(ursaWorkspace/"arxiv_papers"/file, ursaWorkspace/"arxiv_papers_used"/file)
+    
     return result["final_summary"]
 
 
@@ -105,6 +111,70 @@ def arXiv_search(
     result = asyncio.run(_arXiv_search(arxiv_search_query, context))
 
     return result
+
+
+
+
+@tool
+def inspect_explog(only_get_updates: Annotated[bool, "Whether to only get updates since last inspection."] = False) -> str:
+    """Inspect the experiment log to get a summary of the candidates and processes."""
+    
+    all_candidates_id = EXPLOG.relational_frame.candidates.df["candidate_id"].tolist()
+    
+    finishish_mask = EXPLOG.relational_frame.candidates.df["idealOverPotential"].notna()
+    finishish_candidate_ids = EXPLOG.relational_frame.candidates.df.loc[finishish_mask, "candidate_id"].tolist()
+    
+    unfinished_candidate_ids = [can for can in all_candidates_id if can not in finishish_candidate_ids]
+          
+    finalAnswer = f"""You'v started {len(all_candidates_id)} candidates in total,
+You've finished study at least one oxygen adsorption on {len(finishish_candidate_ids)} systems,
+The following systems is still in progress:
+    """
+    
+    pdf = EXPLOG.relational_frame.processes.df
+
+    for cant_id in unfinished_candidate_ids:
+
+        cand_status = None
+
+        sub_pdf = pdf[pdf['candidate_id'] == cant_id]
+
+        jobs = sub_pdf['job_type'].tolist()
+
+        if 'OH_adsorption' in jobs:
+            cand_status = f'candidate {cant_id} has OH adsorption job which is: '
+            sub_pdf = sub_pdf[sub_pdf.job_type == 'OH_adsorption']
+        elif 'O_adsorption' in jobs:
+            cand_status = f'candidate {cant_id} has O adsorption job which is: '
+            sub_pdf = sub_pdf[sub_pdf.job_type == 'O_adsorption']
+        elif 'surface_relaxation' in jobs:
+            cand_status = f'candidate {cant_id} has surface relaxation job which is: '
+            sub_pdf = sub_pdf[sub_pdf.job_type == 'surface_relaxation']
+        elif 'bulk_relaxation' in jobs:
+            cand_status = f'candidate {cant_id} has bulk relaxation job which is: '
+            sub_pdf = sub_pdf[sub_pdf.job_type == 'bulk_relaxation']
+        else:
+            cand_status = f'no job submitted for {cant_id}\n'
+            sub_pdf = None
+        
+        if sub_pdf is not None:
+            if 'completed' in sub_pdf.status.tolist():
+                cand_status += 'completed'
+            elif 'failed' in sub_pdf.status.tolist():
+                cand_status += 'failed'
+            elif 'pending' in sub_pdf.status.tolist():
+                cand_status += 'pending'
+            elif 'submitted' in sub_pdf.status.tolist():
+                cand_status += 'submitted'
+            elif 'un-submitted' in sub_pdf.status.tolist():
+                cand_status += 'un-submitted'
+            else:
+                raise ValueError(f'unknown status for {cant_id}')
+            
+        finalAnswer += cand_status + "\n"
+
+    return finalAnswer
+    
 
 @tool
 def enter_candidate_in_log(
@@ -147,6 +217,41 @@ def enter_candidate_in_log(
     return message
 
 @tool
+def submit_dft_job(
+    MaterialId: Annotated[str, "MaterialId of the candidate to submit DFT job for."],
+    calculation_type: Annotated[Literal['bulk_relaxation', 'surface_relaxation', 'OH_adsorption', 'O_adsorption'], "Type of DFT calculation to submit."],
+    note: Annotated[str, "Short note you want to leave for the calculation"],
+    termination_index: Annotated[int, "termination index. Only needed for surface and adsorption calculations"] = None,
+    ad_site_index: Annotated[int, "index of the site you want to adsorb O or OH onto. Only neeeded for adsorption calculations"] = None,
+    partition: Annotated[Literal['xeon56', 'xeon40el8', 'xeon24el8', 'auto'], "Partition to submit the job to"] = "auto",
+):
+    """Submit different types of DFT jobs to the cluster for a cadidate"""
+    
+    # study = EXPLOG.relational_frame.candidates.df['study_obj'][0]
+    
+    # try:       
+    # if termination_index is not None:
+    #     surface_study_dict = study.get_surface_studies()
+    #     if termination_index not in surface_study_dict.keys():
+    #         surface_study.initialize_oer_surface_study(termination_index)
+        
+    #     surface_study = study.get_surface_studies()[termination_index]
+    # if ad_site_index is not None:
+    #     ad_site_studies_dict = surface_study.get_adsorption_site_studies_dict()
+    # if ad_site_index not in ad_site_studies_dict.keys(
+    #     surface_study.initialize_adsorption_site_study(ad_site_index)
+    # surface_studies = study.get_surface_studies()
+    
+    # if termination_index not in surface_studies.keys():
+    #     study.initialize_oer_surface_study(termination_index)
+    id = EXPLOG.add_process(MaterialId, calculation_type, termination_index, ad_site_index, note)
+    EXPLOG.submit_process(id, partition)
+        
+        
+    
+    return f"Submitted {calculation_type} for candidate {MaterialId}"
+
+@tool
 def OER_data_analasis_v2(
     dir_of_data: Annotated[Optional[str], "Path to data directory. If None, use default data directory."] = None,
     solid_filter: Annotated[bool, "Whether to apply solid filter: "] = True,
@@ -156,9 +261,10 @@ def OER_data_analasis_v2(
     pHs: Annotated[Union[List[float], float], "Potential pH values for stability criteria."] = 0.0,
     Us: Annotated[List[float], "Potential values for stability criteria."] = [1.2, 2.0],
     decomposition_threshold: Annotated[float, "Decomposition energy threshold for stability criteria."] = 0.5,
-    filters: Annotated[List[str], """List of filter expressions other than solid_filter, gga_only, elements_to_exclude, elements_whic_must_be_included, pHs, Us, and decomposition_threshold to apply to the stable entries dataframe. i.e. ["`Disorder Probability` < 0.2"]"""] = []
+    filters: List[Filter] = [],
+    sort: List[SortSpec] = [],
     ) -> None:
-    """Perform data analysis on stable entries for OER based on specified criteria and filters, and save the results to a CSV file."""
+    """Perform data analysis on stable entries for OER based on specified criteria and filters, sort, and save the resulting dataframe on CANVAS."""
 
     dh = Data_Handler(
     # Whether to apply solid filter:
@@ -182,17 +288,10 @@ def OER_data_analasis_v2(
     se = Stable_Entries(dh, SCS)
     df = se.get_stable_df()
     
-    def apply_filter_strings_eval(df: pd.DataFrame, filters: Iterable[str]) -> pd.DataFrame:
-        out = df
-        for expr in filters:
-            mask = out.eval(expr, engine="python")
-            if mask.dtype != bool:
-                raise ValueError(f"Filter did not produce a boolean mask: {expr}")
-            out = out.loc[mask]
-        return out
-    
-    df = apply_filter_strings_eval(df, filters)
+    df = df_query(df, filters, sort)
     # get_simplified_df(df)
+    if len(df) == 0:
+        return "No stable entries found based on the specified criteria and filters."
     
     # save df
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
@@ -206,7 +305,8 @@ def OER_data_analasis_v2(
     if len(df) > 20:
         return f"Stable entries data analysis completed. Results saved to {save_path}. The dataframe has {len(df)} entries, too long to display here. Please check the dataframe in canvas with key 'OER_stable_entries_df' using read dataframe tool."
     else:
-        return f"Stable entries data analysis completed. Results saved to {save_path}. Below shows the dataframe with row index: \n{df.to_string(index=True)}"
+        return f"Stable entries data analysis completed. Results saved to {save_path}. Below shows the dataframe with row index: \n{df.to_string(index=True)}. the same dataframe is also saved in canvas with key 'OER_stable_entries_df' and can be accessed using read dataframe tool."
+
     
 @tool
 def read_df(
@@ -252,239 +352,239 @@ def get_facets(
     CANVAS.write(f"{MaterialId}_OER_catalyst_study_surface_ranking_df", catalyst_study_df, overwrite=True)
     return f"Facets for the catalyst study have been generated and saved in canvas with key '{MaterialId}_OER_catalyst_study_surface_ranking_df'. Below shows the dataframe with row index: \n{catalyst_study_df.to_string(index=True)} \nHigher Normalized Score means more likely surface."
 
-@tool
-def get_terminations(
-    MaterialId: Annotated[str, "MaterialId of the dataframe to get the atoms object from."],
-    facets: Annotated[Tuple[int, int, int], "Miller indices of the facet to get terminations for."],
-)-> str:
-    """Determin which termination to study: get available terminations for a specific facet in the catalyst study, and save the results to canvas."""
-    catalyst_study = CANVAS.read(f"{MaterialId}_OER_catalyst_study")
-    catalyst_study.initialize_OER_surface_studies(facets)
-    surface_study_dict = catalyst_study.get_surface_studies() # dict with miller as key and list of surface studies as value
-    CANVAS.write(f"{MaterialId}_{facets[0]}{facets[1]}{facets[2]}_OER_catalyst_study_surface_study_dict", surface_study_dict, overwrite=True)
-    return f"available terminations for material {MaterialId} facet {facets} are: {repr(surface_study_dict[facets])}"
+# @tool
+# def get_terminations(
+#     MaterialId: Annotated[str, "MaterialId of the dataframe to get the atoms object from."],
+#     facets: Annotated[Tuple[int, int, int], "Miller indices of the facet to get terminations for."],
+# )-> str:
+#     """Determin which termination to study: get available terminations for a specific facet in the catalyst study, and save the results to canvas."""
+#     catalyst_study = CANVAS.read(f"{MaterialId}_OER_catalyst_study")
+#     catalyst_study.initialize_OER_surface_studies(facets)
+#     surface_study_dict = catalyst_study.get_surface_studies() # dict with miller as key and list of surface studies as value
+#     CANVAS.write(f"{MaterialId}_{facets[0]}{facets[1]}{facets[2]}_OER_catalyst_study_surface_study_dict", surface_study_dict, overwrite=True)
+#     return f"available terminations for material {MaterialId} facet {facets} are: {repr(surface_study_dict[facets])}"
         
-def study_termination(
-    MaterialId: Annotated[str, "MaterialId of the dataframe to get the atoms object from."],
-    facets: Annotated[Tuple[int, int, int], "Miller indices of the facet to study."],
-    termination_index: Annotated[int, "Index of the termination to study."],
-    calculationType: Annotated[Literal['MLIP', 'VASP'], "Type of calculation to perform for relaxation and adsorption site determination. use MLIP or VASP" ] = 'MLIP',
-):
-    """Once you've determined which termination of which facet, Study a specific termination of a facet for OER catalysis, including relaxation and adsorption site determination, and save the results to canvas."""
-    # relax a given termination and determine adsorption sites
-    surface_study_dict = CANVAS.read(f"{MaterialId}_{facets[0]}{facets[1]}{facets[2]}_OER_catalyst_study_surface_study_dict")
-    sur_study = surface_study_dict[facets][termination_index] # Get the frist termination of the (1,1,0) surfaces
-    atoms = sur_study.get_non_relaxed_surface()
-    slurm_template = Path("slurm_templates/test_template.sh").read_text()
-    if calculationType == 'VASP':
-        # prepare VASP calculation for relaxation
-        structure = AseAtomsAdaptor.get_structure(atoms)
-        vasp_set = RPBE_relax_bulk_set(structure = structure)
-        # write VASP input files
-        calculation_dir = os.path.join(var.my_WORKING_DIRECTORY, f"{MaterialId}_{facets[0]}{facets[1]}{facets[2]}_termination{termination_index}_bulk_relaxation")
-        os.makedirs(calculation_dir, exist_ok=True)
-        vasp_set.write_input(output_dir = calculation_dir, potcar_spec=True)
+# def study_termination(
+#     MaterialId: Annotated[str, "MaterialId of the dataframe to get the atoms object from."],
+#     facets: Annotated[Tuple[int, int, int], "Miller indices of the facet to study."],
+#     termination_index: Annotated[int, "Index of the termination to study."],
+#     calculationType: Annotated[Literal['MLIP', 'VASP'], "Type of calculation to perform for relaxation and adsorption site determination. use MLIP or VASP" ] = 'MLIP',
+# ):
+#     """Once you've determined which termination of which facet, Study a specific termination of a facet for OER catalysis, including relaxation and adsorption site determination, and save the results to canvas."""
+#     # relax a given termination and determine adsorption sites
+#     surface_study_dict = CANVAS.read(f"{MaterialId}_{facets[0]}{facets[1]}{facets[2]}_OER_catalyst_study_surface_study_dict")
+#     sur_study = surface_study_dict[facets][termination_index] # Get the frist termination of the (1,1,0) surfaces
+#     atoms = sur_study.get_non_relaxed_surface()
+#     slurm_template = Path("slurm_templates/test_template.sh").read_text()
+#     if calculationType == 'VASP':
+#         # prepare VASP calculation for relaxation
+#         structure = AseAtomsAdaptor.get_structure(atoms)
+#         vasp_set = RPBE_relax_bulk_set(structure = structure)
+#         # write VASP input files
+#         calculation_dir = os.path.join(var.my_WORKING_DIRECTORY, f"{MaterialId}_{facets[0]}{facets[1]}{facets[2]}_termination{termination_index}_bulk_relaxation")
+#         os.makedirs(calculation_dir, exist_ok=True)
+#         vasp_set.write_input(output_dir = calculation_dir, potcar_spec=True)
         
-        # --- Setup of VASP directories ---
-        # vasp_calc_main_dir = Path("VASP_calculations/test_run_" + run_id)
-        # calc_paths = [vasp_calc_main_dir / f"calc_{i}" for i in range(5)]
+#         # --- Setup of VASP directories ---
+#         # vasp_calc_main_dir = Path("VASP_calculations/test_run_" + run_id)
+#         # calc_paths = [vasp_calc_main_dir / f"calc_{i}" for i in range(5)]
 
-        # for path in calc_paths:
-        #     vasp_set = TestRelaxSet(test_structure)
-        #     vasp_set.write_input(output_dir = path) 
+#         # for path in calc_paths:
+#         #     vasp_set = TestRelaxSet(test_structure)
+#         #     vasp_set.write_input(output_dir = path) 
 
-        # --- Cache location (for executorlib) ---
-        # cache_dir = (
-        #     Path("/home/scratch3/")
-        #     / 'matnis'
-        #     / "executorlib"
-        #     / "first_VASP_test"
-        #     / run_id
-        # )
+#         # --- Cache location (for executorlib) ---
+#         # cache_dir = (
+#         #     Path("/home/scratch3/")
+#         #     / 'matnis'
+#         #     / "executorlib"
+#         #     / "first_VASP_test"
+#         #     / run_id
+#         # )
+#         exlib_run_vasp(calc_path.resolve())
+#         # --- Submit job ---
+#         print("--- Submitting job to Slurm cluster... ---", flush=True)
+#         with SlurmClusterExecutor(cache_directory=os.path.join(calculation_dir, "cache")) as exe:
+#             futures = []
 
-        # --- Submit job ---
-        print("--- Submitting job to Slurm cluster... ---", flush=True)
-        with SlurmClusterExecutor(cache_directory=os.path.join(calculation_dir, "cache")) as exe:
-            futures = []
+#             for i, calc_path in enumerate([calculation_dir]):
+#                 calc_path = Path(calc_path)
+#                 f = exe.submit(
+#                     exlib_run_vasp,
+#                     calc_path.resolve(),
+#                     resource_dict={
+#                         "submission_template": slurm_template,
+#                     },
+#                 )
+#                 futures.append(f)
+#                 print(f"Submitted job {i}, future: {f}", flush=True)
+#             print("--- All jobs submitted ---", flush=True)
 
-            for i, calc_path in enumerate([calculation_dir]):
-                calc_path = Path(calc_path)
-                f = exe.submit(
-                    exlib_run_vasp,
-                    calc_path.resolve(),
-                    resource_dict={
-                        "submission_template": slurm_template,
-                    },
-                )
-                futures.append(f)
-                print(f"Submitted job {i}, future: {f}", flush=True)
-            print("--- All jobs submitted ---", flush=True)
+#             results = [f.result() for f in futures]
+#             print("Results:", results)
 
-            results = [f.result() for f in futures]
-            print("Results:", results)
-
-        for result in results:
-            print("VASP run result:", result['E'])
+#         for result in results:
+#             print("VASP run result:", result['E'])
         
-        # out = {"atoms_result": atoms_result, "E": E, "error": None}
-        if results[0].get("atoms_result", None) is None:
-            return f"VASP calculation failed for relaxation of {MaterialId} {facets} termination {termination_index}: {results[0].get('error', 'Unknown error')}"
+#         # out = {"atoms_result": atoms_result, "E": E, "error": None}
+#         if results[0].get("atoms_result", None) is None:
+#             return f"VASP calculation failed for relaxation of {MaterialId} {facets} termination {termination_index}: {results[0].get('error', 'Unknown error')}"
         
-        sur_study.set_relaxed_base_surface(results[0].get("atoms_result"), energy = results[0].get("E", None))
+#         sur_study.set_relaxed_base_surface(results[0].get("atoms_result"), energy = results[0].get("E", None))
         
-        # fake
-        # relaxed_atoms = atoms.copy() # Fake relaxed structure for testing purposes
-        # sur_study.set_relaxed_base_surface(relaxed_atoms, energy = -100.0) # should this energy be the DFT energy of the relaxed surface? include free energy corrections?
+#         # fake
+#         # relaxed_atoms = atoms.copy() # Fake relaxed structure for testing purposes
+#         # sur_study.set_relaxed_base_surface(relaxed_atoms, energy = -100.0) # should this energy be the DFT energy of the relaxed surface? include free energy corrections?
         
-    elif calculationType == 'MLIP':
-        if not var.GPU_AVAILABLE:
-            relaxed_atoms = atoms.copy() # Fake relaxed structure for testing purposes
-            sur_study.set_relaxed_base_surface(relaxed_atoms, energy = -100.0) # should this energy be the DFT energy of the relaxed surface? include free energy corrections?
-        else:
-            # relax the structure
-            try:
-                relaxed_atoms = atoms.copy()
-                relaxed_atoms.calc = mace_mp(model="medium", dispersion=False, default_dtype="float32", device="cuda")
-                opt = FIRE(relaxed_atoms, logfile=None)
-                converged = opt.run(fmax=0.02, steps=2000)
-                if not converged:
-                    print(f"FIRE MAXSTEP REACHED!!!")
-                eos = calculate_eos(relaxed_atoms, eps=0.15)
-                try:
-                    v, e, _ = eos.fit()
-                except:
-                    print("EOS fit failed")
-                    write(f"eos-failed.xyz", relaxed_atoms)
-                    raise ValueError("EOS fit failed")
-                relaxed_atoms.set_cell(relaxed_atoms.get_cell() * (v / relaxed_atoms.get_volume())**(1/3), scale_atoms=True)
-                sur_study.set_relaxed_base_surface(relaxed_atoms, energy = relaxed_atoms.get_potential_energy()) # should this energy be the DFT energy of the relaxed surface? include free energy corrections?
-            except Exception as e:
-                print(f"Relaxation with MACE failed: {e}")
-                relaxed_atoms = atoms.copy() # Fake relaxed structure for testing purposes
-                sur_study.set_relaxed_base_surface(relaxed_atoms, energy = -100.0) # should this energy be the DFT energy of the relaxed surface? include free energy corrections?
-    else:
-        return "calculationType must be either 'MLIP' or 'VASP'"
+#     elif calculationType == 'MLIP':
+#         if not var.GPU_AVAILABLE:
+#             relaxed_atoms = atoms.copy() # Fake relaxed structure for testing purposes
+#             sur_study.set_relaxed_base_surface(relaxed_atoms, energy = -100.0) # should this energy be the DFT energy of the relaxed surface? include free energy corrections?
+#         else:
+#             # relax the structure
+#             try:
+#                 relaxed_atoms = atoms.copy()
+#                 relaxed_atoms.calc = mace_mp(model="medium", dispersion=False, default_dtype="float32", device="cuda")
+#                 opt = FIRE(relaxed_atoms, logfile=None)
+#                 converged = opt.run(fmax=0.02, steps=2000)
+#                 if not converged:
+#                     print(f"FIRE MAXSTEP REACHED!!!")
+#                 eos = calculate_eos(relaxed_atoms, eps=0.15)
+#                 try:
+#                     v, e, _ = eos.fit()
+#                 except:
+#                     print("EOS fit failed")
+#                     write(f"eos-failed.xyz", relaxed_atoms)
+#                     raise ValueError("EOS fit failed")
+#                 relaxed_atoms.set_cell(relaxed_atoms.get_cell() * (v / relaxed_atoms.get_volume())**(1/3), scale_atoms=True)
+#                 sur_study.set_relaxed_base_surface(relaxed_atoms, energy = relaxed_atoms.get_potential_energy()) # should this energy be the DFT energy of the relaxed surface? include free energy corrections?
+#             except Exception as e:
+#                 print(f"Relaxation with MACE failed: {e}")
+#                 relaxed_atoms = atoms.copy() # Fake relaxed structure for testing purposes
+#                 sur_study.set_relaxed_base_surface(relaxed_atoms, energy = -100.0) # should this energy be the DFT energy of the relaxed surface? include free energy corrections?
+#     else:
+#         return "calculationType must be either 'MLIP' or 'VASP'"
     
-    sur_study.determine_adsorption_sites(use_relaxed_surface = True)
-    sites_df = sur_study.get_adsorption_sites_df()
-    site_studies_dict = sur_study.get_adsorption_site_studies_dict()
+#     sur_study.determine_adsorption_sites(use_relaxed_surface = True)
+#     sites_df = sur_study.get_adsorption_sites_df()
+#     site_studies_dict = sur_study.get_adsorption_site_studies_dict()
 
-    for index, row in sites_df.iterrows():
+#     for index, row in sites_df.iterrows():
 
-        # Skip initialized sites:
-        if index in site_studies_dict:
-            continue
+#         # Skip initialized sites:
+#         if index in site_studies_dict:
+#             continue
 
-        # Initialize other sites:
-        sur_study.initialize_adsorption_site_study(index)
+#         # Initialize other sites:
+#         sur_study.initialize_adsorption_site_study(index)
 
-    list_of_atoms_to_relax = []
-    for site_index, site_study in site_studies_dict.items():
+#     list_of_atoms_to_relax = []
+#     for site_index, site_study in site_studies_dict.items():
 
-        adsorbed_energies_dict = site_study.get_adsorption_site_energies()
-        if adsorbed_energies_dict['O_adsorbed_energy'] is not None:
-            continue
+#         adsorbed_energies_dict = site_study.get_adsorption_site_energies()
+#         if adsorbed_energies_dict['O_adsorbed_energy'] is not None:
+#             continue
 
-        list_of_atoms_to_relax.append(
-            [site_index, site_study.get_initial_surface_with_O()]
-            )
+#         list_of_atoms_to_relax.append(
+#             [site_index, site_study.get_initial_surface_with_O()]
+#             )
         
-    for site_index, atoms in list_of_atoms_to_relax:
-        # Here you would normally relax the structure and get the energy
-        # For testing purposes we just set a fake energy
-        # fake_energy = -104 - 2*np.random.rand()
-        if calculationType == 'VASP':
-            # prepare VASP calculation for relaxation
-            structure = AseAtomsAdaptor.get_structure(atoms)
-            vasp_set = RPBE_relax_surface_set(structure = structure)
-            # write VASP input files
-            calculation_dir = os.path.join(var.my_WORKING_DIRECTORY, f"{MaterialId}_{facets[0]}{facets[1]}{facets[2]}_termination{termination_index}_site{site_index}_surface_relaxation")
-            os.makedirs(calculation_dir, exist_ok=True)
-            vasp_set.write_input(output_dir = calculation_dir, potcar_spec=True)
+#     for site_index, atoms in list_of_atoms_to_relax:
+#         # Here you would normally relax the structure and get the energy
+#         # For testing purposes we just set a fake energy
+#         # fake_energy = -104 - 2*np.random.rand()
+#         if calculationType == 'VASP':
+#             # prepare VASP calculation for relaxation
+#             structure = AseAtomsAdaptor.get_structure(atoms)
+#             vasp_set = RPBE_relax_surface_set(structure = structure)
+#             # write VASP input files
+#             calculation_dir = os.path.join(var.my_WORKING_DIRECTORY, f"{MaterialId}_{facets[0]}{facets[1]}{facets[2]}_termination{termination_index}_site{site_index}_surface_relaxation")
+#             os.makedirs(calculation_dir, exist_ok=True)
+#             vasp_set.write_input(output_dir = calculation_dir, potcar_spec=True)
                     
-            # --- Setup of VASP directories ---
-            # vasp_calc_main_dir = Path("VASP_calculations/test_run_" + run_id)
-            # calc_paths = [vasp_calc_main_dir / f"calc_{i}" for i in range(5)]
+#             # --- Setup of VASP directories ---
+#             # vasp_calc_main_dir = Path("VASP_calculations/test_run_" + run_id)
+#             # calc_paths = [vasp_calc_main_dir / f"calc_{i}" for i in range(5)]
 
-            # for path in calc_paths:
-            #     vasp_set = TestRelaxSet(test_structure)
-            #     vasp_set.write_input(output_dir = path) 
+#             # for path in calc_paths:
+#             #     vasp_set = TestRelaxSet(test_structure)
+#             #     vasp_set.write_input(output_dir = path) 
 
-            # --- Cache location (for executorlib) ---
-            # cache_dir = (
-            #     Path("/home/scratch3/")
-            #     / 'matnis'
-            #     / "executorlib"
-            #     / "first_VASP_test"
-            #     / run_id
-            # )
+#             # --- Cache location (for executorlib) ---
+#             # cache_dir = (
+#             #     Path("/home/scratch3/")
+#             #     / 'matnis'
+#             #     / "executorlib"
+#             #     / "first_VASP_test"
+#             #     / run_id
+#             # )
 
-            # --- Submit job ---
-            print("--- Submitting job to Slurm cluster... ---", flush=True)
-            with SlurmClusterExecutor(cache_directory=os.path.join(calculation_dir, "cache")) as exe:
-                futures = []
+#             # --- Submit job ---
+#             print("--- Submitting job to Slurm cluster... ---", flush=True)
+#             with SlurmClusterExecutor(cache_directory=os.path.join(calculation_dir, "cache")) as exe:
+#                 futures = []
 
-                for i, calc_path in enumerate([calculation_dir]):
-                    calc_path = Path(calc_path)
-                    f = exe.submit(
-                        exlib_run_vasp,
-                        calc_path.resolve(),
-                        resource_dict={
-                            "submission_template": slurm_template,
-                        },
-                    )
-                    futures.append(f)
-                    print(f"Submitted job {i}, future: {f}", flush=True)
-                print("--- All jobs submitted ---", flush=True)
+#                 for i, calc_path in enumerate([calculation_dir]):
+#                     calc_path = Path(calc_path)
+#                     f = exe.submit(
+#                         exlib_run_vasp,
+#                         calc_path.resolve(),
+#                         resource_dict={
+#                             "submission_template": slurm_template,
+#                         },
+#                     )
+#                     futures.append(f)
+#                     print(f"Submitted job {i}, future: {f}", flush=True)
+#                 print("--- All jobs submitted ---", flush=True)
 
-                results = [f.result() for f in futures]
-                print("Results:", results)
+#                 results = [f.result() for f in futures]
+#                 print("Results:", results)
 
-            for result in results:
-                print("VASP run result:", result['E'])
+#             for result in results:
+#                 print("VASP run result:", result['E'])
             
-            # out = {"atoms_result": atoms_result, "E": E, "error": None}
-            if results[0].get("atoms_result", None) is None:
-                return f"VASP calculation failed for relaxation of {MaterialId} {facets} termination {termination_index}: {results[0].get('error', 'Unknown error')}"
+#             # out = {"atoms_result": atoms_result, "E": E, "error": None}
+#             if results[0].get("atoms_result", None) is None:
+#                 return f"VASP calculation failed for relaxation of {MaterialId} {facets} termination {termination_index}: {results[0].get('error', 'Unknown error')}"
 
-            site_studies_dict[site_index].set_relaxed_surface_with_O(results[0].get("atoms_result"), energy = results[0].get("E", None))
+#             site_studies_dict[site_index].set_relaxed_surface_with_O(results[0].get("atoms_result"), energy = results[0].get("E", None))
             
-        elif calculationType == 'MLIP':
-            if not var.GPU_AVAILABLE:
-                relaxed_atoms = atoms.copy() # Fake relaxed structure for testing purposes
-                fake_energy = -104 - 2*np.random.rand()
-                site_studies_dict[site_index].set_relaxed_surface_with_O(relaxed_atoms, energy = fake_energy)
-            else:
-                # relax the structure
-                try:
-                    relaxed_atoms = atoms.copy()
-                    relaxed_atoms.calc = mace_mp(model="medium", dispersion=False, default_dtype="float32", device="cuda")
-                    opt = FIRE(relaxed_atoms, logfile=None)
-                    converged = opt.run(fmax=0.02, steps=2000)
-                    if not converged:
-                        print(f"FIRE MAXSTEP REACHED!!!")
-                    eos = calculate_eos(relaxed_atoms, eps=0.15)
-                    try:
-                        v, e, _ = eos.fit()
-                    except:
-                        print("EOS fit failed")
-                        write(f"eos-failed.xyz", relaxed_atoms)
-                        raise ValueError("EOS fit failed")
-                    relaxed_atoms.set_cell(relaxed_atoms.get_cell() * (v / relaxed_atoms.get_volume())**(1/3), scale_atoms=True)
-                    site_studies_dict[site_index].set_relaxed_surface_with_O(relaxed_atoms, energy = relaxed_atoms.get_potential_energy())
-                except Exception as e:
-                    print(f"Relaxation with MACE failed: {e}")
-                    relaxed_atoms = atoms.copy() # Fake relaxed structure for testing purposes
-                    site_studies_dict[site_index].set_relaxed_surface_with_O(relaxed_atoms, energy = fake_energy)
-        else:
-            return "calculationType must be either 'MLIP' or 'VASP'"
+#         elif calculationType == 'MLIP':
+#             if not var.GPU_AVAILABLE:
+#                 relaxed_atoms = atoms.copy() # Fake relaxed structure for testing purposes
+#                 fake_energy = -104 - 2*np.random.rand()
+#                 site_studies_dict[site_index].set_relaxed_surface_with_O(relaxed_atoms, energy = fake_energy)
+#             else:
+#                 # relax the structure
+#                 try:
+#                     relaxed_atoms = atoms.copy()
+#                     relaxed_atoms.calc = mace_mp(model="medium", dispersion=False, default_dtype="float32", device="cuda")
+#                     opt = FIRE(relaxed_atoms, logfile=None)
+#                     converged = opt.run(fmax=0.02, steps=2000)
+#                     if not converged:
+#                         print(f"FIRE MAXSTEP REACHED!!!")
+#                     eos = calculate_eos(relaxed_atoms, eps=0.15)
+#                     try:
+#                         v, e, _ = eos.fit()
+#                     except:
+#                         print("EOS fit failed")
+#                         write(f"eos-failed.xyz", relaxed_atoms)
+#                         raise ValueError("EOS fit failed")
+#                     relaxed_atoms.set_cell(relaxed_atoms.get_cell() * (v / relaxed_atoms.get_volume())**(1/3), scale_atoms=True)
+#                     site_studies_dict[site_index].set_relaxed_surface_with_O(relaxed_atoms, energy = relaxed_atoms.get_potential_energy())
+#                 except Exception as e:
+#                     print(f"Relaxation with MACE failed: {e}")
+#                     relaxed_atoms = atoms.copy() # Fake relaxed structure for testing purposes
+#                     site_studies_dict[site_index].set_relaxed_surface_with_O(relaxed_atoms, energy = fake_energy)
+#         else:
+#             return "calculationType must be either 'MLIP' or 'VASP'"
             
         
-    sur_study.update_adsorption_energies()
-    sur_study_resultdf = sur_study.get_adsorption_sites_df()
-    CANVAS.write(f"{calculationType}_{MaterialId}_{facets[0]}{facets[1]}{facets[2]}_termination{termination_index}_OER_catalyst_study_surface_study", sur_study, overwrite=True)
-    CANVAS.write(f"{calculationType}_{MaterialId}_{facets[0]}{facets[1]}{facets[2]}_termination{termination_index}_OER_catalyst_study_surface_study_resultdf", sur_study_resultdf, overwrite=True)
-    return f"Termination study completed. Below shows the study result dataframe with row index: \n{sur_study_resultdf.to_string(index=True)}"
+#     sur_study.update_adsorption_energies()
+#     sur_study_resultdf = sur_study.get_adsorption_sites_df()
+#     CANVAS.write(f"{calculationType}_{MaterialId}_{facets[0]}{facets[1]}{facets[2]}_termination{termination_index}_OER_catalyst_study_surface_study", sur_study, overwrite=True)
+#     CANVAS.write(f"{calculationType}_{MaterialId}_{facets[0]}{facets[1]}{facets[2]}_termination{termination_index}_OER_catalyst_study_surface_study_resultdf", sur_study_resultdf, overwrite=True)
+#     return f"Termination study completed. Below shows the study result dataframe with row index: \n{sur_study_resultdf.to_string(index=True)}"
 ##################################################################################################
 ##                                        Common tools                                          ##
 ##################################################################################################
@@ -507,6 +607,16 @@ def write_my_canvas(key: Annotated[str, "key"],
     """Write a value to the working canvas. If the key already exists, it will not overwrite unless specified."""
     # write a value to myCANVAS given a key and a value
     return CANVAS.write(key, value, overwrite)
+
+# @tool
+# def inspect_my_explog():
+#     pass
+
+# @tool
+# def read_my_explog():
+#     pass
+
+
 
 ##################################################################################################
 ##                                          DFT tools                                           ##
@@ -1609,12 +1719,12 @@ def add_resource_suggestion(
     partition: str,
     nnodes: int,
     ntasks: int,
-    runtime: Annotated[str, "Time limit for the job, in minutes"],
+    span: Annotated[str, "Time limit for the job, in minutes"],
     submissionScript: Annotated[str, "submission script based on the types of jobs. Do not include any #SBATCH stuff. output filename must be <full input filename with extension>.<output_file_type>"],
     outputFilename: Annotated[str, "the output filename of the job"],
 ) -> Annotated[str, "source suggestion saved location"]:
     """
-    After agent generate resource suggestions and submission script based on the DFT input file, add it to the json file "resource_suggestions.json" in the WORKING_DIRECTORY.
+    After agent generate resource suggestions and submission script based on the DFT input file, add it to "resource_suggestion".
     output filename must be <full input filename with extension>.<output_file_type>, 
     For example: {"input1.pwi": {"nnodes": 2, "ntasks": 4, "runtime": 60, "submissionScript": "
 spack load quantum-espresso@7.2\n \
@@ -1636,20 +1746,21 @@ echo " "\n \
 echo "Job Ended at `date`"\n \
     ", "outputFilename": ""}}
     """
-    if not isinstance(partition, str) or not isinstance(nnodes, int) or not isinstance(ntasks, int) or not isinstance(runtime, str):
+    if not isinstance(partition, str) or not isinstance(nnodes, int) or not isinstance(ntasks, int) or not isinstance(span, str):
         # time.sleep(60)
         return "Invalid input, please check the input format"
     # craete the json file if it does not exist, otherwise load it
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
 
-    new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 48, "runtime": 2800, "submissionScript": submissionScript, "outputFilename": outputFilename}}
+    # new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 48, "runtime": 2800, "submissionScript": submissionScript, "outputFilename": outputFilename}}
     
-    # check if resource_suggestions.db exist in the working directory
-    db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
-    if not os.path.exists(db_file):
-        initialize_database(db_file)
+    # # check if resource_suggestions.db exist in the working directory
+    # db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
+    # if not os.path.exists(db_file):
+    #     initialize_database(db_file)
     
-    add_to_database(new_resource_dict, db_file)
+    # add_to_database(new_resource_dict, db_file)
+    var.my_RESOURCE_DIRECTORY[qeInputFileName] = {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 4, "runtime": 30, "submissionScript": submissionScript, "outputFilename": outputFilename}
     
     # time.sleep(60)
     return f"Resource suggestion for {qeInputFileName} saved scucessfully"
@@ -1665,11 +1776,12 @@ def submit_and_monitor_job(
     
     # check if resource_suggestions.json exist
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
-    resource_suggestions = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
-    if not os.path.exists(resource_suggestions):
-        # time.sleep(60)
-        return "Resource suggestion file not found, please use the add_resource_suggestion tool to add the resource suggestion"
-        
+    # resource_suggestions = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
+    # if not os.path.exists(resource_suggestions):
+    #     # time.sleep(60)
+    if not var.my_RESOURCE_DIRECTORY:
+        return "Resource suggestion not found, please use the add_resource_suggestion tool to add the resource suggestion"
+    
     # job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
     job_list = []
     
@@ -1677,45 +1789,48 @@ def submit_and_monitor_job(
     # resource_suggestions = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.json')
     # with open(resource_suggestions, "r") as file:
     #     resource_dict = json.load(file)
-    db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
-    conn = sqlite3.connect(db_file)
-    cursor = conn.cursor()
+    # db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
+    # conn = sqlite3.connect(db_file)
+    # cursor = conn.cursor()
 
-    # Query all rows from the resources table
-    cursor.execute('SELECT * FROM resources')
-    rows = cursor.fetchall()
+    # # Query all rows from the resources table
+    # cursor.execute('SELECT * FROM resources')
+    # rows = cursor.fetchall()
 
-    # Reconstruct the original dictionary
-    resource_dict = {}
-    for row in rows:
-        filename, partition, nnodes, ntasks, runtime, submissionScript, outputFilename = row
-        job_list.append(filename)
-        resource_dict[filename] = {
-            'partition': partition,
-            'nnodes': nnodes,
-            'ntasks': ntasks,
-            'runtime': runtime,
-            'submissionScript': submissionScript,
-            'outputFilename': outputFilename
-        }
+    # # Reconstruct the original dictionary
+    resource_dict = deepcopy(var.my_RESOURCE_DIRECTORY)
+    # for row in rows:
+    #     filename, partition, nnodes, ntasks, runtime, submissionScript, outputFilename = row
+    #     job_list.append(filename)
+    #     resource_dict[filename] = {
+    #         'partition': partition,
+    #         'nnodes': nnodes,
+    #         'ntasks': ntasks,
+    #         'runtime': runtime,
+    #         'submissionScript': submissionScript,
+    #         'outputFilename': outputFilename
+    #     }
     
-    conn.close()
+    for key in resource_dict.keys():
+        job_list.append(key)
+    
+    # conn.close()
     print(f"loaded resource suggestions: {json.dumps(resource_dict, indent=4)}")
     
     CANVAS.canvas['ready_to_run_job_list'] = job_list.copy()
     wasJobList = deepcopy(job_list)
     
-    ## Check resource key is valid
-    for job in job_list:
-        if job not in resource_dict.keys():
-            # time.sleep(60)
-            return f"Resource suggestion for {job} is not found, please use the add_resource_suggestion tool to add the resource suggestion"
+    # ## Check resource key is valid
+    # for job in job_list:
+    #     if job not in resource_dict.keys():
+    #         # time.sleep(60)
+    #         return f"Resource suggestion for {job} is not found, please use the add_resource_suggestion tool to add the resource suggestion"
     
     if len(job_list) == 0:
         # time.sleep(60)
         return f"Resource suggestion not found, please use the add_resource_suggestion tool to add the resource suggestion."
     
-    print(f"loaded {len(job_list)} jobs from job_list.json, and {len(resource_dict)} resource suggestions from resource_suggestions.json")
+    print(f"loaded {len(job_list)} jobs from job_list.json, and {len(resource_dict)} resource suggestions from resource_suggestions")
     
     print("checking pysqa prerequisites...")
     # check if slurm.sh and queue.yaml exist in the working directory
@@ -1905,10 +2020,11 @@ def submit_and_monitor_job(
     finishedJobs += wasJobList
     CANVAS.canvas['finished_job_list'] = finishedJobs
     CANVAS.write('ready_to_run_job_list', [], overwrite=True)
-    db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
-    os.remove(db_file)
+    # db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
+    # os.remove(db_file)
     time.sleep(1)
-    initialize_database(db_file)
+    # initialize_database(db_file)
+    var.my_RESOURCE_DIRECTORY = {}
     time.sleep(1)
     
     notConvergedListString = ""
@@ -1935,102 +2051,102 @@ def submit_and_monitor_job(
     # time.sleep(60)
     return f"All job in job_list has finished. {notConvergedListString}please check the output file in the {WORKING_DIRECTORY}"
 
-@tool
-def submit_single_job(
-    inputFile: str
-) -> str:
-    '''Submit a single job to supercomputer, return the location of the output file once the job is done'''
-    print("checking pysqa prerequisites...")
-    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
-    # check if slurm.sh and queue.yaml exist in the working directory
-    if not os.path.exists(os.path.join(WORKING_DIRECTORY, "slurm.sh")) or not os.path.exists(os.path.join(WORKING_DIRECTORY, "queue.yaml")):
-        print("Creating pysqa prerequisites...")
-        create_pysqa_prerequisites(WORKING_DIRECTORY)
+# @tool
+# def submit_single_job(
+#     inputFile: str
+# ) -> str:
+#     '''Submit a single job to supercomputer, return the location of the output file once the job is done'''
+#     print("checking pysqa prerequisites...")
+#     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+#     # check if slurm.sh and queue.yaml exist in the working directory
+#     if not os.path.exists(os.path.join(WORKING_DIRECTORY, "slurm.sh")) or not os.path.exists(os.path.join(WORKING_DIRECTORY, "queue.yaml")):
+#         print("Creating pysqa prerequisites...")
+#         create_pysqa_prerequisites(WORKING_DIRECTORY)
     
-    qa = QueueAdapter(directory=WORKING_DIRECTORY)
+#     qa = QueueAdapter(directory=WORKING_DIRECTORY)
         
     
-    # load reousrce suggestions
-    resource_suggestions = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.json')
-    with open(resource_suggestions, "r") as file:
-        resource_dict = json.load(file)
+#     # load reousrce suggestions
+#     resource_suggestions = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.json')
+#     with open(resource_suggestions, "r") as file:
+#         resource_dict = json.load(file)
     
-    ## Check resource key is valid
+#     ## Check resource key is valid
     
-    if inputFile not in resource_dict.keys():
-        # time.sleep(60)
-        return f"Resource suggestion for {inputFile} is not found, please use the add_resource_suggestion tool to add the resource suggestion"
+#     if inputFile not in resource_dict.keys():
+#         # time.sleep(60)
+#         return f"Resource suggestion for {inputFile} is not found, please use the add_resource_suggestion tool to add the resource suggestion"
     
 
     
-    queueIDList = []
+#     queueIDList = []
 
 
-    ## Check if the input file exists
-    if not os.path.exists(os.path.join(WORKING_DIRECTORY, inputFile)):
-        # time.sleep(60)
-        return f"Input file {inputFile} does not exist, please use the find job list tool to submit the file in the job list"
-    print("Generating batch script...")
+#     ## Check if the input file exists
+#     if not os.path.exists(os.path.join(WORKING_DIRECTORY, inputFile)):
+#         # time.sleep(60)
+#         return f"Input file {inputFile} does not exist, please use the find job list tool to submit the file in the job list"
+#     print("Generating batch script...")
 
-    ## Check if the output file exists 
-    if os.path.exists(os.path.join(WORKING_DIRECTORY, f"{inputFile}.pwo")):
-        ## Supervisor sometimes ask to submit the job again, so we need to check if the output file exists
-        # time.sleep(60)
-        return f"Output file {inputFile}.pwo already exists, the calculation is done"
+#     ## Check if the output file exists 
+#     if os.path.exists(os.path.join(WORKING_DIRECTORY, f"{inputFile}.pwo")):
+#         ## Supervisor sometimes ask to submit the job again, so we need to check if the output file exists
+#         # time.sleep(60)
+#         return f"Output file {inputFile}.pwo already exists, the calculation is done"
         
         
-    job_id = qa.submit_job(
-        working_directory=WORKING_DIRECTORY,
-        cores=resource_dict[inputFile]['ntasks'],
-        memory_max=2000,
-        queue="slurm",
-        job_name="agent_job",
-        cores_max=resource_dict[inputFile]['ntasks'],
-        nodes_max=resource_dict[inputFile]['nnodes'],
-        partition=resource_dict[inputFile]['partition'],
-        run_time_max=resource_dict[inputFile]['runtime'],
-        command =f"""
-export OMP_NUM_THREADS=1
+#     job_id = qa.submit_job(
+#         working_directory=WORKING_DIRECTORY,
+#         cores=resource_dict[inputFile]['ntasks'],
+#         memory_max=2000,
+#         queue="slurm",
+#         job_name="agent_job",
+#         cores_max=resource_dict[inputFile]['ntasks'],
+#         nodes_max=resource_dict[inputFile]['nnodes'],
+#         partition=resource_dict[inputFile]['partition'],
+#         run_time_max=resource_dict[inputFile]['runtime'],
+#         command =f"""
+# export OMP_NUM_THREADS=1
 
-spack load quantum-espresso@7.2
+# spack load quantum-espresso@7.2
 
-echo "Job started on `hostname` at `date`"
+# echo "Job started on `hostname` at `date`"
 
-mpirun pw.x -i {inputFile} > {inputFile}.pwo
+# mpirun pw.x -i {inputFile} > {inputFile}.pwo
 
-echo " "
-echo "Job Ended at `date`"
-    """
-        )
+# echo " "
+# echo "Job Ended at `date`"
+#     """
+#         )
         
-    if job_id is None:
-        # time.sleep(60)
-        return "Job submission failed"
+#     if job_id is None:
+#         # time.sleep(60)
+#         return "Job submission failed"
 
-    queueIDList.append(job_id)
+#     queueIDList.append(job_id)
     
     
-    prevCount = len(queueIDList)
-    while True:
-        count = 0
-        print("waiting for", end=" ")
-        for queueID in queueIDList:
-            if qa.get_status_of_job(process_id=queueID):
-                count += 1
-                print(queueID, end=" ")
-        print("to finish", end="\r")
+#     prevCount = len(queueIDList)
+#     while True:
+#         count = 0
+#         print("waiting for", end=" ")
+#         for queueID in queueIDList:
+#             if qa.get_status_of_job(process_id=queueID):
+#                 count += 1
+#                 print(queueID, end=" ")
+#         print("to finish", end="\r")
         
-        if count < prevCount:
-            print()
-            prevCount = count
-        if count == 0:
-            break
-        time.sleep(1)
+#         if count < prevCount:
+#             print()
+#             prevCount = count
+#         if count == 0:
+#             break
+#         time.sleep(1)
         
-    print(f"Job has finished")
+#     print(f"Job has finished")
 
-    # time.sleep(60)
-    return f"Job has finished, please check the output file"   
+#     # time.sleep(60)
+#     return f"Job has finished, please check the output file"   
 
 @tool
 def read_energy_from_output(jobFileIdx: Annotated[List[int], "indexs of files in the finished job list of files of interest, energies of which will be read and printed"]

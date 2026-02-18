@@ -2,8 +2,8 @@ import sqlite3
 import os,yaml
 import pandas as pd
 from xml.dom.minidom import Element
-from typing import Callable, List, Literal
-from pydantic import BaseModel
+from typing import Callable, List, Literal, Any, Optional
+from pydantic import BaseModel, Field
 # from IPython.display import Image, display
 from langchain_core.runnables.graph import CurveStyle, MermaidDrawMethod, NodeStyles
 import getpass
@@ -295,3 +295,148 @@ def read_BEEF_output(file_path: str):
     energies = np.array(energies)
 
     return energies
+
+# Keep operators explicit and finite (avoid eval / df.query injection).
+Op = Literal[
+    "eq", "ne", "gt", "ge", "lt", "le",
+    "in", "not_in",
+    "contains", "not_contains",
+    "regex", "not_regex",
+    "isnull", "notnull",
+    "contains_any", "not_contains_any",
+    "contains_all", "not_contains_all",
+]
+
+
+class Filter(BaseModel):
+    column: str = Field(description="Column name to filter on.")
+    op: Op = Field(description="Filter operation.")
+    value: Optional[Any] = Field(
+        default=None,
+        description="Value for the operation.\n"
+            "Expected types by op:\n"
+            "- isnull, notnull: no value needed (omit or set null).\n"
+            "- eq, ne: scalar matching the column dtype (e.g., str, int, float, bool).\n"
+            "- gt, ge, lt, le: numeric scalar (int/float) or other comparable scalar matching the column dtype.\n"
+            "- in, not_in: list-like (e.g., list[str], list[int], list[float]); pass a list even for one item.\n"
+            "- contains, not_contains: str substring/pattern (uses pandas string contains).\n"
+            "- regex, not_regex: str regex pattern.\n"
+            "- contains_any, not_contains_any, contains_all, not_contains_all: list[str] "
+            "(for list-like columns such as Elements: List[str]).",
+    )
+    
+class SortSpec(BaseModel):
+    column: str = Field(description="Column name to sort by.")
+    ascending: bool = Field(default=True, description="Sort ascending if True else descending.")
+
+
+def _apply_filter(frame: pd.DataFrame, f) -> pd.DataFrame:
+    allowed_cols = set(frame.columns)
+    if f.column not in allowed_cols:
+        raise ValueError(f"Unknown column: {f.column}. Allowed: {sorted(allowed_cols)}")
+
+    s = frame[f.column]
+
+    if f.op in ("isnull", "notnull"):
+        mask = s.isna() if f.op == "isnull" else s.notna()
+        return frame[mask]
+
+    if f.value is None:
+        raise ValueError(f"Filter op '{f.op}' requires a value.")
+
+    val = f.value
+
+    # List-like column support (your 'Elements' is List[str])
+    if f.op in ("contains_any", "not_contains_any", "contains_all", "not_contains_all"):
+        if not isinstance(val, list):
+            raise ValueError(f"'{f.op}' requires a list value.")
+        target = set(val)
+
+        def ok(x):
+            if not isinstance(x, list):
+                return False
+            xs = set(x)
+            if f.op in ("contains_any", "not_contains_any"):
+                return len(xs & target) > 0
+            else:  # contains_all / not_contains_all
+                return target.issubset(xs)
+
+        mask = s.apply(ok)
+        if f.op.startswith("not_"):
+            mask = ~mask
+        return frame[mask]
+
+    # String ops
+    if f.op == "contains":
+        return frame[s.astype(str).str.contains(str(val), na=False)]
+
+    if f.op == "not_contains":
+        return frame[~s.astype(str).str.contains(str(val), na=False)]
+
+    if f.op == "regex":
+        pattern = re.compile(str(val))
+        return frame[s.astype(str).apply(lambda x: bool(pattern.search(x)) if pd.notna(x) else False)]
+
+    if f.op == "not_regex":
+        pattern = re.compile(str(val))
+        return frame[~s.astype(str).apply(lambda x: bool(pattern.search(x)) if pd.notna(x) else False)]
+
+    # Membership
+    if f.op == "in":
+        if not isinstance(val, list):
+            raise ValueError("'in' requires a list value.")
+        return frame[s.isin(val)]
+    if f.op == "not_in":
+        if not isinstance(val, list):
+            raise ValueError("'not_in' requires a list value.")
+        return frame[~s.isin(val)]
+
+    # Numeric comparisons (works for floats/ints; NaNs drop out naturally)
+    if f.op == "eq":
+        return frame[s == val]
+    if f.op == "ne":
+        return frame[s != val]
+    if f.op == "gt":
+        return frame[s > val]
+    if f.op == "ge":
+        return frame[s >= val]
+    if f.op == "lt":
+        return frame[s < val]
+    if f.op == "le":
+        return frame[s <= val]
+
+    raise ValueError(f"Unsupported op: {f.op}")
+
+def df_query(
+    frame: pd.DataFrame,
+    filters: List[Filter] = [],
+    sort: List[SortSpec] = [],
+    select: Optional[List[str]] = None,
+) -> str:
+    """Filter/sort/select rows from the materials dataframe and return a paginated result."""
+
+    allowed_cols = set(frame.columns)
+    
+    # Apply filters (AND semantics)
+    for f in filters:
+        frame = _apply_filter(frame, f)
+
+    # Apply sort
+    if sort:
+        for s in sort:
+            if s.column not in allowed_cols:
+                raise ValueError(f"Unknown sort column: {s.column}")
+        frame = frame.sort_values(
+            by=[s.column for s in sort],
+            ascending=[s.ascending for s in sort],
+            kind="mergesort",  # stable
+        )
+
+    # Select columns
+    if select is not None:
+        unknown = [c for c in select if c not in allowed_cols]
+        if unknown:
+            raise ValueError(f"Unknown columns in select: {unknown}")
+        frame = frame[select]
+
+    return frame
