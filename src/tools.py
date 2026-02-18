@@ -226,30 +226,108 @@ def submit_dft_job(
     partition: Annotated[Literal['xeon56', 'xeon40el8', 'xeon24el8', 'auto'], "Partition to submit the job to"] = "auto",
 ):
     """Submit different types of DFT jobs to the cluster for a cadidate"""
+
+    # --- Sanity checks for input arguments ----------------------------
+    if ad_site_index is not None and termination_index is None:
+        raise ValueError("termination_index must be provided for" \
+        " adsorption calculations")
     
-    # study = EXPLOG.relational_frame.candidates.df['study_obj'][0]
+    # MORE CHECKS NEEDED...!!!
+
+    # ------------------------------------------------------------------
     
-    # try:       
-    # if termination_index is not None:
-    #     surface_study_dict = study.get_surface_studies()
-    #     if termination_index not in surface_study_dict.keys():
-    #         surface_study.initialize_oer_surface_study(termination_index)
-        
-    #     surface_study = study.get_surface_studies()[termination_index]
-    # if ad_site_index is not None:
-    #     ad_site_studies_dict = surface_study.get_adsorption_site_studies_dict()
-    # if ad_site_index not in ad_site_studies_dict.keys(
-    #     surface_study.initialize_adsorption_site_study(ad_site_index)
-    # surface_studies = study.get_surface_studies()
-    
-    # if termination_index not in surface_studies.keys():
-    #     study.initialize_oer_surface_study(termination_index)
+    # --- Initializing surface- and adsorption studies if not 
+    # already initialized ----------------------------------------------
+    if termination_index is not None:
+        study = EXPLOG.relational_frame.candidates[MaterialId].df['study_obj'][0]
+
+        surface_study_dict = study.get_surface_studies()
+        if termination_index not in surface_study_dict.keys():
+            surface_study.initialize_oer_surface_study(termination_index)
+        surface_study = study.get_surface_studies()[termination_index]
+
+        if ad_site_index is not None:
+            ad_site_studies_dict = surface_study.get_adsorption_site_studies_dict()
+            if ad_site_index not in ad_site_studies_dict.keys():
+                surface_study.initialize_adsorption_site_study(ad_site_index)
+            ad_site_study = surface_study.get_adsorption_site_studies_dict()[ad_site_index]
+    # ------------------------------------------------------------------
+            
     id = EXPLOG.add_process(MaterialId, calculation_type, termination_index, ad_site_index, note)
     EXPLOG.submit_process(id, partition)
-        
-        
     
     return f"Submitted {calculation_type} for candidate {MaterialId}"
+
+@tool
+def list_adsorption_sites(
+    candidate_id: Annotated[str, "MaterialId of the candidate to list adsorption sites for."],
+    termination_index: Annotated[int, "termination index, of the surface to list adsorbtion sites for."],
+    # only_reduced_coord_O_sites = True, DISABELD FOR NOW...
+): 
+    """
+    Gives an preliminary list of adsorbtion sites if the termination has not been relaxed yet, or a list of final 
+    adsorption sites if the termination has been relaxed. Sites may be 'on-top' or 'lattice O' the latter beeing an 
+    espoused surface oxygen atom that is part of the lattice and may act as an adsorption site. For 'on-top' sites, the 
+    'element of the adsorption site' is listed, meaning the element which the adsobate is placed on top of. 
+    Additionally, a list of the closest neighboring elements of the adsorption site is given, with the  distance to 
+    these neighbors given as (neighbor element, distance [Å]). For 'lattice O' sites, the reduced coordination of the 
+    lattice O is given, which is a measure of how many neighboring atoms the lattice O has compared to a fully 
+    coordinated lattice O in the bulk structure (e.g., a reduced coordination of 1 means that the lattice O atom has a
+     decreased coordination of 1.)
+    """
+
+
+
+    only_reduced_coord_O_sites = True # <<<--- FIXED FOR NOW...
+
+    out_string = ''
+    df = None
+
+    study = EXPLOG.relational_frame.candidates[candidate_id].df['study_obj'][0]
+
+    if study.get_termination_rankings() is None:
+        raise ValueError(f"Termination rankings have not been determined yet for candidate {candidate_id}. "\
+                          "Please determine the termination rankings first.")
+
+    surface_study_dict = study.get_surface_studies()
+    if termination_index in surface_study_dict.keys():
+        surface_study = surface_study_dict[termination_index]
+        if surface_study.get_relaxed_surface() != None:
+            if surface_study.get_adsorption_sites_df() is None:
+                    surface_study.determine_adsorption_sites(
+                        only_reduced_coord_O_sites = only_reduced_coord_O_sites)
+                    
+            out_string += 'The requested termination has been relaxed, hence the provided adsorption sites are final,'\
+                 ' though adorbtion energies may change after relaxation of the adsorption structures.\n\n' 
+            df = surface_study.get_adsorption_sites_df()
+
+    if df is None:
+        out_string += f'The requested termination has not been relaxed yet, '\
+        'hence, the provided sites are only preliminary and may change after '\
+        'relaxation.\n\n'
+
+        df = study.get_init_adsorption_sites_df(termination_index, 
+                    only_reduced_coord_O_sites=only_reduced_coord_O_sites)
+
+    # Removing unnecessary columns
+    df = df.drop(columns=[ 'G(O)', 'G(OH)', 'G_approx(OOH)', 'G(OOH)', 'position', 'atom_index'])
+    
+    # Reshaping format:
+    df['ad site neighboring elements'] = df['ad site neighboring elements'].apply(lambda x: [(x[i][0], np.round(x[i][1],1)) for i in 
+        range(len(x))])
+
+    # Renaming columns for easier interpretation:
+    df.rename(columns={"ad site neighboring elements": 
+        "closest neighboring elemetns of adsorption site (element, distance [Å])"}, inplace=True)
+    df.rename(columns={"ad site element": "element of the adsorption site"}, inplace=True)
+    df.rename(columns={"reduced coordination": 
+        "reduced coordination of lattice O"}, inplace=True)
+    df.rename(columns={"site type": 
+    "type of adsorption site"}, inplace=True)
+
+    out_string += df.to_string(index=True)
+    return out_string
+
 
 @tool
 def OER_data_analasis_v2(
