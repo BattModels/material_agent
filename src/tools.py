@@ -48,7 +48,7 @@ from autocat.surface import generate_surface_structures
 from autocat.adsorption import get_adsorption_sites, get_adsorbate_height_estimate
 from pymatgen.io.ase import AseAtomsAdaptor
 from src import var
-
+import pickle
 from ursa.agents import ArxivAgent
 
 from GNoME_aqueous_stability.src.gnome_aqueous_stability.data_utils import Data_Handler
@@ -118,6 +118,10 @@ def arXiv_search(
 @tool
 def inspect_explog(only_get_updates: Annotated[bool, "Whether to only get updates since last inspection."] = False) -> str:
     """Inspect the experiment log to get a summary of the candidates and processes."""
+    _ = EXPLOG.update_log() # get the latest updates from the job handler and update the relational frame accordingly
+    # save EXPLOG into a pickle file under WORKING_DIRECTORY for record and future reference
+    # with open(os.path.join(var.my_WORKING_DIRECTORY, "EXPLOG.pkl"), "wb") as f:
+    #     pickle.dump(EXPLOG, f)
     
     all_candidates_id = EXPLOG.relational_frame.candidates.df["candidate_id"].tolist()
     
@@ -180,6 +184,10 @@ def read_explog(
     candidate_id: Annotated[str, "MaterialId of the candidate to read the experiment log for."],
     ) -> str:
     """Read the experiment log for a specific candidate and return all information about the candidate together with all related jobs info"""
+    _ = EXPLOG.update_log() # get the latest updates from the job handler and update the relational frame accordingly
+    # save EXPLOG into a pickle file under WORKING_DIRECTORY for record and future reference
+    # with open(os.path.join(var.my_WORKING_DIRECTORY, "EXPLOG.pkl"), "wb") as f:
+    #     pickle.dump(EXPLOG, f)
     cadidate_row_df = EXPLOG.relational_frame.candidates[candidate_id].df
     cadidate_row_df = cadidate_row_df.copy().drop(columns=["study_obj"])
     related_process_df = EXPLOG.relational_frame.candidates[candidate_id].processes.df
@@ -193,6 +201,10 @@ def get_top_k_candidates(
     k: Annotated[int, "Number of top candidates to retrieve based on ideal overpotential."],
     ) -> str:
     """Get the top k candidates with the lowest ideal overpotential from the experiment log."""
+    _ = EXPLOG.update_log() # get the latest updates from the job handler and update the relational frame accordingly
+    # save EXPLOG into a pickle file under WORKING_DIRECTORY for record and future reference
+    # with open(os.path.join(var.my_WORKING_DIRECTORY, "EXPLOG.pkl"), "wb") as f:
+    #     pickle.dump(EXPLOG, f)
     candidates_df = EXPLOG.relational_frame.candidates.df.copy()
     candidates_df = candidates_df[candidates_df['idealOverPotential'].notna()]
     if len(candidates_df) == 0:
@@ -203,6 +215,9 @@ def get_top_k_candidates(
     top_k_candidates = top_k_candidates.copy().drop(columns=["study_obj"])
     answer = f"Top {k} out of {N_finished} candidates with the lowest ideal overpotential:\n{top_k_candidates.to_string(index=False)}\n\nYou may run more calculations on those candidates at different terminations and sites, or you can also run more calculations on other candidates to expand the pool and find more promising candidates."
     return answer
+
+# @tool
+# def get_explog_updates()
 
 @tool
 def enter_candidate_in_log(
@@ -233,9 +248,14 @@ def enter_candidate_in_log(
         H2_gas_free_energy = -6.77, # <--- should be the DFT energy + free energy corrections, at the relevant level of theory
                                         )
 
-    EXPLOG.add_candidate(
-    {"candidate_id": MaterialId, "reason_or_hypothesis": reason_or_hypothesis,
-      "notes": note, "study_obj": catalyst_study})
+    EXPLOG.add_candidate(candidate_id=MaterialId,
+                         reason_or_hypothesis=reason_or_hypothesis,
+                         notes=note,
+                         study_obj=catalyst_study)
+    
+    # save EXPLOG into a pickle file under WORKING_DIRECTORY for record and future reference
+    # with open(os.path.join(var.my_WORKING_DIRECTORY, "EXPLOG.pkl"), "wb") as f:
+    #     pickle.dump(EXPLOG, f)
 
     message = f"Material {MaterialId} added to the experiment log with \
     reason: {reason_or_hypothesis} and note: {note}. Candidate can now \
@@ -282,6 +302,9 @@ def submit_dft_job(
             
     id = EXPLOG.add_process(MaterialId, calculation_type, termination_index, ad_site_index, note)
     EXPLOG.submit_process(id, partition)
+    # save EXPLOG into a pickle file under WORKING_DIRECTORY for record and future reference
+    # with open(os.path.join(var.my_WORKING_DIRECTORY, "EXPLOG.pkl"), "wb") as f:
+    #     pickle.dump(EXPLOG, f)
     
     return f"Submitted {calculation_type} for candidate {MaterialId}"
 
@@ -442,7 +465,7 @@ def OER_data_analasis_v2(
     filters: List[Filter] = [],
     sort: List[SortSpec] = [],
     ) -> None:
-    """Perform data analysis on stable entries for OER based on specified criteria and filters, sort, and save the resulting dataframe on CANVAS."""
+    """Perform data analysis on stable entries for OER based on specified criteria and filters, sort, and save the resulting dataframe on CANVAS. If you want to exclude or include certain elements, just apply filter to the Elements column"""
 
     dh = Data_Handler(
     # Whether to apply solid filter:
@@ -485,6 +508,20 @@ def OER_data_analasis_v2(
     else:
         return f"Stable entries data analysis completed. Results saved to {save_path}. Below shows the dataframe with row index: \n{df.to_string(index=True)}. the same dataframe is also saved in canvas with key 'OER_stable_entries_df' and can be accessed using read dataframe tool."
 
+
+@tool
+def extract_df(
+    df_name: Annotated[str, "Name of the dataframe in canvas to extract."],
+    filters: List[Filter] = [],
+    sort: List[SortSpec] = []
+    ):
+    """read the dataframe with a given filter and sort. This is useful to exam the filtered dataframe without altering its data"""
+    df = CANVAS.read(df_name)
+    df = df_query(df, filters, sort)
+    if len(df) > 50:
+        return f"Too many entries pass the filter. Please apply more filters to narrow down the results or check with material_IDs to find the specific entries you want to look at. showing the first 50 entries:\n {df.head(50).to_string(index=True)}"
+    return df.to_string(index=True)
+
     
 @tool
 def read_df(
@@ -492,43 +529,43 @@ def read_df(
     startIdx: Annotated[int, "Starting index of the dataframe to read."] = 0,
     endIdx: Annotated[int, "Ending index of the dataframe to read."] = 10,
     ) -> str:
-    """Read a portion of a dataframe from canvas and return it as a string with row index."""
+    """Read a portion of a dataframe (from row i to row j) from canvas and return it as a string with row index."""
     if endIdx - startIdx > 50:
         return "Read no more than 50 rows at a time."
     df = CANVAS.read(df_name)
     print(df)
     return df.iloc[startIdx:endIdx].to_string(index=True)
 
-def get_facets(
-    df_name: Annotated[str, "Name of the dataframe in canvas to read."],
-    MaterialId: Annotated[str, "MaterialId of the dataframe to get the atoms object from."],
-    max_miller: Annotated[int, "Maximum miller index to consider for surface generation."] = 1,
-    ) -> str:
-    """Determine which facet to study: from the dataframe saved in CANVAS, generate facets for a catalyst study of a system with a certain MaterialId, and save the results to canvas. The result is different facets with corresponding score of likelihood"""
-    afdb = CANVAS.canvas.get('afdb', None)
-    if afdb is None:
-        afdb = atoms_from_db(None)
-        CANVAS.canvas['afdb'] = afdb
-    df = CANVAS.read(df_name)
-    atoms = afdb.get_atoms_material_id(MaterialId, df)
-    # atoms_list = afdb.get_atoms_objects_from_df(df.iloc[dfIdx])
-    # atoms = atoms_list[0]
-    CANVAS.write(f"{MaterialId}_OER_catalyst_study_atoms", atoms, overwrite=True)
+# def get_facets(
+#     df_name: Annotated[str, "Name of the dataframe in canvas to read."],
+#     MaterialId: Annotated[str, "MaterialId of the dataframe to get the atoms object from."],
+#     max_miller: Annotated[int, "Maximum miller index to consider for surface generation."] = 1,
+#     ) -> str:
+#     """Determine which facet to study: from the dataframe saved in CANVAS, generate facets for a catalyst study of a system with a certain MaterialId, and save the results to canvas. The result is different facets with corresponding score of likelihood"""
+#     afdb = CANVAS.canvas.get('afdb', None)
+#     if afdb is None:
+#         afdb = atoms_from_db(None)
+#         CANVAS.canvas['afdb'] = afdb
+#     df = CANVAS.read(df_name)
+#     atoms = afdb.get_atoms_material_id(MaterialId, df)
+#     # atoms_list = afdb.get_atoms_objects_from_df(df.iloc[dfIdx])
+#     # atoms = atoms_list[0]
+#     CANVAS.write(f"{MaterialId}_OER_catalyst_study_atoms", atoms, overwrite=True)
     
-    # get facets for the catalyst study
+#     # get facets for the catalyst study
 
-    catalyst_study = OER_catalyst_study(
-        bulk = atoms, 
-        H2O_gas_free_energy = -14.217, # <--- should be the DFT energy + free energy corrections, at the relevant level of theory
-        H2_gas_free_energy = -6.77, # <--- should be the DFT energy + free energy corrections, at the relevant level of theory
-                                        )
+#     catalyst_study = OER_catalyst_study(
+#         bulk = atoms, 
+#         H2O_gas_free_energy = -14.217, # <--- should be the DFT energy + free energy corrections, at the relevant level of theory
+#         H2_gas_free_energy = -6.77, # <--- should be the DFT energy + free energy corrections, at the relevant level of theory
+#                                         )
 
-    catalyst_study.identify_distinct_surfaces(max_miller = max_miller)
-    catalyst_study.predict_most_likely_surfaces(method = 'coordination', stoichiometry='stoichiometric') # An method should be chosen
-    catalyst_study_df = catalyst_study.get_df_with_surface_rankings().sort_values(by='Normalized Score', ascending=False)
-    CANVAS.write(f"{MaterialId}_OER_catalyst_study", catalyst_study, overwrite=True)
-    CANVAS.write(f"{MaterialId}_OER_catalyst_study_surface_ranking_df", catalyst_study_df, overwrite=True)
-    return f"Facets for the catalyst study have been generated and saved in canvas with key '{MaterialId}_OER_catalyst_study_surface_ranking_df'. Below shows the dataframe with row index: \n{catalyst_study_df.to_string(index=True)} \nHigher Normalized Score means more likely surface."
+#     catalyst_study.identify_distinct_surfaces(max_miller = max_miller)
+#     catalyst_study.predict_most_likely_surfaces(method = 'coordination', stoichiometry='stoichiometric') # An method should be chosen
+#     catalyst_study_df = catalyst_study.get_df_with_surface_rankings().sort_values(by='Normalized Score', ascending=False)
+#     CANVAS.write(f"{MaterialId}_OER_catalyst_study", catalyst_study, overwrite=True)
+#     CANVAS.write(f"{MaterialId}_OER_catalyst_study_surface_ranking_df", catalyst_study_df, overwrite=True)
+#     return f"Facets for the catalyst study have been generated and saved in canvas with key '{MaterialId}_OER_catalyst_study_surface_ranking_df'. Below shows the dataframe with row index: \n{catalyst_study_df.to_string(index=True)} \nHigher Normalized Score means more likely surface."
 
 # @tool
 # def get_terminations(
