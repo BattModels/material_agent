@@ -113,7 +113,13 @@ def arXiv_search(
     return result
 
 
-
+@tool
+def wait_for_update():
+    "wait until some job status change"
+    while len(EXPLOG.get_update()) == 0:
+        time.sleep(60)
+    update_msg = None # TODO 
+    return update_msg
 
 @tool
 def inspect_explog(only_get_updates: Annotated[bool, "Whether to only get updates since last inspection."] = False) -> str:
@@ -221,7 +227,7 @@ def get_top_k_candidates(
 
 @tool
 def enter_candidate_in_log(
-    reason_or_hypothesis: Annotated[str, "Reason or hypothesis for selecting this candidate."],
+    reason_or_hypothesis: Annotated[str, "Detailed Reason or hypothesis for selecting this candidate."],
     df_name: Annotated[str, "Name of the dataframe in canvas to read."],
     MaterialId: Annotated[str, "MaterialId of the candidate in the dataframe."],
     note: Annotated[str | None, "Any notes you want to add."] = None,
@@ -286,11 +292,11 @@ def submit_dft_job(
     # --- Initializing surface- and adsorption studies if not 
     # already initialized ----------------------------------------------
     if termination_index is not None:
-        study = EXPLOG.relational_frame.candidates[MaterialId].df['study_obj'][0]
+        study = EXPLOG.relational_frame.candidates[MaterialId].study_obj
 
         surface_study_dict = study.get_surface_studies()
         if termination_index not in surface_study_dict.keys():
-            surface_study.initialize_oer_surface_study(termination_index)
+            study.initialize_oer_surface_study(termination_index)
         surface_study = study.get_surface_studies()[termination_index]
 
         if ad_site_index is not None:
@@ -339,7 +345,7 @@ def get_terminations_ranking(
     max_atoms = 120 # Maximum number of atoms in the slab
     max_layers = 6 # Maximum number of layers, considered when building the slabs
 
-    study = EXPLOG.relational_frame.candidates[candidate_id].df['study_obj'][0]
+    study = EXPLOG.relational_frame.candidates[candidate_id].study_obj
 
     out_string = ''
 
@@ -371,7 +377,7 @@ def get_terminations_ranking(
 
     if True:
         out_string += '\n\n Original reason or hypothesis for selecting this candidate:\n'
-        out_string += EXPLOG.relational_frame.candidates[candidate_id].df['reason_or_hypothesis'][0]
+        out_string += EXPLOG.relational_frame.candidates[candidate_id].reason_or_hypothesis
 
     return out_string
 
@@ -401,7 +407,7 @@ def list_adsorption_sites(
     out_string = ''
     df = None
 
-    study = EXPLOG.relational_frame.candidates[candidate_id].df['study_obj'][0]
+    study = EXPLOG.relational_frame.candidates[candidate_id].study_obj
 
     if study.get_termination_rankings() is None:
         raise ValueError(f"Termination rankings have not been determined yet for candidate {candidate_id}. "\
@@ -447,21 +453,21 @@ def list_adsorption_sites(
 
     if True:
         out_string += '\n\n Original reason or hypothesis for selecting this candidate:\n'
-        out_string += EXPLOG.relational_frame.candidates[candidate_id].df['reason_or_hypothesis'][0]
+        out_string += EXPLOG.relational_frame.candidates[candidate_id].reason_or_hypothesis
 
     return out_string
 
 
 @tool
 def OER_data_analasis_v2(
+    pHs: Annotated[Union[List[float], float], "The pH in which the materials should be stable, may either be a float (specifying a single pH) or a pH range specified as two floats in a list i.e. [min, max]"],
+    Us: Annotated[Union[List[float], float], "Eletrochemical potantial in which the materials should be stable, may either be a float (specifying a single potential) or a potential range specified as two floats in a list i.e. [min, max]"],
+    decomposition_threshold: Annotated[float, "Decomposition energy threshold for stability criteria. (pourbaix stability)"],
+    solid_filter: Annotated[bool, "Whether to apply solid filter: "],
+    gga_only: Annotated[bool, "Whether to use only GGA calculations (True), or include r2SCAN data via the MP-mixing scheme (False)."],
     dir_of_data: Annotated[Optional[str], "Path to data directory. If None, use default data directory."] = None,
-    solid_filter: Annotated[bool, "Whether to apply solid filter: "] = True,
-    gga_only: Annotated[bool, "Whether to use only GGA calculations (True), or include r2SCAN data via the MP-mixing scheme (False)."] = True,
-    elements_to_exclude: Annotated[List[str], "List of element symbols to exclude from the analysis."] = [],
-    elements_whic_must_be_included: Annotated[List[str], "List of element symbols that must be included in the analysis."] = [],
-    pHs: Annotated[Union[List[float], float], "Potential pH values for stability criteria."] = 0.0,
-    Us: Annotated[List[float], "Potential values for stability criteria."] = [1.2, 2.0],
-    decomposition_threshold: Annotated[float, "Decomposition energy threshold for stability criteria."] = 0.5,
+    # elements_to_exclude: Annotated[List[str], "List of element symbols to exclude from the analysis."] = [],
+    # elements_whic_must_be_included: Annotated[List[str], "List of element symbols that must be included in the analysis."] = [],
     filters: List[Filter] = [],
     sort: List[SortSpec] = [],
     ) -> None:
@@ -476,10 +482,10 @@ def OER_data_analasis_v2(
         path_to_data_directory = "/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/GNoME_aqueous_stability/data"
         )
     
-    if len(elements_to_exclude) > 0:
-        dh.remove_entries_with_elements(elements_to_exclude)
-    if len(elements_whic_must_be_included) > 0:
-        dh.remove_entries_without_elements(elements_whic_must_be_included, True)
+    # if len(elements_to_exclude) > 0:
+    #     dh.remove_entries_with_elements(elements_to_exclude)
+    # if len(elements_whic_must_be_included) > 0:
+    #     dh.remove_entries_without_elements(elements_whic_must_be_included, True)
     
     SCS = [Stability_Criteria(pHs=pHs, Us=Us, decomposition_threshold=decomposition_threshold),
        # Stability_Criteria(pHs=0, Us=[1.2, 1.6], decomposition_threshold=0.05),
