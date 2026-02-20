@@ -8,7 +8,6 @@ from langchain_core.messages import (
 )
 # from langchain_anthropic import ChatAnthropic
 
-from langgraph.prebuilt import create_react_agent
 # from src.prompt import hpc_agent_prompt,dft_agent_prompt
 # from src.graph import create_graph
 from src.planNexe2 import create_planning_graph as create_graph
@@ -93,62 +92,66 @@ if __name__ == "__main__":
     Please use PBE pseudopotential and PBE exchange correlation function.
     Literatures suggest that ontop site is 0.108 eV less stable than fcc site when using PBE xc. 
     If your result is not within 10 percent of the literature, please find out possible reasons and resolve it."""
-    
+
     userMessage_11 = "I am trying to study adsorption of CO on Pt111 surface at fcc site. Job CO_Pt111_fcc_upright_k_0.3_ecutwfc_60.pwi did not converge, please figure out why and resolve the convergence issue."
-    
+
     userMessage_12 = """please find the adsorption energy difference between the most favorable configurations (different adsorbate orientations 0, 90, 180) at fcc site and most favorable configuration (different adsorbate orientations 0, 90, 180) at ontop site for CO on Pt(111) surface with p(2x2) adsorbate overlayer (1/4 coverage), and analyze the uncertainty.
     Please use PBE pseudopotential and Bayesian Error Estimation Functional (BEEF) exchange correlation function.
     Literatures suggest that ontop site is 0.18 eV less stable than fcc site when using PBE xc.
     If your result is not within 10 percent of the literature, please find out possible reasons and resolve it."""
-    
+
     userMessage_13 = """please conduct a initial screening on the default dataset on potential candidates as a catalyst for OER reaction. Please only consider O only and skip the study of OH and OOH for now. Please save the cadidates dataframe into a csv file."""
-    
+
     userMessage_14 = """please conduct a OER screening study to find out the best system to use as catalyst for OER reaction. You must evaluate more less than 3 different systems. Please only consider O only and skip the study of OH and OOH for now. Available systems can be found in the default dataset. you must include Ir, with Nsite < 20. Please use VASP as the calculator. 
-"""
-    
-    testMessage = '''
-    please generate a single input script for Li BCC structure with kspacing 0.1 and ecutwfc 40
-    '''
-    
+    """
+
+    testMessage = """
+    please conduct a acidic OER screening study to find out the best system to use as catalyst for OER reaction with limited computational budget.
+    You must decide a screening strategy for selecting candidates materials and performing relavent DFT calculation to evaluate the OER activity.
+    Please only consider O only and skip the study of OH and OOH for now. 
+    Available systems can be found in the default dataset. you must use Nsite < 20. Please use VASP as the calculator. 
+    """
+
     config = load_config(os.path.join('./config', "default.yaml"))
     # check_config(config)
-    
+
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     # print N number of '#', where n = len("##  Working directory: " + WORKING_DIRECTORY + " ##")
     print("#" * (len("##  Working directory: " + WORKING_DIRECTORY + " ##")))
     print("##  Working directory: " + WORKING_DIRECTORY + " ##")
     print("#" * (len("##  Working directory: " + WORKING_DIRECTORY + " ##")))
-    
+
     assert WORKING_DIRECTORY is not None, "Please set the WORKING_DIRECTORY var"
-    
+
     CANVAS.set_working_directory(WORKING_DIRECTORY)
     # CANVAS.canvas["finished_job_list"] = ["CO_Pt111_fcc_upright_k_0.3_ecutwfc_60.pwi"]
-    
+
     # set environment variable
     os.environ["OMP_NUM_THREADS"] = "1"
-    
+
     # check if working directory exists, if so delete it
     if os.path.exists(WORKING_DIRECTORY):
         os.system(f"rm -rf {WORKING_DIRECTORY}")
-    
+
     os.makedirs(WORKING_DIRECTORY, exist_ok=False)
-    
+
+    EXPLOG.init(Path(WORKING_DIRECTORY)/"TEMP_vasp_calcs", "test")
     # check if resource_suggestions.db exist in the working directory
     db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
     if os.path.exists(db_file):
         os.remove(db_file)
     initialize_database(db_file)
 
-    graph = create_graph(config)
+    graph = create_planning_graph(config)
     llm_config = {"thread_id": "1", 'recursion_limit': 1000}
-    
+
     # print(graph)
-    
+
 
     # save_graph_to_file(graph, WORKING_DIRECTORY, "super_graph")
     # exit()
 
-    
+
     # for s in graph.stream(
     # {
     #     "messages": [
@@ -199,7 +202,7 @@ if __name__ == "__main__":
         
         for s in graph.stream(
             {
-                "input": f"{userMessage_14}",
+                "inputs": f"{testMessage}",
                 "plan": [],
                 "past_steps": []
             }, llm_config):
@@ -211,7 +214,8 @@ if __name__ == "__main__":
                     with open(f"{WORKING_DIRECTORY}/his.txt", "a") as f:
                         f.write(repr(s) + "\n")
                         f.write("----\n")
-                    
+                
+                # time.sleep(5)
                 # Print to console
                 log_file.write(f"{s}\n")
                 log_file.write("----\n")
