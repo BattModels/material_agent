@@ -138,16 +138,39 @@ def wait_for_update():
                 status = f.read()
 
 
-        time.sleep(10)
+        time.sleep(2)
         tmpUpdate = EXPLOG.update_log()
         # Sort through the updates, remove non-failed/completed jobs (ignore going from pending to running)
+        
+        print('Init dict:', tmpUpdate)
+
+        for_deletion = []
         for key, value in tmpUpdate.items():
+
             if value not in ["completed", "failed"]:
-                del tmpUpdate[key]
+                for_deletion.append(key)
+
+        for key in for_deletion:
+            tmpUpdate.pop(key)
+
+        print('After deletion:', tmpUpdate)
 
         currentTime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         timeElapsed = timedelta(seconds= time.time() - var.startTime)
-        print(timeElapsed)
+        print(timeElapsed, tmpUpdate)
+        print('-----------------------\n')
+
+
+        # time.sleep(10)
+        # tmpUpdate = EXPLOG.update_log()
+        # # Sort through the updates, remove non-failed/completed jobs (ignore going from pending to running)
+        # for key, value in tmpUpdate.items():
+        #     if value not in ["completed", "failed"]:
+        #         del tmpUpdate[key]
+
+        # currentTime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        # timeElapsed = timedelta(seconds= time.time() - var.startTime)
+        # print(timeElapsed)
         if len(tmpUpdate) > 0:
             timeWaited = timedelta(seconds= time.time() - waitStartTime)
 
@@ -517,7 +540,7 @@ def OER_data_analasis_v2(
     # Whether to use only GGA calculations (True), or include r2SCAN data via the MP-mixing scheme (False):
         gga_only = gga_only,
     # Path to data directory:
-        path_to_data_directory = "/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/GNoME_aqueous_stability/data"
+        # path_to_data_directory = "/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/GNoME_aqueous_stability/data"
         )
 
     dh.remove_entries_without_elements(['Ir'], True)
