@@ -18,6 +18,9 @@ from src.utils import load_config, save_graph_to_file,initialize_database
 from src.myCANVAS import CANVAS
 from src import var
 
+from gnome_dreams_oer_screening.explog.explog import EXPLOG
+
+
 
 if __name__ == "__main__":
 
