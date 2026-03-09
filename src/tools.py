@@ -4,7 +4,6 @@ from copy import deepcopy
 from pathlib import Path
 from matplotlib import pyplot as plt
 from matplotlib import rcParams
-from executorlib import SlurmClusterExecutor
 import pandas as pd
 from math import e
 from networkx import predecessor
