@@ -1,5 +1,5 @@
 import sys
-sys.path.append('/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/GNoME_DREAMS_OER_screening/src')
+sys.path.append('/home/energy/matnis/projects/dreams_colab/material_agent/src')
 from copy import deepcopy
 from pathlib import Path
 from matplotlib import pyplot as plt
@@ -137,7 +137,11 @@ def wait_for_update():
         print(timeElapsed)
         if len(tmpUpdate) > 0:
             timeWaited = timedelta(seconds= time.time() - waitStartTime)
-            return f"Current time is {currentTime}, time waited: {timeWaited}, time elapsed since the start of the study: {timeElapsed}.\n Here are the updates while you are waiting: {tmpUpdate}"
+
+            outText = f"Current time is {currentTime}, time waited: {timeWaited}, time elapsed since the start of the study: {timeElapsed}.\n Here are the updates while you are waiting: "
+            for key, value in tmpUpdate.items():
+                outText += f"\nprocess_id {key} status is now {value}."
+            return outText
         elif time.time() - var.startTime > 24*60*60:
             return f"Current time is {currentTime}, you have been waiting for more than 24 hours with no update in the EXPLOG, time elapsed since the start of the study: {timeElapsed}. You may want to check the EXPLOG and see if there is anything you can do to move the study forward."
                        

@@ -401,7 +401,8 @@ def create_planning_graph(config: dict) -> StateGraph:
         list_adsorption_sites,
         read_explog,
         get_top_k_candidates,
-        extract_df
+        extract_df,
+        wait_for_update
         ]
     # oer_agent = create_react_agent(workerllm, tools=oer_tools,
     #                                prompt=oer_agent_prompt)
