@@ -38,6 +38,7 @@ import ase.build
 from ase import Atoms
 import subprocess
 import time
+from datetime import timedelta
 from pysqa import QueueAdapter
 import json
 import pandas as pd
@@ -115,11 +116,31 @@ def arXiv_search(
 
 @tool
 def wait_for_update():
-    "wait until some job status change"
-    while len(EXPLOG.get_update()) == 0:
-        time.sleep(60)
-    update_msg = None # TODO 
-    return update_msg
+    """Only call wait tool after checking the EXPLOG and you decided there is nothing you want to do currently"""
+    
+    statusList = EXPLOG.relational_frame.processes.df["status"].tolist()
+    if 'pending' not in statusList and 'running' not in statusList:
+        return "No pending or running jobs found in the EXPLOG. Please check the EXPLOG and see if there is anything you can do to move the study forward, instead of waiting for updates."
+
+    waitStartTime = time.time()
+    
+    while True:
+        time.sleep(10)
+        tmpUpdate = EXPLOG.update_log()
+        # Sort through the updates, remove non-failed/completed jobs (ignore going from pending to running)
+        for key, value in tmpUpdate.items():
+            if value not in ["completed", "failed"]:
+                del tmpUpdate[key]
+
+        currentTime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        timeElapsed = timedelta(seconds= time.time() - var.startTime)
+        print(timeElapsed)
+        if len(tmpUpdate) > 0:
+            timeWaited = timedelta(seconds= time.time() - waitStartTime)
+            return f"Current time is {currentTime}, time waited: {timeWaited}, time elapsed since the start of the study: {timeElapsed}.\n Here are the updates while you are waiting: {tmpUpdate}"
+        elif time.time() - var.startTime > 24*60*60:
+            return f"Current time is {currentTime}, you have been waiting for more than 24 hours with no update in the EXPLOG, time elapsed since the start of the study: {timeElapsed}. You may want to check the EXPLOG and see if there is anything you can do to move the study forward."
+                       
 
 @tool
 def inspect_explog(only_get_updates: Annotated[bool, "Whether to only get updates since last inspection."] = False) -> str:

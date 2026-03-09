@@ -196,6 +196,7 @@ if __name__ == "__main__":
     log_filename = f"./log/agent_stream_{int(time.time())}.log"  # Add timestamp to filename
     with open(log_filename, "a") as log_file:
         log_file.write(f"=== Session started at {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n\n")
+        var.startTime = time.time()
         if eval(config["SAVE_DIALOGUE"]):
             with open(f"{WORKING_DIRECTORY}/his.txt", "a") as f:
                 f.write(f"=== Session started at {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n\n")
