@@ -125,6 +125,20 @@ def wait_for_update():
     waitStartTime = time.time()
     
     while True:
+
+
+
+        # --- This enabels the tempoary stop of the agent ---
+        with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
+            status = f.read()
+        while status == "stop":
+            # print(f"Calculation pause, Agent is waiting. cwd: {var.my_WORKING_DIRECTORY}")
+            # # wait for 5 second
+            time.sleep(5)
+            with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
+                status = f.read()
+
+
         time.sleep(10)
         tmpUpdate = EXPLOG.update_log()
         # Sort through the updates, remove non-failed/completed jobs (ignore going from pending to running)
@@ -506,6 +520,8 @@ def OER_data_analasis_v2(
     # Path to data directory:
         path_to_data_directory = "/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/GNoME_aqueous_stability/data"
         )
+
+    dh.remove_entries_without_elements(['Ir'], True)
     
     # if len(elements_to_exclude) > 0:
     #     dh.remove_entries_with_elements(elements_to_exclude)
