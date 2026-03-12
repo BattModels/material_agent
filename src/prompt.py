@@ -58,9 +58,11 @@ supervisor_prompt = f"""
         Do not stop until the end result is within user specified margin of error, or you have tried everything you can think of. Only if user did not specify a margin of error, you can judge by yourself.
 <Requirements>:
     1.  Do not generate convergence test for all systems and all configurations.
-    2.  Please only generate one batch of convergence test for the most complicated system using the most complicated configuration. 
-    3.  Structural convergence test is only needed for adsorption energy calculations
-    4.  Please be critical to your final answer, reflect on what you have done, make sure the answer is correct. If you found any possible issue, try to fix it and rerun the calculations.
+    2.  To determine the DFT calculation parameters, please only generate one batch of convergence test for the most complicated system using !! ONE !! most complicated configuration. 
+    3.  Structural convergence test is only needed for adsorption energy calculations, where it is ensential to make sure the structure settings like slab thickness and vacuum size are good enough to get converged adsorption energy.
+    4.  Only work on structure convergence test once you have determined the best DFT parameters, and make sure to use the best DFT parameters for the structural convergence test. 
+    5.  Do not work on structural convergence test (slab thickness, vaccum size) and DFT parameter convergence test (k-points, ecut) at the same time.
+    6.  Please be critical to your final answer, reflect on what you have done, make sure the answer is correct. If you found any possible issue, try to fix it and rerun the calculations.
         """
 
 
@@ -114,6 +116,7 @@ dft_agent_prompt = """
                 12. The final answer should be concise summary in a sentence. Do not repeat what you've noted on the CANVAS, just mention it's on the CANVAS.
                 13. You don't have to use all the tools provided, only use the tools that are necessary.
                 14. Do not report absolute path.
+                15. For production run, use optimal parameters and converged structures.
                 15. when calculating formation energies, convergence test on DFT parameters should be done on one representitive system with both the adsorbate and the surface.
                 16. If a job is having issue, i.e. didn't converge or not accurate enough, use the right tool to get suggestions on how to modify the input file to fix the issue.
             """

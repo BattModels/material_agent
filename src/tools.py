@@ -164,7 +164,8 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
                                         facets: Annotated[str, "Facet of the surface. Must be one of 100, 110, 111, 210, 211, 310, 311, 320, 321, 410, 411, 420, 421, 510, 511, 520, 521, 530, 531, 540, 541, 610, 611, 620, 621, 630, 631, 640, 641, 650, 651, 660, 661"],
                                         supercell_dim: Annotated[List[int], "typically [int, int, 6]. Supercell dimension, how many times do you want to repeat the primitive cell in each direction: [int, int, int]"],
                                         n_fixed_layers: Annotated[int, "typically 3. Number of fixed layers in the slab"] = 3,
-                                        vacuum: Annotated[float, "typically 10.0. Vacuum size in Angstrom"] = 10.0
+                                        vacuum: Annotated[float, "typically 10.0. Vacuum size in Angstrom"] = 10.0,
+                                        surfaceFilename: Annotated[str, "Name (not a path) of the surface file to be saved in traj format"] = "surface.traj"
                                         ):
     """Generate a surface structure and get the available adsorption sites."""
     a_dict = {'Pt': 3.99}
@@ -207,7 +208,11 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
     # trim the absPath, remove the part before out, including out
     relaPath = absPath.split(f'{DirOfInterests}/')[-1]
     # time.sleep(60)
-    return f"the surface generated is saved at {relaPath}, available adsorbate sites are: {mySites_str}"
+    
+    os.makedirs(os.path.join(WORKING_DIRECTORY, "surface"), exist_ok=True)
+    write(os.path.join(WORKING_DIRECTORY, "surface", surfaceFilename), mySurface)
+    
+    return f"the surface generated is saved at surface/{surfaceFilename}, available adsorbate sites are: {mySites_str}"
 
 @tool
 def generate_myAdsorbate(symbols: Annotated[str, "Element symbols of the adsorbate (Do not use any delimiters)"],
@@ -1218,11 +1223,14 @@ echo "Job Ended at `date`"\n \
     if not isinstance(partition, str) or not isinstance(nnodes, int) or not isinstance(ntasks, int) or not isinstance(span, str):
         # time.sleep(60)
         return "Invalid input, please check the input format"
+    
+    assert qeInputFileName in CANVAS.canvas.get('ready_to_run_job_list', []), f"{qeInputFileName} is not in the ready_to_run_job_list, please check the job list and make sure the file name is correct"
+    
     # craete the json file if it does not exist, otherwise load it
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
 
-    # new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 48, "runtime": 2800, "submissionScript": submissionScript, "outputFilename": outputFilename}}
-    new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 4, "runtime": 30, "submissionScript": submissionScript, "outputFilename": outputFilename}}
+    new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 48, "runtime": 2800, "submissionScript": submissionScript, "outputFilename": outputFilename}}
+    # new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 4, "runtime": 30, "submissionScript": submissionScript, "outputFilename": outputFilename}}
 
     # check if resource_suggestions.db exist in the working directory
     db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
