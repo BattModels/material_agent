@@ -97,7 +97,6 @@ class DisableParallelToolCallsMiddleware(AgentMiddleware):
     
     def wrap_model_call(self, request, handler):
         request.model_settings["parallel_tool_calls"] = False
-        print(request)
         return handler(request)
     
     async def awrap_model_call(self, request, handler):
@@ -167,7 +166,6 @@ def print_stream(s):
 #     return {"messages": [HumanMessage(content=s["messages"][-1].content, name=name)]}
 
 def supervisor_chain_node(state, agent, name):
-    print("aasdfaishdfiahdkflhailudgiluebligbldiubvdkuydkuygalisudblcabuyvalublajlcigaliblajsdb")
     # read "status.txt" in the working directory
     with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
         status = f.read()
@@ -430,7 +428,7 @@ def create_planning_graph(config: dict) -> StateGraph:
     # graph.add_node("MD_Agent", md_node)
     # graph.add_node("CSS_Agent", css_node)
 
-    graph.add_node("Supervisor", supervisor_agent)
+    graph.add_node("Supervisor", supervisor_node)
     
     for member in members:
     # We want our workers to ALWAYS "report back" to the supervisor when done
