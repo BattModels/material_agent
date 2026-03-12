@@ -82,7 +82,7 @@ if __name__ == "__main__":
     Sn (dia)	6.474
     '''
     
-    userMessage_6 = "You are going to calculate the lattice constant for BCC Li through DFT, the experiment value is 3.451, use this to create the initial structure."
+    userMessage_6 = "You are going to calculate the lattice constant for BCC Li through DFT."
     userMessage_7 = "You are going to generat a Pt surface structure with 2x2x4 supercell, then do a convergence test, use maximum ecutwfc = 160. Get the optimal kspacing and ecutwfc."
     userMessage_8 = """Please generate intial structures required to calculate CO adsorbtion on Pt(111) surface with 1/4 coverage (2x2x4 supercell), and calculate the adsorbtion energy."""
     userMessage_9 = """
@@ -100,6 +100,9 @@ if __name__ == "__main__":
     Please use PBE pseudopotential and Bayesian Error Estimation Functional (BEEF) exchange correlation function.
     Literatures suggest that ontop site is 0.18 eV less stable than fcc site when using PBE xc.
     If your result is not within 10 percent of the literature, please find out possible reasons and resolve it."""
+    
+    userMessage_13 = """please find the adsorption energy difference between the most favorable configurations (different adsorbate orientations 0, 90, 180) at fcc site and most favorable configuration (different adsorbate orientations 0, 90, 180) at ontop site for CO on Pt(111) surface with p(2x2) adsorbate overlayer (1/4 coverage).
+    Please use PBE pseudopotential."""
     
     testMessage = '''
     please generate a single input script for Li BCC structure with kspacing 0.1 and ecutwfc 40
@@ -194,7 +197,7 @@ if __name__ == "__main__":
         
         for s in graph.stream(
             {
-                "input": f"{userMessage_6}",
+                "inputs": f"{testMessage}",
                 "plan": [],
                 "past_steps": []
             }, llm_config):
@@ -206,7 +209,8 @@ if __name__ == "__main__":
                     with open(f"{WORKING_DIRECTORY}/his.txt", "a") as f:
                         f.write(repr(s) + "\n")
                         f.write("----\n")
-                    
+                
+                # time.sleep(5)
                 # Print to console
                 log_file.write(f"{s}\n")
                 log_file.write("----\n")

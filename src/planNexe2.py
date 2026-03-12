@@ -1,23 +1,28 @@
-import operator
+from langchain.agents.structured_output import ToolStrategy
+from langchain.agents.middleware import ToolCallLimitMiddleware, AgentMiddleware, ModelRequest, wrap_tool_call
+from langchain.agents import create_agent
+
 from typing import Annotated, Sequence, TypedDict,Literal, List, Dict, Tuple, Union
 import functools
 import os
+import traceback
 
+from langgraph.checkpoint.memory import InMemorySaver
 from langchain_core.tools import tool
 from langchain_core.messages import (
     BaseMessage,
     HumanMessage,
     ToolMessage,
+    AIMessage,
 )
 from langchain_anthropic import ChatAnthropic
 # from langchain_openai import AzureChatOpenAI
 # from langchain_deepseek import ChatDeepSeek
 
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.messages import AIMessage
 from langgraph.graph import END, StateGraph, START
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.prebuilt import ToolNode,create_react_agent
+from langgraph.prebuilt import ToolNode, create_react_agent
 from pydantic import BaseModel, Field
 
 from src.tools import *
@@ -41,13 +46,6 @@ class myStep(BaseModel):
     agent: str = Field(
         description=f"Agent to perform the step. Should be one of {members}."
     )
-
-class PlanExecute(TypedDict):
-    input: str
-    plan: List[myStep]
-    past_steps: List[myStep]
-    response: str
-    next: str
 
 class Plan(BaseModel):
     """Plan to follow in future"""
@@ -77,31 +75,53 @@ class Act(BaseModel):
         # "DO NOT use response unless absolutly necessary."
     )
 
-teamCapability = """
-<DFT Agent>:
-    - Create intial structure of the system
-    - Find pseudopotential
-    - Write initial script
-    - generate convergence test input files
-    - determine the best parameters from convergence test result
-    - generate EOS calculation input files using the best parameters
-    - generate production run input files
-    - generate BEEF input files from finished relax calculation
-    - Read output file to get energy
-    - Calculate lattice constant
-    - Calculate formation energy
-<HPC Agent>:
-    - find job list from the job list file
-    - Add resource suggestion base on the DFT input file
-    - Submit job to HPC and report back once all jobs are done
-"""
+class wokerResponse(BaseModel):
+    """Response from the worker agent."""
 
-teamRestriction = """
-<DFT Agent>:
-    - Cannot submit job to HPC
-<HPC Agent>:
-    - Cannot determine the best parameters from convergence test result
-"""
+    answer: str = Field(
+        description="a short summary of the answer to the question or task."
+    )
+    
+    summary: str = Field(
+        description="""what have you done + what did you note down? i.e. I did xxx, and got xxx. I did xxx, and found xxx ..... In the end, I answered xxx/finished xxx/failed xxx/... I have noted down xxx, xxx, and xxx on CANVAS"""
+    )
+
+class PlanExecute(TypedDict):
+    inputs: str
+    plan: List[myStep]
+    past_steps: List[myStep]
+    response: str
+    next: str
+
+class DisableParallelToolCallsMiddleware(AgentMiddleware):
+    
+    def wrap_model_call(self, request, handler):
+        request.model_settings["parallel_tool_calls"] = False
+        print(request)
+        return handler(request)
+    
+    async def awrap_model_call(self, request, handler):
+        request.model_settings["parallel_tool_calls"] = False
+        return await handler(request)
+
+@wrap_tool_call
+def handle_tool_errors(request, handler):
+    """Handle tool execution errors with custom messages."""
+    try:
+        return handler(request)
+    except Exception as e:
+        # Only handle errors that occur during tool execution due to invalid inputs
+        # that pass schema validation but fail at runtime (e.g., invalid SQL syntax).
+        # Do NOT handle:
+        # - Network failures (use tool retry middleware instead)
+        # - Incorrect tool implementation errors (should bubble up)
+        # - Schema mismatch errors (already auto-handled by the framework)
+        #
+        # Return a custom error message to the model
+        return ToolMessage(
+            content=f"Tool error: Please check your input and try again. ({str(e)}), traceback: {traceback.format_exc()}",
+            tool_call_id=request.tool_call["id"]
+        )
 
 
 def print_stream(s):
@@ -146,8 +166,8 @@ def print_stream(s):
 #         print_stream(s)
 #     return {"messages": [HumanMessage(content=s["messages"][-1].content, name=name)]}
 
-def supervisor_chain_node(state, chain, name):
-    
+def supervisor_chain_node(state, agent, name):
+    print("aasdfaishdfiahdkflhailudgiluebligbldiubvdkuydkuygalisudblcabuyvalublajlcigaliblajsdb")
     # read "status.txt" in the working directory
     with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
         status = f.read()
@@ -168,15 +188,49 @@ def supervisor_chain_node(state, chain, name):
         with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
             f.write(str(state))
             f.write("\n")
+            
+    plan = state["plan"]
+    plan_str = "\n".join(f"{i+1}. {step.step}" for i, step in enumerate(plan))
+    # task_formatted = f"""For the following plan:
+    # {plan_str}\n\nYou are tasked with executing step {1}, {task}."""
+    old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step}" for i, step in enumerate(state["past_steps"]))
+    
+    supervisorMessage =  f"""
+The overall goal is: {state['inputs']}. 
 
-    output = chain.invoke(state)
+the current plan is:
+{plan_str}
 
-    if isinstance(output.action, Response):
-        return {"response": output.action.response, "next": "FINISH"}
+this is what has been done:
+{old_tasks_string}
+
+Please update the plan accordingly.
+    """
+        
+    for agent_response in agent.stream(
+        {"messages": [("user", supervisorMessage)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
+    ):
+        # set agent_response to be the value of the first key of the dictionary
+        agent_response = next(iter(agent_response.values()))
+        print_stream(agent_response)
+
+    # output = agent.invoke(
+    #     {"messages": [("user", supervisorMessage)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
+    #     )
+    
+    agent_response = agent_response['structured_response']
+    if isinstance(agent_response.action, Response):
+        return {"response": agent_response.action.response, "next": "FINISH"}
     # elif isinstance(output.action, Response):
     #     return {"response": "Plan is not finished! Do not use response!", "next": "Supervisor"}
     else:
-        return {"plan": output.action.steps, "next": output.action.steps[0].agent}
+        plan_str = "\n".join(f"{i+1}. {step.step}" for i, step in enumerate(agent_response.action.steps))
+        print(plan_str)
+        if var.my_SAVE_DIALOGUE:
+            with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+                f.write(plan_str)
+                f.write("\n")
+        return {"plan": agent_response.action.steps, "next": agent_response.action.steps[0].agent}
     
     
 
@@ -198,11 +252,11 @@ def worker_agent_node(state, agent, name, past_steps_list):
         
     plan = state["plan"]
     plan_str = "\n".join(f"{i+1}. {step.step}" for i, step in enumerate(plan))
-    print(plan_str)
-    if var.my_SAVE_DIALOGUE:
-        with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-            f.write(plan_str)
-            f.write("\n")
+    # print(plan_str)
+    # if var.my_SAVE_DIALOGUE:
+    #     with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+    #         f.write(plan_str)
+    #         f.write("\n")
     task = plan[0]
 #     task_formatted = f"""For the following plan:
 # {plan_str}\n\nYou are tasked with executing step {1}, {task}."""
@@ -212,9 +266,9 @@ Here are what has been done so far:
 {old_tasks_string}
 
 Here is the overall objective:
-{state["input"]}
+{state["inputs"]}
 
-Now, you are tasked with: {task}. Please only do this task! Do not do anything else!
+Now, you are tasked with: {task}. Please only do this task! Do not do anything else! Please note down important information on CANVAS before you end.
 """
     
     print(task_formatted)
@@ -238,11 +292,13 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
     # agent_response = agent.invoke(
     #     {"messages": [("user", task_formatted)]},  {"configurable": {"thread_id": "1"}}
     # )
+    structured_response = agent_response['structured_response']
+    
     
     # past_steps_list.append((task, agent_response["messages"][-1].content))
-    past_steps_list.append(myStep(step=agent_response["messages"][-1].content, agent=name))
+    past_steps_list.append(myStep(step=structured_response.summary, agent=name))
     
-    print_stream(agent_response)
+    print_stream(structured_response.summary)
     
     return {
         "past_steps": past_steps_list,
@@ -264,8 +320,10 @@ def create_planning_graph(config: dict) -> StateGraph:
         f.write("run")
     
     # Define the model
-    llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-    workerllm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    # llm = ChatAnthropic(model="claude-haiku-4-5-20251001", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    # workerllm = ChatAnthropic(model="claude-haiku-4-5-20251001", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0, tool_choice="auto")
+    llm = ChatAnthropic(model="claude-sonnet-4-5-20250929", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    workerllm = ChatAnthropic(model="claude-sonnet-4-5-20250929", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0, tool_choice="auto")
     # workerllm = ChatAnthropic(model="claude-3-5-sonnet-20241022", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # llm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
     # workerllm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"], model_kwargs={'parallel_tool_calls': False})
@@ -276,71 +334,30 @@ def create_planning_graph(config: dict) -> StateGraph:
     if not eval(config["SAVE_DIALOGUE"]):
         var.my_SAVE_DIALOGUE = False
     
-    supervisor_prompt = ChatPromptTemplate.from_template(
-        f"""
-<Role>
-    You are a scientist supervisor tasked with managing a conversation for scientific computing between the following workers: {members}. You don't have to use all the members, nor all the capabilities of the members.
-<Objective>
-    Given the following user request, decide which the member to act next, and do what
-<Instructions>:
-    1.  If the plan is empty, For the given objective, come up with a simple, high level plan based on the capability of the team listed here: {teamCapability} and the restrictions listed here: {teamRestriction} 
-        You don't have to use all the members, nor all the capabilities of the members.
-        This plan should involve individual tasks, that if executed correctly will yield the correct answer. Do not add any superfluous steps. 
-        The result of the final step should be the final answer. Make sure that each step has all the information needed - do not skip steps.
-        
-        Runing ensemble calculation with BEEF-vdW functional and analyze the result can give you uncertainty information.
-        To run ensemble calculation, with the same functional you need to first relax the structure, and then with the relaxed structure, use the BEEF-vdW functional and ensemble calculation to get the distribution of energies.
-        
-        !!! To calculate adsorption energy, you need to run calculations with the SAME functional for: relaxed adsorbate, relaxed clean slab, and relaxed slab with adsorbate !!!
-        !!! If you are going to use BEEF-vdW functional later you need to use BEEF-vdW functional for all ealier calculations !!!
-        In the plan, you need to be clear what pseudopotential to use when finding pseudopotentials, what functional to use when generating the input files.
-        
-        If the plan is not empty, update the plan:
-        Your objective was this:
-        {{input}}
-
-        Your original plan was this:
-        {{plan}}
-
-        Your pass steps are:
-        {{past_steps}}
-
-        Update your plan accordingly, and fill out the plan. Only add steps to the plan that still NEED to be done. Do not return previously done steps as part of the plan. 
-        choose plan if there are still steps to be done, or response if everything is done.
-    2.  Given the conversation above, suggest who should act next. next could only be selected from: {OPTIONS}.
-    3.  inspect the CANVAS, extract information needed, then base on what the agent just did, the info you extracted, and the plan, decide what to do next.
-    4.  If your end result is different from your expectation, please reflect on what you have done by inspect and read through the canvas, scientificly, try to understand why the result is different, list out possible reasons, adjust your plan accordingly, and try to eliminate possible causes one by one.
-        Do not stop until the end result is within user specified margin of error, or you have tried everything you can think of. Only if user did not specify a margin of error, you can judge by yourself.
-<Requirements>:
-    1.  Do not generate convergence test for all systems and all configurations.
-    2.  Please only generate one batch of convergence test for the most complicated system using the most complicated configuration. 
-    3.  Do not touch the canvas unless you are reflecting.
-        """
-    )
-    
-    
-    # System Supervisor with tool bind and with_structured_output
-    
-    supervisor_tools = [
-        inspect_my_canvas,
-        read_my_canvas,
-        ]
-    supervisor_chain = supervisor_prompt | llm.bind_tools(supervisor_tools).with_structured_output(Act)
-    supervisor_agent = functools.partial(supervisor_chain_node, chain=supervisor_chain, name="Supervisor")
-    # def supervisor_agent(state):
-    #     print("Supervisor!!!!!!!!!")
-    #     supervisor_chain = (
-    #         prompt
-    #         | llm.with_structured_output(routeResponse)
-    #     )
-    #     return supervisor_chain.invoke(state)
-    
     ## Memory Saver
     memory = MemorySaver()
 
     PAST_STEPS = []
     myCANVAS = {}
     
+    supervisor_tools = [
+        inspect_my_canvas,
+        read_my_canvas,
+        ]
+    
+    supervisor_agent = create_agent(
+        model=llm,
+        tools=supervisor_tools, 
+        system_prompt=supervisor_prompt,
+        # Structured output via ToolStrategy (tool-calling fallback)
+        response_format=ToolStrategy(Act),  # Or ProviderStrategy for native models
+        middleware=[DisableParallelToolCallsMiddleware(), handle_tool_errors]
+    )
+    
+    # supervisor_agent = create_react_agent(llm, tools=supervisor_tools,
+    #                                prompt=supervisor_prompt, response_format=Act)   
+    supervisor_node = functools.partial(supervisor_chain_node, agent=supervisor_agent, name="Supervisor_Agent")
+        
     ### DFT Agent
     dft_tools = [
         inspect_my_canvas,
@@ -361,8 +378,13 @@ def create_planning_graph(config: dict) -> StateGraph:
         get_convergence_suggestions,
         analyze_BEEF_result
         ]
-    dft_agent = create_react_agent(workerllm, tools=dft_tools,
-                                   state_modifier=dft_agent_prompt)   
+    dft_agent = create_agent(
+        model=workerllm,
+        tools=dft_tools,
+        system_prompt=dft_agent_prompt,
+        response_format=ToolStrategy(wokerResponse),
+        middleware=[DisableParallelToolCallsMiddleware(), handle_tool_errors]
+    )
     dft_node = functools.partial(worker_agent_node, agent=dft_agent, name="DFT_Agent", past_steps_list=PAST_STEPS)
 
 
@@ -375,9 +397,13 @@ def create_planning_graph(config: dict) -> StateGraph:
         submit_and_monitor_job,
         add_resource_suggestion
         ]
-
-    hpc_agent = create_react_agent(workerllm, tools=hpc_tools,
-                                   state_modifier=hpc_agent_prompt)
+    hpc_agent = create_agent(
+        model=workerllm,
+        tools=hpc_tools,
+        system_prompt=hpc_agent_prompt,
+        response_format=ToolStrategy(wokerResponse),
+        middleware=[DisableParallelToolCallsMiddleware(), handle_tool_errors]
+    )
 
     hpc_node = functools.partial(worker_agent_node, agent=hpc_agent, name="HPC_Agent", past_steps_list=PAST_STEPS)
     

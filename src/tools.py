@@ -8,8 +8,7 @@ import pandas as pd
 from src.utils import *
 from src.myCANVAS import CANVAS
 from ase import Atoms, Atom
-from langchain.agents import tool
-from langgraph.prebuilt import create_react_agent
+from langchain.tools import tool
 from langchain_anthropic import ChatAnthropic
 # from langchain_openai import AzureChatOpenAI
 import os 
@@ -161,13 +160,14 @@ def init_structure_data(
 @tool
 def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"],
                                         crystal_structures: Annotated[str, "Crystal structure. Must be one of sc, fcc, bcc, tetragonal, bct, hcp, rhombohedral, orthorhombic, mcl, diamond, zincblende, rocksalt, cesiumchloride, fluorite or wurtzite."],
-                                        a_dict: Annotated[Dict[str, float], "Dictionary of lattice parameters for the crystal structure: Dict[species, lattice_parameter_a]. i.e. {'Pt': 4.0}"],
+                                        # a_dict: Annotated[Dict[str, float], "Dictionary of lattice parameters for the crystal structure: Dict[species, lattice_parameter_a]. i.e. {'Pt': 4.0}"],
                                         facets: Annotated[str, "Facet of the surface. Must be one of 100, 110, 111, 210, 211, 310, 311, 320, 321, 410, 411, 420, 421, 510, 511, 520, 521, 530, 531, 540, 541, 610, 611, 620, 621, 630, 631, 640, 641, 650, 651, 660, 661"],
                                         supercell_dim: Annotated[List[int], "typically [int, int, 6]. Supercell dimension, how many times do you want to repeat the primitive cell in each direction: [int, int, int]"],
-                                        n_fixed_layers: Annotated[int, "typically 3. Number of fixed layers in the slab"] = 3
+                                        n_fixed_layers: Annotated[int, "typically 3. Number of fixed layers in the slab"] = 3,
+                                        vacuum: Annotated[float, "typically 10.0. Vacuum size in Angstrom"] = 10.0
                                         ):
     """Generate a surface structure and get the available adsorption sites."""
-    a_dict = {'Pt': 3.92}
+    a_dict = {'Pt': 3.99}
     supercell_dim[-1] = 6
     surface_dict = generate_surface_structures(
         species_list=[species],
@@ -175,6 +175,7 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
         a_dict=a_dict,
         facets={species: [facets]},
         supercell_dim=supercell_dim,
+        vacuum=vacuum,
         n_fixed_layers=n_fixed_layers,
         dirs_exist_ok=True,
         write_to_disk=True,
@@ -211,7 +212,8 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
 @tool
 def generate_myAdsorbate(symbols: Annotated[str, "Element symbols of the adsorbate (Do not use any delimiters)"],
                          positions: Annotated[List[List[float]], "Positions of the atoms in the adsorbate, e.g. [[x1, y1, z1], [x2, y2, z2], ...], following the same order as the symbols."],
-                         AdsorbateFileName: Annotated[str, "Name (not a path) of the adsorbate file to be saved in traj format"]
+                         AdsorbateFileName: Annotated[str, "Name (not a path) of the adsorbate file to be saved in traj format"],
+                         vaccum: Annotated[float, "Vacuum size in Angstrom around the adsorbate structure"] = 10.0
                          ):
     """Generate an adsorbate structure and save it."""
     assert AdsorbateFileName.endswith('.traj'), "AdsorbateFileName should end with .traj"
@@ -221,7 +223,7 @@ def generate_myAdsorbate(symbols: Annotated[str, "Element symbols of the adsorba
     
     os.makedirs(os.path.join(WORKING_DIRECTORY, "adsorbates"), exist_ok=True)
     tmpAtoms = Atoms(symbols=symbols, positions=positions)
-    tmpAtoms.center(vacuum=10.0)
+    tmpAtoms.center(vacuum=vaccum)
     write(os.path.join(WORKING_DIRECTORY, "adsorbates", f"{AdsorbateFileName}"), tmpAtoms)
     # time.sleep(60)
     return f"Adsorbate saved under working directory at adsorbates/{AdsorbateFileName}"
@@ -719,7 +721,7 @@ def get_convergence_suggestions(
     # config = load_config(os.path.join('./config', "default.yaml"))
     config = var.OTHER_GLOBAL_VARIABLES
     # llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-    workerllm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    workerllm = ChatAnthropic(model="claude-haiku-4-5", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # llm = ChatAnthropic(model="claude-3-5-sonnet-20241022", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # workerllm = ChatAnthropic(model="claude-3-5-sonnet-20241022", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # llm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
@@ -766,7 +768,25 @@ Please use the format: parameterX: suggestionX, reasonX; parameterY: suggestionY
     finalSuggestion += "Please check the suggestions above and come up with a plan to fix the issue. Never take suggestions that will lower the accuracy of the calculation."
     # time.sleep(60)
     return finalSuggestion
-        
+
+# @tool
+# def readEnergyFromPWO(filenameList: Annotated[List[str], "A list of file names you want to read the energy from, ending in pwi"],
+#                           ):
+#     """Read the energy from the pwo file generated by quantum espresso calculation. Return a dictionary of file name and energy."""
+#     working_directory = var.my_WORKING_DIRECTORY
+    
+#     energy_dict = {}
+#     for filename in filenameList:
+#         tmpFile = os.path.join(working_directory, filename)
+#         if filename.endswith('.pwi'):
+#             tmpFile += '.pwo'
+#         try:
+#             energy = read(tmpFile).get_potential_energy()
+#             energy_dict[filename] = energy
+#         except:
+#             energy_dict[filename] = None
+
+#     return repr(energy_dict)
 
 @tool
 def calculate_formation_E(slabFilePath: Annotated[str, "the slab calculation file name, ending in pwi"],
@@ -1168,7 +1188,7 @@ def add_resource_suggestion(
     partition: str,
     nnodes: int,
     ntasks: int,
-    runtime: Annotated[str, "Time limit for the job, in minutes"],
+    span: Annotated[str, "Time limit for the job, in minutes"],
     submissionScript: Annotated[str, "submission script based on the types of jobs. Do not include any #SBATCH stuff. output filename must be <full input filename with extension>.<output_file_type>"],
     outputFilename: Annotated[str, "the output filename of the job"],
 ) -> Annotated[str, "source suggestion saved location"]:
@@ -1195,14 +1215,15 @@ echo " "\n \
 echo "Job Ended at `date`"\n \
     ", "outputFilename": ""}}
     """
-    if not isinstance(partition, str) or not isinstance(nnodes, int) or not isinstance(ntasks, int) or not isinstance(runtime, str):
+    if not isinstance(partition, str) or not isinstance(nnodes, int) or not isinstance(ntasks, int) or not isinstance(span, str):
         # time.sleep(60)
         return "Invalid input, please check the input format"
     # craete the json file if it does not exist, otherwise load it
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
 
-    new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 48, "runtime": 2800, "submissionScript": submissionScript, "outputFilename": outputFilename}}
-    
+    # new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 48, "runtime": 2800, "submissionScript": submissionScript, "outputFilename": outputFilename}}
+    new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 4, "runtime": 30, "submissionScript": submissionScript, "outputFilename": outputFilename}}
+
     # check if resource_suggestions.db exist in the working directory
     db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
     if not os.path.exists(db_file):
