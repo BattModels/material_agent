@@ -50,6 +50,7 @@ from src import var
 def inspect_my_canvas():
     """Inspect the working canvas to get available keys"""
     # get all keys in myCANVAS and return them as a list [key1, key2, ...]
+    print(CANVAS)
     return CANVAS.inspect()
 
 @tool
@@ -356,7 +357,7 @@ def write_QE_script_w_ASE(
     ready_to_run_job: Annotated[bool, "True if the job is intended to be run directly without further modification, False if this file is intended to be used to generate other files"] = False,
     additional_input: Annotated[Dict[str, Any], "Additional input parameters to be added to the input script. Should be in the format of a flat dict, {'input_parameter_1': parameter_1, 'input_parameter_2': parameter_2, ...}, parameter_x remain in their native type, str, float, bool, etc. Do not use unless you know what you are doing."] = {},
 ):
-    """Write a Quantum Espresso input script using ASE. Bool value have no quote around them. For smearing start with methfessel-paxton. For ecutwfc choose between 30-100 Ry. When asked to run ensemble calculation, set calculation to 'ensemble'"""
+    """Write a Quantum Espresso input script using ASE. Bool value have no quote around them. For smearing start with methfessel-paxton. For ecutwfc choose between 30-100 Ry. When asked to run ensemble calculation, set calculation to 'ensemble'. When generating template for convergence test, use scf calculation and set ready_to_run_job to False."""
 
     assert isinstance(additional_input, dict), "additional_input must be a dictionary"
     
@@ -543,7 +544,7 @@ def generate_convergence_test(input_file_name: Annotated[str, "Name of the templ
     cell = atom.cell
     ecutwfc_max = max(ecutwfc)
     kspacing_min = min(kspacing)
-    job_list_dict = {}
+    job_list_dict = CANVAS.canvas.get('jobs_K_and_ecut', {})
     job_list = []
     # Generate the input script for highest ecutwfc different kspacing
     for k in kspacing:
@@ -997,19 +998,25 @@ def get_kspacing_ecutwfc(jobFileIdx: Annotated[List[int], "indexs of files in th
         ecutwfc.append(job_dict[job]['ecutwfc'])
         goodJob.append(job)
     
-    print(f"successfully read {len(kspacing)} kspacing and {len(ecutwfc)} ecutwfc")
+    convergence_df = pd.DataFrame({'job':goodJob,'kspacing':kspacing, 'ecutwfc':ecutwfc, 'energy':energy_list})
     
-    if len(set(kspacing)) == 1 and len(set(ecutwfc)) > 1:
+    min_kspacing = convergence_df['kspacing'].min()
+    max_ecutwfc = convergence_df['ecutwfc'].max()
+    df_kspacing = convergence_df.loc[convergence_df['kspacing'] == min_kspacing].sort_values(by='ecutwfc',ascending=True)
+    df_ecutwfc = convergence_df.loc[convergence_df['ecutwfc'] == max_ecutwfc].sort_values(by='kspacing',ascending=False)
+    
+    print(f"successfully read {len(df_kspacing)} kspacing and {len(df_ecutwfc)} ecutwfc")
+    
+    if len(df_kspacing) == 1 and len(df_ecutwfc) > 1:
         # time.sleep(60)
         return f"Only one kspacing is found, the rest of the jobs seems unfinished or not converged. DO NOT infer optimal parameters from converged jobs. Please regenerate the convergence test with finer kspacing. Also, adjust some other settings may help (regenerating template script is then needed). Remember, you NEED TO REDO the convergence test (tell the supervisor in your response that new convergence test need to be done and you've already generated the script)."
-    if len(set(ecutwfc)) == 1 and len(set(kspacing)) > 1:
+    if len(df_ecutwfc) == 1 and len(df_kspacing) > 1:
         # time.sleep(60)
         return f"Only one ecutwfc is found, the rest of the jobs seems unfinished or not converged. DO NOT infer optimal parameters from converged jobs. Please regenerate the convergence test with finer ecutwfc. Also, adjust some other settings may help (regenerating template script is then needed). Remember, you NEED TO REDO the convergence test (tell the supervisor in your response that new convergence test need to be done and you've already generated the script)."
-    if len(set(kspacing)) == 1 and len(set(ecutwfc)) == 1:
+    if len(df_kspacing) == 1 and len(df_ecutwfc) == 1:
         # time.sleep(60)
-        return f"Only one job is good, the rest of the jobs seems unfinished or not converged. DO NOT infer optimal parameters from converged jobs. Please regenerate the convergence test with finer kspacing and ecutwfc. Also, adjust some other settings may help (regenerating template script is then needed). Remember, you NEED TO REDO the convergence test (tell the supervisor in your response that new convergence test need to be done and you've already generated the script)."
+        return f"Only one job for either kspacing or ecutwfc is good, the rest of the jobs seems unfinished or not converged. DO NOT infer optimal parameters from converged jobs. Please regenerate the convergence test with finer kspacing and ecutwfc. Also, adjust some other settings may help (regenerating template script is then needed). Remember, you NEED TO REDO the convergence test (tell the supervisor in your response that new convergence test need to be done and you've already generated the script)."
         
-    convergence_df = pd.DataFrame({'job':goodJob,'kspacing':kspacing, 'ecutwfc':ecutwfc, 'energy':energy_list})
     ## Save the convergence test result if file exist then append to it
     if os.path.exists(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv')):
         convergence_df.to_csv(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv'), mode='a', header=False)
@@ -1229,8 +1236,8 @@ echo "Job Ended at `date`"\n \
     # craete the json file if it does not exist, otherwise load it
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
 
-    new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 48, "runtime": 2800, "submissionScript": submissionScript, "outputFilename": outputFilename}}
-    # new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 4, "runtime": 30, "submissionScript": submissionScript, "outputFilename": outputFilename}}
+    # new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 48, "runtime": 2800, "submissionScript": submissionScript, "outputFilename": outputFilename}}
+    new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 4, "runtime": 30, "submissionScript": submissionScript, "outputFilename": outputFilename}}
 
     # check if resource_suggestions.db exist in the working directory
     db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')

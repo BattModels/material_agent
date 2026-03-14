@@ -28,6 +28,11 @@ from pydantic import BaseModel, Field
 from src.tools import *
 from src.prompt import dft_agent_prompt,hpc_agent_prompt,supervisor_prompt
 from src import var
+from src.myCANVAS import CANVAS
+
+import sqlite3
+from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 members = ["DFT_Agent", "HPC_Agent"]
 instructions = [dft_agent_prompt, hpc_agent_prompt]
@@ -91,6 +96,7 @@ class PlanExecute(TypedDict):
     plan: List[myStep]
     past_steps: List[myStep]
     response: str
+    canvas: dict
     next: str
 
 class DisableParallelToolCallsMiddleware(AgentMiddleware):
@@ -166,6 +172,7 @@ def print_stream(s):
 #     return {"messages": [HumanMessage(content=s["messages"][-1].content, name=name)]}
 
 def supervisor_chain_node(state, agent, name):
+    # CANVAS.snap()
     # read "status.txt" in the working directory
     with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
         status = f.read()
@@ -215,10 +222,10 @@ Please update the plan accordingly.
     # output = agent.invoke(
     #     {"messages": [("user", supervisorMessage)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
     #     )
-    
+    # CANVAS.snap_save()
     agent_response = agent_response['structured_response']
     if isinstance(agent_response.action, Response):
-        return {"response": agent_response.action.response, "next": "FINISH"}
+        return {"response": agent_response.action.response, "next": "FINISH", "canvas":CANVAS.canvas}
     # elif isinstance(output.action, Response):
     #     return {"response": "Plan is not finished! Do not use response!", "next": "Supervisor"}
     else:
@@ -228,11 +235,12 @@ Please update the plan accordingly.
             with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
                 f.write(plan_str)
                 f.write("\n")
-        return {"plan": agent_response.action.steps, "next": agent_response.action.steps[0].agent}
+        return {"plan": agent_response.action.steps, "next": agent_response.action.steps[0].agent, "canvas":CANVAS.canvas}
     
     
 
-def worker_agent_node(state, agent, name, past_steps_list):
+def worker_agent_node(state, agent, name):
+    # CANVAS.snap()
     # read "status.txt" in the working directory
     with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
         status = f.read()
@@ -258,7 +266,7 @@ def worker_agent_node(state, agent, name, past_steps_list):
     task = plan[0]
 #     task_formatted = f"""For the following plan:
 # {plan_str}\n\nYou are tasked with executing step {1}, {task}."""
-    old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step}" for i, step in enumerate(past_steps_list))
+    old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step}" for i, step in enumerate(state["past_steps"]))
     task_formatted = f"""
 Here are what has been done so far:
 {old_tasks_string}
@@ -293,16 +301,16 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
     structured_response = agent_response['structured_response']
     
     
-    # past_steps_list.append((task, agent_response["messages"][-1].content))
-    past_steps_list.append(myStep(step=structured_response.summary, agent=name))
+    # state["past_steps"].append((task, agent_response["messages"][-1].content))
+    state["past_steps"].append(myStep(step=structured_response.summary, agent=name))
     
     print_stream(structured_response.summary)
-    
+    # CANVAS.snap_save()
     return {
-        "past_steps": past_steps_list,
+        "past_steps": state["past_steps"], "canvas":CANVAS.canvas
     }
     
-def recusive_agent_node(state, agent, name, past_steps_list):
+def recusive_agent_node(state, agent, name):
     print(f"Agent {name} is processing!!!!!")
     if var.my_SAVE_DIALOGUE:
         with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
@@ -332,11 +340,9 @@ def create_planning_graph(config: dict) -> StateGraph:
     if not eval(config["SAVE_DIALOGUE"]):
         var.my_SAVE_DIALOGUE = False
     
-    ## Memory Saver
-    memory = MemorySaver()
-
-    PAST_STEPS = []
-    myCANVAS = {}
+    # CANVASCheckpoints = []
+    # with open(f"{WORKING_DIRECTORY}/canvas_checkpoints.pickle", 'rb') as f:
+    #     CANVASCheckpoints = pickle.load(f)
     
     supervisor_tools = [
         inspect_my_canvas,
@@ -383,7 +389,7 @@ def create_planning_graph(config: dict) -> StateGraph:
         response_format=ToolStrategy(wokerResponse),
         middleware=[DisableParallelToolCallsMiddleware(), handle_tool_errors]
     )
-    dft_node = functools.partial(worker_agent_node, agent=dft_agent, name="DFT_Agent", past_steps_list=PAST_STEPS)
+    dft_node = functools.partial(worker_agent_node, agent=dft_agent, name="DFT_Agent")
 
 
     ### HPC Agent
@@ -403,7 +409,7 @@ def create_planning_graph(config: dict) -> StateGraph:
         middleware=[DisableParallelToolCallsMiddleware(), handle_tool_errors]
     )
 
-    hpc_node = functools.partial(worker_agent_node, agent=hpc_agent, name="HPC_Agent", past_steps_list=PAST_STEPS)
+    hpc_node = functools.partial(worker_agent_node, agent=hpc_agent, name="HPC_Agent")
     
     ### MD Agent
     # md_tools = [
@@ -415,7 +421,7 @@ def create_planning_graph(config: dict) -> StateGraph:
     # md_agent = create_react_agent(llm, tools=md_tools,
     #                               state_modifier=md_agent_prompt)
     
-    # md_node = functools.partial(worker_agent_node, agent=md_agent, name="MD_Agent", past_steps_list=PAST_STEPS)
+    # md_node = functools.partial(worker_agent_node, agent=md_agent, name="MD_Agent")
 
     # save_graph_to_file(dft_agent, config['working_directory'], "dft_agent")
     
@@ -440,7 +446,9 @@ def create_planning_graph(config: dict) -> StateGraph:
     conditional_map["Supervisor"] = "Supervisor" 
     graph.add_conditional_edges("Supervisor", whos_next, conditional_map)
     graph.add_edge(START, "Supervisor") 
-    # return graph.compile(checkpointer=memory)
-    return graph.compile()
+    
+    # return graph.compile(checkpointer=checkpointer)
+    # return graph.compile()
+    return graph
 
 

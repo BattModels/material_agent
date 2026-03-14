@@ -186,7 +186,8 @@ def select_k_ecut(convergence_data: pd.DataFrame, error_threshold: float, natom:
     ecutwfc_chosen = df_kspacing[df_kspacing['Acceptable'] == True].iloc[0]['ecutwfc']
     print(df_kspacing)
     print(f'Chosen ecutwfc: {ecutwfc_chosen}')
-    if ecutwfc_chosen == max_ecutwfc:
+    print(f"there are {len(df_kspacing)} data points for kspacing {min_kspacing}")
+    if len(df_kspacing) <= 1:
         finnerEcut = True
 
 
@@ -196,11 +197,12 @@ def select_k_ecut(convergence_data: pd.DataFrame, error_threshold: float, natom:
     df_ecutwfc['Acceptable'] = df_ecutwfc['error'] < error_threshold
     k_chosen = df_ecutwfc[df_ecutwfc['Acceptable'] == True].iloc[0]['kspacing']
 
-    if k_chosen == min_kspacing:
+    if len(df_ecutwfc) <= 1:
         finnerKspacing = True
         
     print(df_ecutwfc)
     print(f'Chosen kspacing: {k_chosen}')
+    print(f"there are {len(df_ecutwfc)} data points for ecutwfc {max_ecutwfc}")
 
 
     return k_chosen, ecutwfc_chosen, finnerEcut, df_kspacing, df_ecutwfc, finnerKspacing

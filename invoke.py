@@ -6,6 +6,7 @@ from langchain_core.messages import (
     HumanMessage,
     ToolMessage,
 )
+import pickle
 # from langchain_anthropic import ChatAnthropic
 
 from langgraph.prebuilt import create_react_agent
@@ -13,12 +14,17 @@ from langgraph.prebuilt import create_react_agent
 # from src.graph import create_graph
 from src.planNexe2 import create_planning_graph as create_graph
 # from src.planNexeHighPlan import create_planning_graph as create_graph
-
+import sys
 import time
 from src.utils import load_config, save_graph_to_file,initialize_database
 from src.myCANVAS import CANVAS
 from src import var
 
+import sqlite3
+from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
+from pathlib import Path
 
 if __name__ == "__main__":
 
@@ -82,7 +88,7 @@ if __name__ == "__main__":
     Sn (dia)	6.474
     '''
     
-    userMessage_6 = "You are going to calculate the lattice constant for BCC Li through DFT."
+    userMessage_6 = "You are going to calculate the lattice constant for BCC Rb through DFT."
     userMessage_7 = "You are going to generat a Pt surface structure with 2x2x4 supercell, then do a convergence test, use maximum ecutwfc = 160. Get the optimal kspacing and ecutwfc."
     userMessage_8 = """Please generate intial structures required to calculate CO adsorbtion on Pt(111) surface with 1/4 coverage (2x2x4 supercell), and calculate the adsorbtion energy."""
     userMessage_9 = """
@@ -119,73 +125,71 @@ if __name__ == "__main__":
     
     assert WORKING_DIRECTORY is not None, "Please set the WORKING_DIRECTORY var"
     
-    CANVAS.set_working_directory(WORKING_DIRECTORY)
     # CANVAS.canvas["finished_job_list"] = ["CO_Pt111_fcc_upright_k_0.3_ecutwfc_60.pwi"]
     
     # set environment variable
     os.environ["OMP_NUM_THREADS"] = "1"
     
-    # check if working directory exists, if so delete it
-    if os.path.exists(WORKING_DIRECTORY):
-        os.system(f"rm -rf {WORKING_DIRECTORY}")
+    overwrite = False
+    if len(sys.argv) > 1 and sys.argv[1] == "ow":
+        print()
+        print("####################")
+        print("# Force over write #")
+        print("####################")
+        print()
+        overwrite = True
+    # no folder created. starting fresh
+    elif not os.path.exists(WORKING_DIRECTORY):
+        print()
+        print("################################################")
+        print("# WORKING_DIRECTORY doesn't exist. Start fresh #")
+        print("################################################")
+        print()
+        overwrite = True
+    # if only created folder but nothing in it. start fresh
+    elif os.path.exists(WORKING_DIRECTORY) and sum(1 for p in Path(WORKING_DIRECTORY).iterdir()) == 0:
+        print()
+        print("##############################################################")
+        print("# WORKING_DIRECTORY exist, but contains nothing. Start fresh #")
+        print("##############################################################")
+        print()
+        overwrite = True
+    else:
+        print()
+        print("############")
+        print("# Resuming #")
+        print("############")
+        print()
+        overwrite = False
+        
+    timeTravelToXFrameBefore = 0
     
-    os.makedirs(WORKING_DIRECTORY, exist_ok=False)
+    if overwrite:
+        # check if working directory exists, if so delete it
+        if os.path.exists(WORKING_DIRECTORY):
+            os.system(f"rm -rf {WORKING_DIRECTORY}")
+        
+        os.makedirs(WORKING_DIRECTORY, exist_ok=False)
     
-    # check if resource_suggestions.db exist in the working directory
-    db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
-    if os.path.exists(db_file):
-        os.remove(db_file)
-    initialize_database(db_file)
+        # check if resource_suggestions.db exist in the working directory
+        db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
+        if os.path.exists(db_file):
+            os.remove(db_file)
+        initialize_database(db_file)
+    else:
+        db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
+        if not os.path.exists(db_file):
+            initialize_database(db_file)
 
-    graph = create_graph(config)
+    CANVAS.set_working_directory(WORKING_DIRECTORY)
+
+
+    
+    
+
+    rawGraph = create_graph(config)
+    # graph = create_graph(config)
     llm_config = {"thread_id": "1", 'recursion_limit': 1000}
-    
-    # print(graph)
-    
-
-    # save_graph_to_file(graph, WORKING_DIRECTORY, "super_graph")
-    # exit()
-
-    
-    # for s in graph.stream(
-    # {
-    #     "messages": [
-    #         HumanMessage(content=f"{userMessage_4}")
-    #     ]
-    # },llm_config):
-    #     if "__end__" not in s:
-    #         print(s)
-    #         print("----")
-
-    # for s in graph.stream(
-    # {
-    #     "messages": [
-    #         HumanMessage(content=f"{userMessage_2}")
-    #     ]
-    # },llm_config):
-    #     if "__end__" not in s:
-    #         print(s)
-    #         print("----")
-
-    # for s in graph.stream(
-    # {
-    #     "input": f"{userMessage_6}",
-    #     "plan": [],
-    #     "past_steps": []
-    # },llm_config):
-    #     if "__end__" not in s:
-    #         print(s)
-    #         print("----")
-            
-    # for s in graph.stream(
-    # {
-    #     "input": [
-    #         HumanMessage(content=f"{userMessage_5}")
-    #     ]
-    # },llm_config):
-    #     if "__end__" not in s:
-    #         print(s)
-    #         print("----")
 
     print("Start, check the log file for details")
     log_filename = f"./log/agent_stream_{int(time.time())}.log"  # Add timestamp to filename
@@ -194,13 +198,41 @@ if __name__ == "__main__":
         if eval(config["SAVE_DIALOGUE"]):
             with open(f"{WORKING_DIRECTORY}/his.txt", "a") as f:
                 f.write(f"=== Session started at {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n\n")
+                
+        serde = JsonPlusSerializer(pickle_fallback=True)
+        checkpointer = SqliteSaver(sqlite3.connect(f"{WORKING_DIRECTORY}/checkpoints.sqlite", check_same_thread=False), serde=serde)
+        # with SqliteSaver.from_conn_string(f"{WORKING_DIRECTORY}/checkpoints.sqlite") as checkpointer:
+        graph = rawGraph.compile(checkpointer=checkpointer)
         
-        for s in graph.stream(
-            {
-                "inputs": f"{userMessage_13}",
+        if overwrite:
+            inputs = {
+                "inputs": f"{userMessage_6}",
                 "plan": [],
-                "past_steps": []
-            }, llm_config):
+                "past_steps": [],
+                "canvas": CANVAS.canvas
+            }
+            llm_config = llm_config
+        else:
+            history = list(graph.get_state_history(llm_config))
+            # print(history)
+            snap = history[timeTravelToXFrameBefore]
+            print("\n\n\n\n\n\n")
+            print(snap)
+            print("\n\n\n\n\n\n")
+            inputs = None
+            llm_config = snap.config
+            CANVAS.canvas = snap.values["canvas"]
+            CANVAS.print()
+            print(CANVAS)
+            
+        
+        
+        # assert False
+        for s in graph.stream(
+            inputs, 
+            llm_config,
+            durability="sync",
+            ):
             
             if "__end__" not in s:
                 print(s)

@@ -1,6 +1,7 @@
 import pickle
 from ase.io import read
 import os
+import copy
 
 
 def myDictPP(myDict, indent=4, nindent=0, toDisk=False, filename=None):
@@ -41,10 +42,34 @@ class myCANVAS():
     def __init__(self, working_directory = os.getcwd()):
         self.SpecialKeys = ["ready_to_run_job_list", "finished_job_list"]
         self.canvas = {}
+        self.canvas_checkpoints = []
         self.working_directory = working_directory
+        self.tmpCkpIdx = 0
     
-    def set_working_directory(self, working_directory):
+    def set_working_directory(self, working_directory, ckp=0):
         self.working_directory = working_directory
+        # writeDir = os.path.join(self.working_directory, 'canvas.pickle')
+        # ckpDir = os.path.join(self.working_directory, 'canvas_checkpoints.pickle')
+        # if not os.path.exists(writeDir):
+        #     with open(writeDir, 'wb') as f:
+        #         pickle.dump(self.canvas, f)
+        #     print("##################### CANVAS #######################")
+        #     myDictPP(self.canvas, toDisk=True, filename=writeDir+'.txt')
+        #     print("################### CANVAS END #####################")    
+        # else:
+        #     with open(ckpDir, 'rb') as f:
+        #         self.canvas_checkpoints = pickle.load(f)
+        #     print(f"loaded {len(self.canvas_checkpoints)} checkpoints from {ckpDir}")
+        #     self.canvas = self.canvas_checkpoints[-1-ckp] 
+        #     self.tmpCkpIdx = ckp
+        #     print("##################### CANVAS #######################")
+        #     myDictPP(self.canvas, toDisk=True, filename=writeDir+'.txt')
+        #     print("################### CANVAS END #####################")
+    
+    def print(self):
+        print("##################### CANVAS #######################")
+        myDictPP(self.canvas)
+        print("################### CANVAS END #####################")
     
     def inspect(self):
         return list(self.canvas.keys())
@@ -89,6 +114,18 @@ class myCANVAS():
             return f"Key '{key}' successfully overwritten."
         else:
             return f"Key '{key}' already exists. Please choose a different key. If you want to overwrite the value, set the 'overwrite' flag to True."
+    
+    def snap(self):
+        self.canvas_checkpoints.append(copy.deepcopy(self.canvas))
+
+    def snap_save(self):
+        if self.tmpCkpIdx > 0:
+            self.canvas_checkpoints[-1-self.tmpCkpIdx:-1] = []
+            self.tmpCkpIdx = 0
+        ckpDir = os.path.join(self.working_directory, 'canvas_checkpoints.pickle')
+        with open(ckpDir, 'wb') as f:
+                pickle.dump(self.canvas_checkpoints, f)   
+        
     
 CANVAS = myCANVAS()
 
