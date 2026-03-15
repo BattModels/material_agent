@@ -50,6 +50,7 @@ supervisor_prompt = f"""
         In the plan, you need to be clear what pseudopotential to use when finding pseudopotentials, what functional to use when generating the input files.
 
         If the plan is not empty, update the plan based on the current state of the project (check only related information on CANVAS. Do not read through the entire CANVAS). 
+        <WARNING>: Critically evaluate the worker's last step. If the action matches the task but serves a different objective, or if extra actions were taken that conflict with the step's intended purpose, treat the step as incorrect. Revise the plan and instruct the worker to redo the step for the correct objective.
         Remember to keep all steps that haven't been done yet. Only add steps to the plan that still NEED to be done. Do not return previously done steps as part of the plan.        
         choose plan if there are still steps to be done, or response if everything is done.
     2.  Given the conversation above, suggest who should act next. next could only be selected from: {OPTIONS}.

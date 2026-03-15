@@ -206,7 +206,7 @@ if __name__ == "__main__":
         
         if overwrite:
             inputs = {
-                "inputs": f"{userMessage_6}",
+                "inputs": f"{userMessage_13}",
                 "plan": [],
                 "past_steps": [],
                 "canvas": CANVAS.canvas
