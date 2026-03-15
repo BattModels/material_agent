@@ -4,6 +4,7 @@ from langchain.agents import create_agent
 
 from typing import Annotated, Sequence, TypedDict,Literal, List, Dict, Tuple, Union
 import functools
+import pandas as pd
 import os
 import threading
 
@@ -28,6 +29,8 @@ from pydantic import BaseModel, Field
 from src.tools import *
 from src.prompt import dft_agent_prompt,hpc_agent_prompt,supervisor_prompt, oer_agent_prompt
 from src import var
+from src.myCANVAS import CANVAS
+from gnome_dreams_oer_screening.explog.explog import EXPLOG
 
 members = ["OER_Agent"]
 
@@ -83,7 +86,11 @@ class PlanExecute(TypedDict):
     plan: List[myStep]
     past_steps: List[myStep]
     response: str
+    canvas: Dict
+    explog_candidates: pd.DataFrame
+    explog_processes: pd.DataFrame
     next: str
+
 
 class DisableParallelToolCallsMiddleware(AgentMiddleware):
     
@@ -167,7 +174,8 @@ def supervisor_chain_node(state, agent, name):
         with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
             f.write(f"supervisor is processing!!!!!\n")
 
-    print(state)
+    # can't print state anymore because it now contains canvas and explog, and printing them will cause too much output
+    # print(state)
     if var.my_SAVE_DIALOGUE:
         with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
             f.write(str(state))
@@ -206,7 +214,13 @@ Please update the plan accordingly.
     
     agent_response = agent_response['structured_response']
     if isinstance(agent_response.action, Response):
-        return {"response": agent_response.action.response, "next": "FINISH"}
+        return {
+            "response": agent_response.action.response, 
+            "next": "FINISH", 
+            "canvas":CANVAS.canvas, 
+            "explog_candidates": EXPLOG.relational_frame.candidates.df, 
+            "explog_processes": EXPLOG.relational_frame.processes.df,
+            }
     # elif isinstance(output.action, Response):
     #     return {"response": "Plan is not finished! Do not use response!", "next": "Supervisor"}
     else:
@@ -216,9 +230,15 @@ Please update the plan accordingly.
             with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
                 f.write(plan_str)
                 f.write("\n")
-        return {"plan": agent_response.action.steps, "next": agent_response.action.steps[0].agent}
+        return {
+            "plan": agent_response.action.steps,
+            "next": agent_response.action.steps[0].agent,
+            "canvas":CANVAS.canvas,
+            "explog_candidates": EXPLOG.relational_frame.candidates.df,
+            "explog_processes": EXPLOG.relational_frame.processes.df,
+            }
     
-def worker_agent_node(state, agent, name, past_steps_list):
+def worker_agent_node(state, agent, name):
     # read "status.txt" in the working directory
     with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
         status = f.read()
@@ -244,7 +264,7 @@ def worker_agent_node(state, agent, name, past_steps_list):
     task = plan[0]
 #     task_formatted = f"""For the following plan:
 # {plan_str}\n\nYou are tasked with executing step {1}, {task}."""
-    old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step}" for i, step in enumerate(past_steps_list))
+    old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step}" for i, step in enumerate(state["past_steps"]))
     task_formatted = f"""
 Here are what has been done so far:
 {old_tasks_string}
@@ -279,13 +299,16 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
     structured_response = agent_response['structured_response']
     
     
-    # past_steps_list.append((task, agent_response["messages"][-1].content))
-    past_steps_list.append(myStep(step=structured_response.summary, agent=name))
+    # state["past_steps"].append((task, agent_response["messages"][-1].content))
+    state["past_steps"].append(myStep(step=structured_response.summary, agent=name))
     
     print_stream(structured_response.summary)
     
     return {
-        "past_steps": past_steps_list,
+        "past_steps": state["past_steps"], 
+        "canvas":CANVAS.canvas,
+        "explog_candidates": EXPLOG.relational_frame.candidates.df,
+        "explog_processes": EXPLOG.relational_frame.processes.df,
     }
     
 def whos_next(state):
@@ -384,7 +407,7 @@ def create_planning_graph(config: dict) -> StateGraph:
         response_format=ToolStrategy(wokerResponse),
         middleware=[DisableParallelToolCallsMiddleware(), handle_tool_errors]
     )
-    dft_node = functools.partial(worker_agent_node, agent=dft_agent, name="DFT_Agent", past_steps_list=PAST_STEPS)
+    dft_node = functools.partial(worker_agent_node, agent=dft_agent, name="DFT_Agent")
 
     
     oer_tools = [
@@ -413,7 +436,7 @@ def create_planning_graph(config: dict) -> StateGraph:
         response_format=ToolStrategy(wokerResponse),
         middleware=[DisableParallelToolCallsMiddleware(), handle_tool_errors]
     )
-    oer_node = functools.partial(worker_agent_node, agent=oer_agent, name="OER_Agent", past_steps_list=PAST_STEPS)
+    oer_node = functools.partial(worker_agent_node, agent=oer_agent, name="OER_Agent")
 
     ### HPC Agent
     # hpc_tools = [read_script, submit_and_monitor_job, read_energy_from_output]
@@ -434,7 +457,7 @@ def create_planning_graph(config: dict) -> StateGraph:
         response_format=ToolStrategy(wokerResponse),
         middleware=[DisableParallelToolCallsMiddleware(), handle_tool_errors]
     )
-    hpc_node = functools.partial(worker_agent_node, agent=hpc_agent, name="HPC_Agent", past_steps_list=PAST_STEPS)
+    hpc_node = functools.partial(worker_agent_node, agent=hpc_agent, name="HPC_Agent")
     
     ### MD Agent
     # md_tools = [
@@ -446,7 +469,7 @@ def create_planning_graph(config: dict) -> StateGraph:
     # md_agent = create_react_agent(llm, tools=md_tools,
     #                               state_modifier=md_agent_prompt)
     
-    # md_node = functools.partial(worker_agent_node, agent=md_agent, name="MD_Agent", past_steps_list=PAST_STEPS)
+    # md_node = functools.partial(worker_agent_node, agent=md_agent, name="MD_Agent")
 
     # save_graph_to_file(dft_agent, config['working_directory'], "dft_agent")
     
@@ -474,4 +497,5 @@ def create_planning_graph(config: dict) -> StateGraph:
     graph.add_edge(START, "Supervisor") 
     # checkpointer = InMemorySaver()
     # return graph.compile(checkpointer=checkpointer)
-    return graph.compile()
+    # return graph.compile()
+    return graph

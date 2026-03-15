@@ -1,5 +1,11 @@
 import os
 import yaml
+import sys
+with open(os.path.join('./config', "default.yaml"), 'r') as f:
+    config = yaml.safe_load(f)
+    pathList = config.get("PATH_LIST", [])
+    sys.path.extend(p for p in pathList if p not in sys.path)
+    
 import getpass
 from langchain_core.messages import (
     BaseMessage,
@@ -12,11 +18,15 @@ from langchain_core.messages import (
 # from src.graph import create_graph
 from src.planNexe2 import create_planning_graph
 # from src.planNexeHighPlan import create_planning_graph as create_graph
-
+import sys
 import time
 from src.utils import load_config, save_graph_to_file,initialize_database
 from src.myCANVAS import CANVAS
 from src import var
+
+import sqlite3
+from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 from pathlib import Path
 
@@ -135,68 +145,73 @@ if __name__ == "__main__":
     # set environment variable
     os.environ["OMP_NUM_THREADS"] = "1"
 
-    # check if working directory exists, if so delete it
-    if os.path.exists(WORKING_DIRECTORY):
-        os.system(f"rm -rf {WORKING_DIRECTORY}")
+    timeTravelToXFrameBefore = 0
+    overwrite = False
+    if len(sys.argv) > 1 and sys.argv[1] == "ow":
+        print()
+        print("####################")
+        print("# Force over write #")
+        print("####################")
+        print()
+        overwrite = True
+    # no folder created. starting fresh
+    elif not os.path.exists(WORKING_DIRECTORY):
+        print()
+        print("################################################")
+        print("# WORKING_DIRECTORY doesn't exist. Start fresh #")
+        print("################################################")
+        print()
+        overwrite = True
+    # if only created folder but nothing in it. start fresh
+    elif os.path.exists(WORKING_DIRECTORY) and sum(1 for p in Path(WORKING_DIRECTORY).iterdir()) == 0:
+        print()
+        print("##############################################################")
+        print("# WORKING_DIRECTORY exist, but contains nothing. Start fresh #")
+        print("##############################################################")
+        print()
+        overwrite = True
+    elif len(sys.argv) > 1:
+        if sys.argv[1].isdigit():
+            timeTravelToXFrameBefore = int(sys.argv[1])
+            print()
+            print("############################################################")
+            print(f"# Time traveling {timeTravelToXFrameBefore} frames back")
+            print("############################################################")
+            print()
+        else:
+            assert False, "Invalid argument. Use 'ow' for overwrite or a number for time travel or leave blank to resume."
+    else:
+        print()
+        print("############")
+        print("# Resuming #")
+        print("############")
+        print()
+        overwrite = False
+        
 
-    os.makedirs(WORKING_DIRECTORY, exist_ok=False)
+    if overwrite:
+        # check if working directory exists, if so delete it
+        if os.path.exists(WORKING_DIRECTORY):
+            os.system(f"rm -rf {WORKING_DIRECTORY}")
+        
+        os.makedirs(WORKING_DIRECTORY, exist_ok=False)
+    
+        # check if resource_suggestions.db exist in the working directory
+        db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
+        if os.path.exists(db_file):
+            os.remove(db_file)
+        initialize_database(db_file)
+    else:
+        db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
+        if not os.path.exists(db_file):
+            initialize_database(db_file)
 
     EXPLOG.init(Path(WORKING_DIRECTORY)/"TEMP_vasp_calcs", "test")
-    # check if resource_suggestions.db exist in the working directory
-    db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
-    if os.path.exists(db_file):
-        os.remove(db_file)
-    initialize_database(db_file)
+    CANVAS.set_working_directory(WORKING_DIRECTORY)
 
-    graph = create_planning_graph(config)
-    llm_config = {"thread_id": "1", 'recursion_limit': 1000}
-
-    # print(graph)
-
-
-    # save_graph_to_file(graph, WORKING_DIRECTORY, "super_graph")
-    # exit()
-
-
-    # for s in graph.stream(
-    # {
-    #     "messages": [
-    #         HumanMessage(content=f"{userMessage_4}")
-    #     ]
-    # },llm_config):
-    #     if "__end__" not in s:
-    #         print(s)
-    #         print("----")
-
-    # for s in graph.stream(
-    # {
-    #     "messages": [
-    #         HumanMessage(content=f"{userMessage_2}")
-    #     ]
-    # },llm_config):
-    #     if "__end__" not in s:
-    #         print(s)
-    #         print("----")
-
-    # for s in graph.stream(
-    # {
-    #     "input": f"{userMessage_6}",
-    #     "plan": [],
-    #     "past_steps": []
-    # },llm_config):
-    #     if "__end__" not in s:
-    #         print(s)
-    #         print("----")
-            
-    # for s in graph.stream(
-    # {
-    #     "input": [
-    #         HumanMessage(content=f"{userMessage_5}")
-    #     ]
-    # },llm_config):
-    #     if "__end__" not in s:
-    #         print(s)
-    #         print("----")
+    rawGraph = create_planning_graph(config)
+    # graph = create_graph(config)
+    llm_config = {"thread_id": "1", 'recursion_limit': 2000}
 
     print("Start, check the log file for details")
     log_filename = f"./log/agent_stream_{int(time.time())}.log"  # Add timestamp to filename
@@ -207,13 +222,48 @@ if __name__ == "__main__":
             with open(f"{WORKING_DIRECTORY}/his.txt", "a") as f:
                 f.write(f"=== Session started at {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n\n")
         
-        for s in graph.stream(
-            {
+              
+        serde = JsonPlusSerializer(pickle_fallback=True)
+        checkpointer = SqliteSaver(sqlite3.connect(f"{WORKING_DIRECTORY}/checkpoints.sqlite", check_same_thread=False), serde=serde)
+        # with SqliteSaver.from_conn_string(f"{WORKING_DIRECTORY}/checkpoints.sqlite") as checkpointer:
+        graph = rawGraph.compile(checkpointer=checkpointer)
+
+        if overwrite:
+            inputs = {
                 "inputs": f"{testMessage}",
                 "plan": [],
-                "past_steps": []
-            }, llm_config):
+                "past_steps": [],
+                "canvas": CANVAS.canvas,
+                "explog_candidates": EXPLOG.relational_frame.candidates.df,
+                "explog_processes": EXPLOG.relational_frame.processes.df
+            }
+            llm_config = llm_config
+        else:
+            history = list(graph.get_state_history(llm_config))
+            # print(history)
+            snap = history[timeTravelToXFrameBefore]
+            print("\n\n\n")
+            print(snap)
+            print("\n\n\n")
+            inputs = None
+            llm_config = snap.config
+            CANVAS.canvas = snap.values["canvas"]
+            CANVAS.print()
+            print(CANVAS)
+            EXPLOG.relational_frame.candidates.df = snap.values["explog_candidates"]
+            EXPLOG.relational_frame.processes.df = snap.values["explog_processes"]
+            print(EXPLOG.relational_frame.flatten_explode())
+            print()
+            print("########################################################################################################")
+            print("Resuming with the above snapshot. If you want to start fresh, please run with 'ow' argument. If you want to time travel x frame back, run 'python invoke.py x'.")
+            print("########################################################################################################")
             
+        # assert False
+        for s in graph.stream(
+            inputs, 
+            llm_config,
+            durability="sync",
+            ):
             if "__end__" not in s:
                 print(s)
                 print("----")
