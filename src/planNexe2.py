@@ -188,7 +188,8 @@ def supervisor_chain_node(state, agent, name):
         with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
             f.write(f"supervisor is processing!!!!!\n")
 
-    print(state)
+    # no longer print state since it may contain too much information from canvas
+    # print(state)
     if var.my_SAVE_DIALOGUE:
         with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
             f.write(str(state))

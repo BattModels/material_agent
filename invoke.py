@@ -108,7 +108,7 @@ if __name__ == "__main__":
     If your result is not within 10 percent of the literature, please find out possible reasons and resolve it."""
     
     userMessage_13 = """please find the adsorption energy difference between the most favorable configurations (different adsorbate orientations 0, 90, 180) at fcc site and most favorable configuration (different adsorbate orientations 0, 90, 180) at ontop site for CO on Pt(111) surface with p(2x2) adsorbate overlayer (1/4 coverage).
-    Please use PBE pseudopotential."""
+    Please use LDA pseudopotential."""
     
     testMessage = '''
     please generate a single input script for Li BCC structure with kspacing 0.1 and ecutwfc 40
