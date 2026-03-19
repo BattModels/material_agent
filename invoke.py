@@ -103,15 +103,13 @@ if __name__ == "__main__":
     userMessage_11 = "I am trying to study adsorption of CO on Pt111 surface at fcc site. Job CO_Pt111_fcc_upright_k_0.3_ecutwfc_60.pwi did not converge, please figure out why and resolve the convergence issue."
     
     userMessage_12 = """please find the adsorption energy difference between the most favorable configurations (different adsorbate orientations 0, 90, 180) at fcc site and most favorable configuration (different adsorbate orientations 0, 90, 180) at ontop site for CO on Pt(111) surface with p(2x2) adsorbate overlayer (1/4 coverage), and analyze the uncertainty.
-    Please use PBE pseudopotential and Bayesian Error Estimation Functional (BEEF) exchange correlation function.
-    Literatures suggest that ontop site is 0.18 eV less stable than fcc site when using PBE xc.
-    If your result is not within 10 percent of the literature, please find out possible reasons and resolve it."""
+    Please use PBE pseudopotential and Bayesian Error Estimation Functional (BEEF) exchange correlation function."""
     
     userMessage_13 = """please find the adsorption energy difference between the most favorable configurations (different adsorbate orientations 0, 90, 180) at fcc site and most favorable configuration (different adsorbate orientations 0, 90, 180) at ontop site for CO on Pt(111) surface with p(2x2) adsorbate overlayer (1/4 coverage).
     Please use LDA pseudopotential."""
     
     testMessage = '''
-    please generate a single input script for Li BCC structure with kspacing 0.1 and ecutwfc 40
+    please generate a Pt(111) surface structure for p(2x2) adsorbate overlayer (1/4 coverage).
     '''
     
     config = load_config(os.path.join('./config', "default.yaml"))
@@ -206,7 +204,7 @@ if __name__ == "__main__":
         
         if overwrite:
             inputs = {
-                "inputs": f"{userMessage_13}",
+                "inputs": f"{userMessage_12}",
                 "plan": [],
                 "past_steps": [],
                 "canvas": CANVAS.canvas

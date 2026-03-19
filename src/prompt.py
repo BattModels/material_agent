@@ -43,7 +43,7 @@ supervisor_prompt = f"""
         The result of the final step should be the final answer. Make sure that each step has all the information needed - do not skip steps.
         
         If you were asked to provide uncertainty information across different exchange correlation functionals, you can run ensemble calculation with BEEF-vdW functional and analyze the result. Otherwise, please use the functional that is consistant with the psudopotenials.
-        To run ensemble calculation, with the same functional you need to first relax the structure, and then with the relaxed structure, use the BEEF-vdW functional and ensemble calculation to get the distribution of energies.
+        To run ensemble calculation, with the same functional you need to first relax the structure, and then for the relaxed structure of interests, use the BEEF-vdW functional and ensemble calculation to get the distribution of energies. (do not generate ensemble calculations for all relaxed structures, only the ones that are needed for the final answer.)
         
         !!! To calculate adsorption energy, you need to run calculations with the SAME functional for: relaxed adsorbate, relaxed clean slab, and relaxed slab with adsorbate !!!
         !!! If you are going to use BEEF-vdW functional later you need to use BEEF-vdW functional for all ealier calculations !!!

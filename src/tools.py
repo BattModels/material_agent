@@ -169,7 +169,7 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
                                         surfaceFilename: Annotated[str, "Name (not a path) of the surface file to be saved in traj format"] = "surface.traj"
                                         ):
     """Generate a surface structure and get the available adsorption sites."""
-    a_dict = {'Pt': 3.99}
+    a_dict = {'Pt': 3.91}
     supercell_dim[-1] = 6
     surface_dict = generate_surface_structures(
         species_list=[species],
@@ -713,15 +713,36 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int, stepSize:
 
 ###################################### DFT POST-PROCESSING TOOLS ######################################
 
+try:
+    import tiktoken
+    _ENC = tiktoken.get_encoding("cl100k_base")
+    def _count_tokens(text: str) -> int:
+        return len(_ENC.encode(text))
+    def _slice_tokens(text: str, start_tok: int, end_tok: int) -> str:
+        ids = _ENC.encode(text)
+        return _ENC.decode(ids[start_tok:end_tok])
+except Exception:
+    _ENC = None
+    # Heuristic: ~4 chars per token
+    _CHARS_PER_TOKEN = 4
+    def _count_tokens(text: str) -> int:
+        return max(1, len(text) // _CHARS_PER_TOKEN)
+    def _slice_tokens(text: str, start_tok: int, end_tok: int) -> str:
+        start_ch = start_tok * _CHARS_PER_TOKEN
+        end_ch = end_tok * _CHARS_PER_TOKEN
+        return text[start_ch:end_ch]
+
 @tool
 def get_convergence_suggestions(
     filename: Annotated[str, "Name of the Quantum Espresso input file that did not converge, end with .pwi"],
     question: Annotated[str, "Question about this job, e.g. 'Why this job did not converge?' or 'how to improve the accuracy of this job?'"],
+    start_block: Annotated[int, "The block index to start with when the content is too long. Each block contains around 150k tokens. Set to 0 for the first block." ] = 0
 ):
-    "Get suggestions on how to resolve issues for a certain job, i.e. converge or not accurate enough."
+    "Get suggestions on how to resolve issues for a certain job, i.e. converge or not accurate enough. If the output file is too long, you can call this tool multiple times for the same file with the same question but different start_block index to get suggestions based on different part of the output."
     outFile = filename + ".pwo"
     errFile = filename + ".err"
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+    block_size_tokens = 150000
     # WORKING_DIRECTORY = "/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/out"
     
     # config = load_config(os.path.join('./config', "default.yaml"))
@@ -734,6 +755,7 @@ def get_convergence_suggestions(
     # workerllm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
     # llm = ChatDeepSeek(model_name=config["DeepSeek_MDL"], api_key=config['DeepSeek_API_KEY'], api_base=config['DeepSeek_BASE_URL'], temperature=0.0)
     
+    fileTrimed = False
     finalSuggestion = ""
     for myfile in [
                    filename, 
@@ -752,26 +774,64 @@ def get_convergence_suggestions(
             # for agent_response in dft_reader_agent.stream({"messages": [("user", task_formatted)]}, {"configurable": {"thread_id": thread_id}, "recursion_limit": 1000}):
             #     agent_response = next(iter(agent_response.values()))
             #     print_stream(agent_response)
-            
-            system_msg = """
-You are a DFT expert who's good at giving concise suggestions on how to resolve issues in DFT calculations. Do not modify nosym and pesudopotentials. Never make any adjustment to make the calculation less accurate.
-Please use the format: parameterX: suggestionX, reasonX; parameterY: suggestionY, reasonY; ...
-"""
-            
-            invokingMsg = [
-                ("system", system_msg),
-                ("user", task_formatted)
-            ]
-            agent_response = workerllm.invoke(invokingMsg)
-            
-            finalSuggestion += agent_response.content + "\n\n"
-            print(agent_response.content + "\n\n")
+            total_tokens = _count_tokens(task_formatted)
+
+            # Small enough: return all
+            if total_tokens <= block_size_tokens:
+                system_msg = """
+    You are a DFT expert who's good at giving concise suggestions on how to resolve issues in DFT calculations. Do not modify nosym and pesudopotentials. Never make any adjustment to make the calculation less accurate.
+    Please use the format: parameterX: suggestionX, reasonX; parameterY: suggestionY, reasonY; ...
+    """
+                
+                invokingMsg = [
+                    ("system", system_msg),
+                    ("user", task_formatted)
+                ]
+                agent_response = workerllm.invoke(invokingMsg)
+                
+                finalSuggestion += agent_response.content + "\n\n"
+                print(agent_response + "\n\n")
+                if var.my_SAVE_DIALOGUE:
+                    with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+                        f.write(repr(agent_response))
+            else:
+                fileTrimed = True
+                # Large: compute block boundaries
+                block_size = block_size_tokens
+                total_blocks = (total_tokens + block_size - 1) // block_size
+                sb = max(0, int(start_block or 0))
+                if sb >= total_blocks:
+                    sb = total_blocks - 1  # clamp to last block
+
+                start_tok = sb * block_size
+                end_tok = min((sb + 1) * block_size, total_tokens)
+                chunk = _slice_tokens(content, start_tok, end_tok)
+                task_formatted = f"{chunk}\n I have a question about the DFT calculation related to the file above: {question}. Please think about what could be the reason, and give me suggestions to address it. Never give suggestion to lower the accuracy of the calculation, such as loosen the convergence threshold."
+                system_msg = """
+    You are a DFT expert who's good at giving concise suggestions on how to resolve issues in DFT calculations based on part of the output files. Do not modify nosym and pesudopotentials. Never make any adjustment to make the calculation less accurate.
+    Please use the format: parameterX: suggestionX, reasonX; parameterY: suggestionY, reasonY; ...
+    """
+                
+                invokingMsg = [
+                    ("system", system_msg),
+                    ("user", task_formatted)
+                ]
+                agent_response = workerllm.invoke(invokingMsg)
+                
+                finalSuggestion += agent_response.content + "\n\n"
+                print(agent_response + "\n\n")
+                if var.my_SAVE_DIALOGUE:
+                    with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+                        f.write(repr(agent_response))
+
             
     if finalSuggestion == "":
         # time.sleep(60)
         return f"Job {filename} has no related files, please check the job list and make sure the job is finished."
-        
-    finalSuggestion += "Please check the suggestions above and come up with a plan to fix the issue. Never take suggestions that will lower the accuracy of the calculation."
+    
+    finalSuggestion += "Please check the suggestions above and come up with a plan to fix the issue. Never take suggestions that will lower the accuracy of the calculation.\n"
+    if fileTrimed:
+        finalSuggestion += f"Note: The suggestions are based on {start_block}th part of the output file, if you want to get more comprehensive suggestions, please call this tool multiple times with different start_block index to cover different part of the output file.\n"
     # time.sleep(60)
     return finalSuggestion
 
