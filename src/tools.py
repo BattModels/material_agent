@@ -247,6 +247,47 @@ The following systems is still in progress:
     return finalAnswer
 
 @tool
+def query_explog(
+    tableName: Annotated[str, "Name of the table in the relational frame to query, either 'candidates' or 'processes'."],
+    filters: List[Filter] = [],
+    sort: List[SortSpec] = [],
+) -> str:
+    """Query the experiment log relational frame with a given filter and sort criteria.
+    candidates table contains: 
+        candidate_id (MaterialID of the candidate),
+        reason_or_hypothesis (for selecting the candidate),
+        notes (any notes you've added for the candidate),
+        OHDone (whether the OH adsorption calculation has been done for the candidate),
+        idealOverPotential (the ideal overpotential calculated based on currently available data)
+    processes table contains:
+        process_id (unique id for each process),
+        candidate_id (MaterialID of the candidate this process belongs to),
+        job_type (type of the DFT calculation, either bulk_relaxation, surface_relaxation, O_adsorption, or OH_adsorption),
+        slurmID (the slurm ID of the job, NaN for un-submitted jobs),
+        stutas (current status of the job, either un-submitted, submitted, pending, running, completed, or failed),
+        termination_index (termination index for surface relaxation and adsorption calculations, NaN for bulk relaxation),
+        site_index (adsorption site index for adsorption calculations, NaN for bulk and surface relaxation),
+        processNote (any note you've left for this process)
+    """
+
+    if tableName == 'candidates':
+        df = EXPLOG.relational_frame.candidates.df.copy()
+        # drop the "study_obj" column since it contains complex objects that are not easy to display in a dataframe format
+        df = df.drop(columns=["study_obj"])
+    elif tableName == 'processes':
+        df = EXPLOG.relational_frame.processes.df.copy()
+        df = df.drop(columns=["VASP_dir"]) # drop the "VASP_dir" column since it contains file directory strings that are not easy to display in a dataframe format
+    else:
+        return "tableName must be either 'candidates' or 'processes'"
+    
+    filteredDF = df_query(df, filters, sort)
+    
+    print(filteredDF)
+    return filteredDF.to_string(index=True)
+    
+    
+
+@tool
 def read_explog(
     candidate_id: Annotated[str, "MaterialId of the candidate to read the experiment log for."],
     ) -> str:
