@@ -378,7 +378,7 @@ def enter_candidate_in_log(
 @tool
 def submit_dft_job(
     MaterialId: Annotated[str, "MaterialId of the candidate to submit DFT job for."],
-    calculation_type: Annotated[Literal['bulk_relaxation', 'surface_relaxation', 'OH_adsorption', 'O_adsorption'], "Type of DFT calculation to submit."],
+    calculation_type: Annotated[Literal['bulk_relaxation', 'surface_relaxation', 'OH_adsorption', 'O_adsorption'], "Type of DFT calculation to submit. The OH_adsorption calculation will submit three jobs with slightly different initial OH adsorbate positions, increasing the likelihood of finding the global minimum."],
     note: Annotated[str, "Short note you want to leave for the calculation"],
     termination_index: Annotated[int, "termination index. Only needed for surface and adsorption calculations"] = None,
     ad_site_index: Annotated[int, "index of the site you want to adsorb O or OH onto. Only neeeded for adsorption calculations"] = None,
@@ -411,9 +411,16 @@ def submit_dft_job(
                 surface_study.initialize_adsorption_site_study(ad_site_index)
             ad_site_study = surface_study.get_adsorption_site_studies_dict()[ad_site_index]
     # ------------------------------------------------------------------
-            
-    id = EXPLOG.add_process(MaterialId, calculation_type, termination_index, ad_site_index, note)
-    EXPLOG.submit_process(id, partition)
+
+    # a list of ids will be provided for OH_calculations and not for all other:
+    id_list = EXPLOG.add_process(MaterialId, calculation_type, termination_index, ad_site_index, note)
+    if not isinstace(id_list, list):
+        id_list = [id_list]
+    else:
+        id_list = id_list
+
+    for id in id_list:
+        EXPLOG.submit_process(id, partition)
     # save EXPLOG into a pickle file under WORKING_DIRECTORY for record and future reference
     # with open(os.path.join(var.my_WORKING_DIRECTORY, "EXPLOG.pkl"), "wb") as f:
     #     pickle.dump(EXPLOG, f)
