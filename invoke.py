@@ -160,7 +160,7 @@ if __name__ == "__main__":
         print()
         overwrite = False
         
-    timeTravelToXFrameBefore = 0
+    timeTravelToXFrameBefore = 3
     
     if overwrite:
         # check if working directory exists, if so delete it
@@ -212,19 +212,32 @@ if __name__ == "__main__":
             llm_config = llm_config
         else:
             history = list(graph.get_state_history(llm_config))
-            # print(history)
+            # for h in history:
+            #     print(h)
+            #     print("\n\n\n\n\n\n")
+            # assert False
             snap = history[timeTravelToXFrameBefore]
             print("\n\n\n\n\n\n")
             print(snap)
             print("\n\n\n\n\n\n")
             inputs = None
             llm_config = snap.config
+            llm_config = graph.update_state(
+                llm_config,
+                values={
+                    "inputs": """please find the adsorption energy difference between the most favorable configurations (different adsorbate orientations 0, 90, 180) at fcc site and most favorable configuration (different adsorbate orientations 0, 90, 180) at ontop site for CO on Pt(111) surface with p(2x2) adsorbate overlayer (1/4 coverage).
+Once done, keep ask yourself interesting scientific questions related to this system and try to answer them through further analysis or calculation. Then based on the result, keep asking and answering questions to dig deeper into the system. I'll cancel your execution whenever I think you have done enough, but until then, you should keep asking questions and answering them.
+"""
+                }
+            )
             CANVAS.canvas = snap.values["canvas"]
             CANVAS.print()
             print(CANVAS)
             
+
+            
         
-        
+
         # assert False
         for s in graph.stream(
             inputs, 

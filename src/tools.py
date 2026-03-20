@@ -76,6 +76,236 @@ def write_my_canvas(key: Annotated[str, "key"],
 #     """Get the working directory."""
 #     return var.my_WORKING_DIRECTORY
 
+
+def _to_serializable(x: Any) -> Any:
+    """Convert common ASE / NumPy objects into JSON-serializable Python types."""
+    if isinstance(x, np.ndarray):
+        return x.tolist()
+    if isinstance(x, (np.integer, np.floating, np.bool_)):
+        return x.item()
+    if isinstance(x, dict):
+        return {str(k): _to_serializable(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_to_serializable(v) for v in x]
+    return x
+
+
+def _safe_call(fn, default_name: str) -> Any:
+    """Call a getter and return a readable unavailable message on failure."""
+    try:
+        return fn()
+    except Exception as e:
+        return f"<unavailable: {default_name}: {e}>"
+
+
+@tool
+def inspect_ase_atoms(
+    atomsFilename: Annotated[str, "Path to the ASE Atoms object file (e.g. .traj, .xyz) or the name of the job that contains the Atoms object (e.g. xxxx.pwi, xxx.pwi.pwo)."]
+    ) -> str:
+    """
+    Broad inspection tool for an ASE Atoms object.
+
+    Returns a wide, agent-friendly summary of the structure, including:
+    - composition
+    - geometry
+    - cell / PBC
+    - arrays / info / constraints
+    - calculator-backed results when available
+
+    Parameters
+    ----------
+    atoms
+        ASE Atoms object.
+
+    Returns
+    -------
+    dict
+        JSON-serializable dictionary containing extracted information.
+    """
+    try:
+        from ase import Atoms
+    except Exception as e:
+        return {"ok": False, "error": f"Failed to import ASE: {e}"}
+    
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+    try:
+        atoms = read(os.path.join(WORKING_DIRECTORY, atomsFilename))
+    except Exception as e:
+        return f"Failed to read Atoms object from {atomsFilename}: {e}"
+
+    if not isinstance(atoms, Atoms):
+        return {
+            "ok": False,
+            "error": f"Expected ase.Atoms, got {type(atoms).__name__}",
+        }
+
+    result: Dict[str, Any] = {
+        "ok": True,
+        "natoms": len(atoms),
+        "formula": _safe_call(atoms.get_chemical_formula, "formula"),
+        "chemical_symbols": _safe_call(atoms.get_chemical_symbols, "chemical_symbols"),
+        "atomic_numbers": _to_serializable(
+            _safe_call(atoms.get_atomic_numbers, "atomic_numbers")
+        ),
+        "positions": _to_serializable(_safe_call(atoms.get_positions, "positions")),
+        "scaled_positions": _to_serializable(
+            _safe_call(atoms.get_scaled_positions, "scaled_positions")
+        ),
+        "cell": _to_serializable(atoms.cell.array),
+        "cell_lengths_and_angles": _to_serializable(
+            _safe_call(atoms.cell.cellpar, "cell_lengths_and_angles")
+        ),
+        "pbc": _to_serializable(atoms.get_pbc()),
+        "volume": _to_serializable(_safe_call(atoms.get_volume, "volume")),
+        "masses": _to_serializable(_safe_call(atoms.get_masses, "masses")),
+        "center_of_mass": _to_serializable(
+            _safe_call(atoms.get_center_of_mass, "center_of_mass")
+        ),
+        "momenta": _to_serializable(_safe_call(atoms.get_momenta, "momenta")),
+        "velocities": _to_serializable(_safe_call(atoms.get_velocities, "velocities")),
+        "tags": _to_serializable(_safe_call(atoms.get_tags, "tags")),
+        "initial_charges": _to_serializable(
+            _safe_call(atoms.get_initial_charges, "initial_charges")
+        ),
+        "initial_magnetic_moments": _to_serializable(
+            _safe_call(atoms.get_initial_magnetic_moments, "initial_magnetic_moments")
+        ),
+        "info": _to_serializable(dict(atoms.info)),
+        "arrays": {k: _to_serializable(v) for k, v in atoms.arrays.items()},
+        "constraints": [repr(c) for c in atoms.constraints],
+        "has_calculator": atoms.calc is not None,
+        "calculator": type(atoms.calc).__name__ if atoms.calc is not None else None,
+    }
+
+    if atoms.calc is not None:
+        result["calculator_results"] = {
+            "potential_energy": _to_serializable(
+                _safe_call(atoms.get_potential_energy, "potential_energy")
+            ),
+            "forces": _to_serializable(_safe_call(atoms.get_forces, "forces")),
+            "stress": _to_serializable(_safe_call(atoms.get_stress, "stress")),
+            "charges": _to_serializable(_safe_call(atoms.get_charges, "charges")),
+            "magnetic_moments": _to_serializable(
+                _safe_call(atoms.get_magnetic_moments, "magnetic_moments")
+            ),
+        }
+
+    return json.dumps(result, indent=2)
+
+
+@tool
+def get_ase_atoms_property(
+    atomsFilename: Annotated[str, "Path to the ASE Atoms object file (e.g. .traj, .xyz) or the name of the job that contains the Atoms object (e.g. xxxx.pwi, xxx.pwi.pwo)."],
+    property_name: str
+    ) -> str:
+    """
+    Extract one specific property from an ASE Atoms object.
+
+    Supported property_name values include:
+    - formula
+    - natoms
+    - chemical_symbols
+    - atomic_numbers
+    - positions
+    - scaled_positions
+    - cell
+    - cell_lengths_and_angles
+    - pbc
+    - volume
+    - masses
+    - center_of_mass
+    - momenta
+    - velocities
+    - tags
+    - initial_charges
+    - initial_magnetic_moments
+    - info
+    - arrays
+    - constraints
+    - has_calculator
+    - calculator
+    - potential_energy
+    - forces
+    - stress
+    - charges
+    - magnetic_moments
+
+    Parameters
+    ----------
+    atoms
+        ASE Atoms object.
+    property_name : str
+        Name of the property to extract.
+
+    Returns
+    -------
+    dict
+        JSON-serializable dictionary with the requested property.
+    """
+    try:
+        from ase import Atoms
+    except Exception as e:
+        return {"ok": False, "error": f"Failed to import ASE: {e}"}
+    
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+    try:
+        atoms = read(os.path.join(WORKING_DIRECTORY, atomsFilename))
+    except Exception as e:
+        return f"Failed to read Atoms object from {atomsFilename}: {e}"
+
+    if not isinstance(atoms, Atoms):
+        return {
+            "ok": False,
+            "error": f"Expected ase.Atoms, got {type(atoms).__name__}",
+        }
+
+    key = property_name.strip().lower()
+
+    property_map = {
+        "formula": lambda: atoms.get_chemical_formula(),
+        "natoms": lambda: len(atoms),
+        "chemical_symbols": atoms.get_chemical_symbols,
+        "atomic_numbers": atoms.get_atomic_numbers,
+        "positions": atoms.get_positions,
+        "scaled_positions": atoms.get_scaled_positions,
+        "cell": lambda: atoms.cell.array,
+        "cell_lengths_and_angles": atoms.cell.cellpar,
+        "pbc": atoms.get_pbc,
+        "volume": atoms.get_volume,
+        "masses": atoms.get_masses,
+        "center_of_mass": atoms.get_center_of_mass,
+        "momenta": atoms.get_momenta,
+        "velocities": atoms.get_velocities,
+        "tags": atoms.get_tags,
+        "initial_charges": atoms.get_initial_charges,
+        "initial_magnetic_moments": atoms.get_initial_magnetic_moments,
+        "info": lambda: dict(atoms.info),
+        "arrays": lambda: {k: _to_serializable(v) for k, v in atoms.arrays.items()},
+        "constraints": lambda: [repr(c) for c in atoms.constraints],
+        "has_calculator": lambda: atoms.calc is not None,
+        "calculator": lambda: type(atoms.calc).__name__ if atoms.calc is not None else None,
+        "potential_energy": atoms.get_potential_energy,
+        "forces": atoms.get_forces,
+        "stress": atoms.get_stress,
+        "charges": atoms.get_charges,
+        "magnetic_moments": atoms.get_magnetic_moments,
+    }
+
+    if key not in property_map:
+        return {
+            "ok": False,
+            "error": f"Unsupported property_name: {property_name}",
+            "supported_properties": sorted(property_map.keys()),
+        }
+
+    value = _safe_call(property_map[key], key)
+    return json.dumps({
+        "ok": True,
+        "property_name": key,
+        "value": _to_serializable(value),
+    }, indent=2)
+
+
 def get_kpoints(atoms, kspacing: float) -> list:
     """Returns the kpoints of a given ase atoms object and specific kspacing."""
     cell = atoms.cell
@@ -169,7 +399,7 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
                                         surfaceFilename: Annotated[str, "Name (not a path) of the surface file to be saved in traj format"] = "surface.traj"
                                         ):
     """Generate a surface structure and get the available adsorption sites."""
-    a_dict = {'Pt': 3.91}
+    a_dict = {'Pt': 3.99}
     supercell_dim[-1] = 6
     surface_dict = generate_surface_structures(
         species_list=[species],
