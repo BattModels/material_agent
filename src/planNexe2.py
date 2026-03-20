@@ -32,6 +32,8 @@ from src import var
 from src.myCANVAS import CANVAS
 from gnome_dreams_oer_screening.explog.explog import EXPLOG
 
+import traceback
+
 members = ["OER_Agent"]
 
 class myStep(BaseModel):
@@ -117,7 +119,7 @@ def handle_tool_errors(request, handler):
         #
         # Return a custom error message to the model
         return ToolMessage(
-            content=f"Tool error: Please check your input and try again. ({str(e)})",
+            content=f"Tool error: Please check your input and try again. ({str(e)}), the traceback is: {traceback.format_exc()}",
             tool_call_id=request.tool_call["id"]
         )
 
@@ -169,10 +171,13 @@ def supervisor_chain_node(state, agent, name):
         with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
             status = f.read()
     
-    print(f"supervisor is processing!!!!!")
+    currentTime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    timeElapsed = timedelta(seconds= time.time() - var.startTime)
+    
+    print(f"supervisor is processing!!!!! Current time: {currentTime}, time elapsed since the start of the project: {timeElapsed}.")
     if var.my_SAVE_DIALOGUE:
         with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-            f.write(f"supervisor is processing!!!!!\n")
+            f.write(f"supervisor is processing!!!!! Current time: {currentTime}, time elapsed since the start of the project: {timeElapsed}.\n")
 
     # can't print state anymore because it now contains canvas and explog, and printing them will cause too much output
     # print(state)
@@ -187,7 +192,10 @@ def supervisor_chain_node(state, agent, name):
     # {plan_str}\n\nYou are tasked with executing step {1}, {task}."""
     old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step}" for i, step in enumerate(state["past_steps"]))
     
+    
     supervisorMessage =  f"""
+Current time: {currentTime}, time elapsed since the start of the project: {timeElapsed}.
+
 Your available agents are: {members}.
 
 The overall goal is: {state['inputs']}. 
@@ -362,7 +370,8 @@ def create_planning_graph(config: dict) -> StateGraph:
     supervisor_tools = [
         inspect_my_canvas,
         read_my_canvas,
-        inspect_explog
+        inspect_explog,
+        query_explog,
         ]
     
     supervisor_agent = create_agent(
@@ -425,7 +434,8 @@ def create_planning_graph(config: dict) -> StateGraph:
         read_explog,
         get_top_k_candidates,
         extract_df,
-        wait_for_update
+        wait_for_update,
+        query_explog,
         ]
     # oer_agent = create_react_agent(workerllm, tools=oer_tools,
     #                                prompt=oer_agent_prompt)

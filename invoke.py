@@ -207,6 +207,16 @@ if __name__ == "__main__":
             initialize_database(db_file)
 
     EXPLOG.init(Path(WORKING_DIRECTORY)/"TEMP_vasp_calcs", "test")
+    # print(EXPLOG.relational_frame.candidates.df.dtypes)
+    # print(EXPLOG.relational_frame.processes.df.dtypes)
+    # new_candidate_row = {"candidate_id": "test_candidate",
+    #                          "reason_or_hypothesis": "test_reason",
+    # }
+    # EXPLOG.relational_frame.candidates.add_row(new_candidate_row, 
+    #                                              allow_update=False)
+    # print(EXPLOG.relational_frame.candidates.df)
+    # print(EXPLOG.relational_frame.candidates.df.dtypes)
+    # assert False    
     CANVAS.set_working_directory(WORKING_DIRECTORY)
 
     rawGraph = create_planning_graph(config)
