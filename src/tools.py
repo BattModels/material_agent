@@ -416,7 +416,7 @@ def submit_dft_job(
 
     # a list of ids will be provided for OH_calculations and not for all other:
     id_list = EXPLOG.add_process(MaterialId, calculation_type, termination_index, ad_site_index, note)
-    if not isinstace(id_list, list):
+    if not isinstance(id_list, list):
         id_list = [id_list]
     else:
         id_list = id_list
