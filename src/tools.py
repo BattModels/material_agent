@@ -594,7 +594,7 @@ def OER_data_analasis_v2(
     # Whether to use only GGA calculations (True), or include r2SCAN data via the MP-mixing scheme (False):
         gga_only = gga_only,
     # Path to data directory:
-        path_to_data_directory = var.OTHER_GLOBAL_VARIABLES['path_to_data_directory']
+        path_to_data_directory = var.OTHER_GLOBAL_VARIABLES.get('path_to_data_directory', None)
         )
 
     dh.remove_entries_without_elements(['Ir'], True)
