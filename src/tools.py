@@ -399,7 +399,7 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
                                         surfaceFilename: Annotated[str, "Name (not a path) of the surface file to be saved in traj format"] = "surface.traj"
                                         ):
     """Generate a surface structure and get the available adsorption sites."""
-    a_dict = {'Pt': 3.99}
+    a_dict = {'Pt': 3.92}
     supercell_dim[-1] = 6
     surface_dict = generate_surface_structures(
         species_list=[species],
