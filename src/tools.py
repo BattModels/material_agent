@@ -1,8 +1,13 @@
+<<<<<<< HEAD
 
 import traceback
 
 import sys
 sys.path.append('/home/energy/matnis/projects/dreams_colab/material_agent/src')
+=======
+# import sys
+# sys.path.append('/home/energy/matnis/projects/dreams_colab/material_agent/src')
+>>>>>>> a98b85f9704c4e57c06f33358445ff5d654f26bd
 from copy import deepcopy
 from pathlib import Path
 from matplotlib import pyplot as plt
@@ -252,6 +257,51 @@ The following systems is still in progress:
     return finalAnswer
 
 @tool
+def query_explog(
+    tableName: Annotated[str, "Name of the table in the relational frame to query, either 'candidates' or 'processes'."],
+    filters: List[Filter] = [],
+    sort: List[SortSpec] = [],
+) -> str:
+    """Query the experiment log relational frame with a given filter and sort criteria.
+    candidates table contains: 
+        candidate_id (str, MaterialID of the candidate),
+        reason_or_hypothesis (str, for selecting the candidate),
+        notes (str, any notes you've added for the candidate),
+        OHDone (boolean, whether the OH adsorption calculation has been done for the candidate),
+        idealOverPotential (Float64, the ideal overpotential calculated based on currently available data)
+    processes table contains:
+        process_id (str, unique id for each process),
+        candidate_id (str, MaterialID of the candidate this process belongs to),
+        job_type (str, type of the DFT calculation, either bulk_relaxation, surface_relaxation, O_adsorption, or OH_adsorption),
+        slurmID (str, the slurm ID of the job, int in str format. NaN for un-submitted jobs),
+        stutas (str, current status of the job, either un-submitted, submitted, pending, running, completed, or failed),
+        termination_index (Int64, termination index for surface relaxation and adsorption calculations, NaN for bulk relaxation),
+        site_index (Int64, adsorption site index for adsorption calculations, NaN for bulk and surface relaxation),
+        processNote (str, any note you've left for this process)
+    """
+
+    # print dtype of both df
+    print("candidates df dtype:\n", EXPLOG.relational_frame.candidates.df.dtypes)
+    print("processes df dtype:\n", EXPLOG.relational_frame.processes.df.dtypes)
+    
+    if tableName == 'candidates':
+        df = EXPLOG.relational_frame.candidates.df.copy()
+        # drop the "study_obj" column since it contains complex objects that are not easy to display in a dataframe format
+        df = df.drop(columns=["study_obj"])
+    elif tableName == 'processes':
+        df = EXPLOG.relational_frame.processes.df.copy()
+        df = df.drop(columns=["VASP_dir"]) # drop the "VASP_dir" column since it contains file directory strings that are not easy to display in a dataframe format
+    else:
+        return "tableName must be either 'candidates' or 'processes'"
+    
+    filteredDF = df_query(df, filters, sort)
+    
+    print(filteredDF)
+    return filteredDF.to_string(index=True)
+    
+    
+
+@tool
 def read_explog(
     candidate_id: Annotated[str, "MaterialId of the candidate to read the experiment log for."],
     ) -> str:
@@ -338,7 +388,7 @@ def enter_candidate_in_log(
 @tool
 def submit_dft_job(
     MaterialId: Annotated[str, "MaterialId of the candidate to submit DFT job for."],
-    calculation_type: Annotated[Literal['bulk_relaxation', 'surface_relaxation', 'OH_adsorption', 'O_adsorption'], "Type of DFT calculation to submit."],
+    calculation_type: Annotated[Literal['bulk_relaxation', 'surface_relaxation', 'OH_adsorption', 'O_adsorption'], "Type of DFT calculation to submit. The OH_adsorption calculation will submit three jobs with slightly different initial OH adsorbate positions, increasing the likelihood of finding the global minimum."],
     note: Annotated[str, "Short note you want to leave for the calculation"],
     termination_index: Annotated[int, "termination index. Only needed for surface and adsorption calculations"] = None,
     ad_site_index: Annotated[int, "index of the site you want to adsorb O or OH onto. Only neeeded for adsorption calculations"] = None,
@@ -371,9 +421,16 @@ def submit_dft_job(
                 surface_study.initialize_adsorption_site_study(ad_site_index)
             ad_site_study = surface_study.get_adsorption_site_studies_dict()[ad_site_index]
     # ------------------------------------------------------------------
-            
-    id = EXPLOG.add_process(MaterialId, calculation_type, termination_index, ad_site_index, note)
-    EXPLOG.submit_process(id, partition)
+
+    # a list of ids will be provided for OH_calculations and not for all other:
+    id_list = EXPLOG.add_process(MaterialId, calculation_type, termination_index, ad_site_index, note)
+    if not isinstace(id_list, list):
+        id_list = [id_list]
+    else:
+        id_list = id_list
+
+    for id in id_list:
+        EXPLOG.submit_process(id, partition)
     # save EXPLOG into a pickle file under WORKING_DIRECTORY for record and future reference
     # with open(os.path.join(var.my_WORKING_DIRECTORY, "EXPLOG.pkl"), "wb") as f:
     #     pickle.dump(EXPLOG, f)
@@ -545,7 +602,7 @@ def OER_data_analasis_v2(
     # Whether to use only GGA calculations (True), or include r2SCAN data via the MP-mixing scheme (False):
         gga_only = gga_only,
     # Path to data directory:
-        # path_to_data_directory = "/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/GNoME_aqueous_stability/data"
+        path_to_data_directory = var.OTHER_GLOBAL_VARIABLES['path_to_data_directory']
         )
 
     dh.remove_entries_without_elements(['Ir'], True)
@@ -1189,7 +1246,7 @@ def write_QE_script_w_ASE(
     ready_to_run_job: Annotated[bool, "True if the job is intended to be run directly without further modification, False if this file is intended to be used to generate other files"] = False,
     additional_input: Annotated[Dict[str, Any], "Additional input parameters to be added to the input script. Should be in the format of a flat dict, {'input_parameter_1': parameter_1, 'input_parameter_2': parameter_2, ...}, parameter_x remain in their native type, str, float, bool, etc. Do not use unless you know what you are doing."] = {},
 ):
-    """Write a Quantum Espresso input script using ASE. Bool value have no quote around them. For smearing start with methfessel-paxton. For ecutwfc choose between 30-100 Ry. When asked to run ensemble calculation, set calculation to 'ensemble'"""
+    """Write a Quantum Espresso input script using ASE. Bool value have no quote around them. For smearing start with methfessel-paxton. For ecutwfc choose between 30-100 Ry. When asked to run ensemble calculation, set calculation to 'ensemble'. When generating template for convergence test, use scf calculation and set ready_to_run_job to False."""
 
     assert isinstance(additional_input, dict), "additional_input must be a dictionary"
     
@@ -1376,7 +1433,7 @@ def generate_convergence_test(input_file_name: Annotated[str, "Name of the templ
     cell = atom.cell
     ecutwfc_max = max(ecutwfc)
     kspacing_min = min(kspacing)
-    job_list_dict = {}
+    job_list_dict = CANVAS.canvas.get('jobs_K_and_ecut', {})
     job_list = []
     # Generate the input script for highest ecutwfc different kspacing
     for k in kspacing:
@@ -1812,19 +1869,25 @@ def get_kspacing_ecutwfc(jobFileIdx: Annotated[List[int], "indexs of files in th
         ecutwfc.append(job_dict[job]['ecutwfc'])
         goodJob.append(job)
     
-    print(f"successfully read {len(kspacing)} kspacing and {len(ecutwfc)} ecutwfc")
+    convergence_df = pd.DataFrame({'job':goodJob,'kspacing':kspacing, 'ecutwfc':ecutwfc, 'energy':energy_list})
     
-    if len(set(kspacing)) == 1 and len(set(ecutwfc)) > 1:
+    min_kspacing = convergence_df['kspacing'].min()
+    max_ecutwfc = convergence_df['ecutwfc'].max()
+    df_kspacing = convergence_df.loc[convergence_df['kspacing'] == min_kspacing].sort_values(by='ecutwfc',ascending=True)
+    df_ecutwfc = convergence_df.loc[convergence_df['ecutwfc'] == max_ecutwfc].sort_values(by='kspacing',ascending=False)
+
+    print(f"successfully read {len(df_kspacing)} kspacing and {len(df_ecutwfc)} ecutwfc")
+    
+    if len(df_kspacing) == 1 and len(df_ecutwfc) > 1:
         # time.sleep(60)
         return f"Only one kspacing is found, the rest of the jobs seems unfinished or not converged. DO NOT infer optimal parameters from converged jobs. Please regenerate the convergence test with finer kspacing. Also, adjust some other settings may help (regenerating template script is then needed). Remember, you NEED TO REDO the convergence test (tell the supervisor in your response that new convergence test need to be done and you've already generated the script)."
-    if len(set(ecutwfc)) == 1 and len(set(kspacing)) > 1:
+    if len(df_ecutwfc) == 1 and len(df_kspacing) > 1:
         # time.sleep(60)
         return f"Only one ecutwfc is found, the rest of the jobs seems unfinished or not converged. DO NOT infer optimal parameters from converged jobs. Please regenerate the convergence test with finer ecutwfc. Also, adjust some other settings may help (regenerating template script is then needed). Remember, you NEED TO REDO the convergence test (tell the supervisor in your response that new convergence test need to be done and you've already generated the script)."
-    if len(set(kspacing)) == 1 and len(set(ecutwfc)) == 1:
+    if len(df_kspacing) == 1 and len(df_ecutwfc) == 1:
         # time.sleep(60)
-        return f"Only one job is good, the rest of the jobs seems unfinished or not converged. DO NOT infer optimal parameters from converged jobs. Please regenerate the convergence test with finer kspacing and ecutwfc. Also, adjust some other settings may help (regenerating template script is then needed). Remember, you NEED TO REDO the convergence test (tell the supervisor in your response that new convergence test need to be done and you've already generated the script)."
+        return f"Only one job of either kspacing or ecutwfc is good, the rest of the jobs seems unfinished or not converged. DO NOT infer optimal parameters from converged jobs. Please regenerate the convergence test with finer kspacing and ecutwfc. Also, adjust some other settings may help (regenerating template script is then needed). Remember, you NEED TO REDO the convergence test (tell the supervisor in your response that new convergence test need to be done and you've already generated the script)."
         
-    convergence_df = pd.DataFrame({'job':goodJob,'kspacing':kspacing, 'ecutwfc':ecutwfc, 'energy':energy_list})
     ## Save the convergence test result if file exist then append to it
     if os.path.exists(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv')):
         convergence_df.to_csv(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv'), mode='a', header=False)
@@ -2038,19 +2101,22 @@ echo "Job Ended at `date`"\n \
     if not isinstance(partition, str) or not isinstance(nnodes, int) or not isinstance(ntasks, int) or not isinstance(span, str):
         # time.sleep(60)
         return "Invalid input, please check the input format"
+
+    assert qeInputFileName in CANVAS.canvas.get('ready_to_run_job_list', []), f"{qeInputFileName} is not in the ready_to_run_job_list, please check the job list and make sure the file name is correct"
+
     # craete the json file if it does not exist, otherwise load it
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
 
     # new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 48, "runtime": 2800, "submissionScript": submissionScript, "outputFilename": outputFilename}}
-    
-    # # check if resource_suggestions.db exist in the working directory
-    # db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
-    # if not os.path.exists(db_file):
-    #     initialize_database(db_file)
-    
-    # add_to_database(new_resource_dict, db_file)
-    var.my_RESOURCE_DIRECTORY[qeInputFileName] = {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 4, "runtime": 30, "submissionScript": submissionScript, "outputFilename": outputFilename}
-    
+    new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 4, "runtime": 30, "submissionScript": submissionScript, "outputFilename": outputFilename}}
+
+    # check if resource_suggestions.db exist in the working directory
+    db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
+    if not os.path.exists(db_file):
+        initialize_database(db_file)
+
+    add_to_database(new_resource_dict, db_file)
+
     # time.sleep(60)
     return f"Resource suggestion for {qeInputFileName} saved scucessfully"
 

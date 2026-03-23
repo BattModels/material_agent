@@ -89,6 +89,11 @@ class myCANVAS():
             return f"Key '{key}' successfully overwritten."
         else:
             return f"Key '{key}' already exists. Please choose a different key. If you want to overwrite the value, set the 'overwrite' flag to True."
+        
+    def print(self):
+        print("##################### CANVAS #######################")
+        myDictPP(self.canvas)
+        print("################### CANVAS END #####################")
     
 CANVAS = myCANVAS()
 
