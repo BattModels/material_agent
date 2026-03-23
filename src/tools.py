@@ -266,7 +266,7 @@ def query_explog(
         candidate_id (str, MaterialID of the candidate this process belongs to),
         job_type (str, type of the DFT calculation, either bulk_relaxation, surface_relaxation, O_adsorption, or OH_adsorption),
         slurmID (str, the slurm ID of the job, int in str format. NaN for un-submitted jobs),
-        stutas (str, current status of the job, either un-submitted, submitted, pending, running, completed, or failed),
+        status (str, current status of the job, either un-submitted, submitted, pending, running, completed, or failed),
         termination_index (Int64, termination index for surface relaxation and adsorption calculations, NaN for bulk relaxation),
         site_index (Int64, adsorption site index for adsorption calculations, NaN for bulk and surface relaxation),
         processNote (str, any note you've left for this process)
