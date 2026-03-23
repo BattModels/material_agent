@@ -198,8 +198,8 @@ def inspect_explog(only_get_updates: Annotated[bool, "Whether to only get update
     unfinished_candidate_ids = [can for can in all_candidates_id if can not in finishish_candidate_ids]
           
     finalAnswer = f"""You'v started {len(all_candidates_id)} candidates in total,
-You've finished study at least one oxygen adsorption on {len(finishish_candidate_ids)} systems,
-The following systems is still in progress:
+    You've finished study at least one OH adsorption on {len(finishish_candidate_ids)} systems,
+    The following systems is still in progress:
     """
     
     pdf = EXPLOG.relational_frame.processes.df
