@@ -124,8 +124,24 @@ if __name__ == "__main__":
     testMessage = """
     please conduct a acidic OER screening study to find out the best system to use as catalyst for OER reaction with limited computational budget.
     You must decide a screening strategy for selecting candidates materials and performing relavent DFT calculation to evaluate the OER activity.
-    Please only consider O only and skip the study of OH and OOH for now. 
     Available systems can be found in the default dataset. you must use Nsite < 20 and decomposition_energy < 0.5. Please use VASP as the calculator. 
+    """
+
+    testMessage = """
+    Please conduct an acidic OER screening study to identify the best catalytic system for the oxygen evolution reaction 
+    (OER) under a limited computational budget.
+    You must design a screening strategy for selecting candidate materials and performing relevant DFT calculations to
+    evaluate OER activity, with the available tools. We suggest an iterative approach: compute adsorption energies for 
+    an initial set of candidates, then use these results to guide the selection of candidates for subsequent rounds. 
+    This process can be repeated over several iterations until the most promising catalyst is identified.
+    Available systems can be found in the default dataset. The backend DFT calculator employs a PBE+U level of theory,
+    with U parameters taken from the Materials Project computational framework. Furthermore, the overall reaction
+    2H₂O → 2H₂ + O₂ is assumed to have an energy cost of 4.92 eV. This implies ideal adsorption energies of: 
+    G(OH) = 1.23 eV, G(O) = 2.46 eV, G(OOH) = 3.69 eV. An ideal overpotential will be calculated once G(O) and G(OH) 
+    have been obtained via DFT, which assumes that the missing G(OOH) value minimizes the overpotential. Additionally,
+     an overpotential based on the scaling relation G(OOH) = G(OH) + 3.2 will also be calculated.
+    Zero-point energy (ZPE), entropy, and heat capacity (Cp) contributions are assumed to be constant and are taken from
+    the literature beforhand, and applied in the backend.
     """
 
     config = load_config(os.path.join('./config', "default.yaml"))
