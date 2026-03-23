@@ -549,7 +549,7 @@ def list_adsorption_sites(
                     only_reduced_coord_O_sites=only_reduced_coord_O_sites)
 
     # Removing unnecessary columns
-    df = df.drop(columns=[ 'G(O)', 'G(OH)', 'G_approx(OOH)', 'G(OOH)', 'position', 'atom_index'])
+    df = df.drop(columns=['position', 'atom_index'])
     
     # Reshaping format:
     df['ad site neighboring elements'] = df['ad site neighboring elements'].apply(lambda x: [(x[i][0], np.round(x[i][1],1)) for i in 
