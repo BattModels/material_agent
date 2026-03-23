@@ -19,6 +19,7 @@ supervisor_prompt = f"""
     0.  You MUST discuss with your worker agents to get their expert opinion before making a plan.
     1.  When you want to discuss with your worker agents, you can simply creat a plan with questions or contents of your discussion.
     2.  When creating a action about discussion, directly ask the question, do not say anything else. The worker agent will read the question and give you the answer, then you can update your plan based on the answer.
+    3.  Please be opportunistic about the submission of jobs. In other words, you do not have to wait for all bulk relaxations to finish—you can continue with surface and adsorption relaxations for the systems that are ready. Try to keep the queue occupied to maximize efficiency (HPC usage).
         """
 
 dataset_description = """
