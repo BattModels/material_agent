@@ -125,7 +125,7 @@ if __name__ == "__main__":
     please conduct a acidic OER screening study to find out the best system to use as catalyst for OER reaction with limited computational budget.
     You must decide a screening strategy for selecting candidates materials and performing relavent DFT calculation to evaluate the OER activity.
     Please only consider O only and skip the study of OH and OOH for now. 
-    Available systems can be found in the default dataset. you must use Nsite < 20. Please use VASP as the calculator. 
+    Available systems can be found in the default dataset. you must use Nsite < 20 and decomposition_energy < 0.5. Please use VASP as the calculator. 
     """
 
     config = load_config(os.path.join('./config', "default.yaml"))
@@ -187,7 +187,6 @@ if __name__ == "__main__":
         print("############")
         print()
         overwrite = False
-        
 
     if overwrite:
         # check if working directory exists, if so delete it
@@ -206,7 +205,7 @@ if __name__ == "__main__":
         if not os.path.exists(db_file):
             initialize_database(db_file)
 
-    EXPLOG.init(Path(WORKING_DIRECTORY)/"TEMP_vasp_calcs", "test")
+    EXPLOG.init(Path(WORKING_DIRECTORY)/"TEMP_vasp_calcs", "slurm-test")
     # print(EXPLOG.relational_frame.candidates.df.dtypes)
     # print(EXPLOG.relational_frame.processes.df.dtypes)
     # new_candidate_row = {"candidate_id": "test_candidate",

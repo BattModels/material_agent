@@ -1,5 +1,5 @@
-# import sys
-# sys.path.append('/home/energy/matnis/projects/dreams_colab/material_agent/src')
+import sys
+sys.path.append('/home/energy/matnis/projects/dreams_colab/material_agent/src')
 from copy import deepcopy
 from pathlib import Path
 from matplotlib import pyplot as plt
@@ -88,7 +88,7 @@ async def _arXiv_search(arxiv_search_query, context):  # Your async operation
     config = var.OTHER_GLOBAL_VARIABLES
     ursaWorkspace = Path(os.path.join(var.my_WORKING_DIRECTORY, "ursa_workspace"))
     llm = ChatAnthropic(model="claude-haiku-4-5-20251001", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-    agent = ArxivAgent(llm=llm, process_images=False, max_results=2, workspace=ursaWorkspace)
+    agent = ArxivAgent(llm=llm, process_images=False, max_results=1, workspace=ursaWorkspace)
     result = await agent.ainvoke(
         arxiv_search_query=arxiv_search_query, 
         context=context
@@ -233,14 +233,16 @@ The following systems is still in progress:
                 cand_status += 'completed'
             elif 'failed' in sub_pdf.status.tolist():
                 cand_status += 'failed'
+            elif 'running' in sub_pdf.status.tolist():
+                cand_status += 'running'
             elif 'pending' in sub_pdf.status.tolist():
                 cand_status += 'pending'
-            elif 'submitted' in sub_pdf.status.tolist():
-                cand_status += 'submitted'
+            # elif 'submitted' in sub_pdf.status.tolist():
+            #     cand_status += 'submitted'
             elif 'un-submitted' in sub_pdf.status.tolist():
                 cand_status += 'un-submitted'
             else:
-                raise ValueError(f'unknown status for {cant_id}')
+                raise ValueError(f'unknown status for {cant_id}, status list: {sub_pdf.status.tolist()}')
             
         finalAnswer += cand_status + "\n"
 
