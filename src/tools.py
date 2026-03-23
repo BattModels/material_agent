@@ -297,7 +297,8 @@ def query_explog(
 def read_explog(
     candidate_id: Annotated[str, "MaterialId of the candidate to read the experiment log for."],
     ) -> str:
-    """Read the experiment log for a specific candidate and return all information about the candidate together with all related jobs info"""
+    """Read the experiment log for a specific candidate and return all information about the candidate together with all related jobs info, and for each adsorption job.
+    You can see the related site information as well (type, on-top element, closest neighboring elemetns, reduced coordination, G(O), G(H), and ideal overpotential) if the calculation finished."""
     _ = EXPLOG.update_log() # get the latest updates from the job handler and update the relational frame accordingly
     # save EXPLOG into a pickle file under WORKING_DIRECTORY for record and future reference
     # with open(os.path.join(var.my_WORKING_DIRECTORY, "EXPLOG.pkl"), "wb") as f:
@@ -307,7 +308,19 @@ def read_explog(
     related_process_df = EXPLOG.relational_frame.candidates[candidate_id].processes.df
     related_process_df = related_process_df.copy().drop(columns=["VASP_dir"])    
     
-    answer = f"Candidate information:\n{cadidate_row_df.to_string(index=False)}\n\nRelated processes information:\n{related_process_df.to_string(index=False)}"
+    answer = f"Candidate information:\n{cadidate_row_df.to_string(index=False)}\n\nRelated processes information:\n{related_process_df.to_string(index=False)}\n"
+    # for each row in related_process_df, if the job_type is either O_adsorption or OH_adsorption, add the corresponding site information to the answer by calling the _list_adsorption_sites function
+    for index, row in related_process_df.iterrows():
+        if row['job_type'] in ['O_adsorption', 'OH_adsorption']:
+            termination_index = row['termination_index']
+            site_index = row['site_index']
+            if pd.isna(termination_index) or pd.isna(site_index):
+                continue
+            site_info_df = _list_adsorption_sites(candidate_id, termination_index, only_reduced_coord_O_sites=True)
+            # extract the row where the "Site index" column is equal to site_index
+            site_info_row = site_info_df[site_info_df['Site index'] == site_index]
+            answer += f"\nFor this candidate termination index {termination_index} and site index {site_index}, the adsorption site information is:\n{site_info_row.to_string()}\n"
+
     return answer
 
 @tool
@@ -496,28 +509,12 @@ def get_terminations_ranking(
 
     return out_string
 
-@tool
-def list_adsorption_sites(
-    candidate_id: Annotated[str, "MaterialId of the candidate to list adsorption sites for."],
-    termination_index: Annotated[int, "termination index, of the surface to list adsorbtion sites for."],
-    # only_reduced_coord_O_sites = True, DISABELD FOR NOW...
-): 
-    """
-    Gives an preliminary list of adsorbtion sites if the termination has not been relaxed yet, or a list of final 
-    adsorption sites if the termination has been relaxed. Sites may be 'on-top' or 'lattice O' the latter beeing an 
-    espoused surface oxygen atom that is part of the lattice and may act as an adsorption site. For 'on-top' sites, the 
-    'element of the adsorption site' is listed, meaning the element which the adsobate is placed on top of. 
-    Additionally, a list of the closest neighboring elements of the adsorption site is given, with the  distance to 
-    these neighbors given as (neighbor element, distance [Å]). For 'lattice O' sites, the reduced coordination of the 
-    lattice O is given, which is a measure of how many neighboring atoms the lattice O has compared to a fully 
-    coordinated lattice O in the bulk structure (e.g., a reduced coordination of 1 means that the lattice O atom has a
-     decreased coordination of 1.). Since this function can be called repeatedly, there is no need to write the result
-     to the canvas.
-    """
 
-
-
-    only_reduced_coord_O_sites = True # <<<--- FIXED FOR NOW...
+def _list_adsorption_sites(
+    candidate_id, 
+    termination_index, 
+    only_reduced_coord_O_sites = True
+):
 
     out_string = ''
     df = None
@@ -563,7 +560,29 @@ def list_adsorption_sites(
         "reduced coordination of lattice O"}, inplace=True)
     df.rename(columns={"site type": 
     "type of adsorption site"}, inplace=True)
+    
+    return df
 
+@tool
+def list_adsorption_sites(
+    candidate_id: Annotated[str, "MaterialId of the candidate to list adsorption sites for."],
+    termination_index: Annotated[int, "termination index, of the surface to list adsorbtion sites for."],
+    # only_reduced_coord_O_sites = True, DISABELD FOR NOW...
+): 
+    """
+    Gives an preliminary list of adsorbtion sites if the termination has not been relaxed yet, or a list of final 
+    adsorption sites if the termination has been relaxed. Sites may be 'on-top' or 'lattice O' the latter beeing an 
+    espoused surface oxygen atom that is part of the lattice and may act as an adsorption site. For 'on-top' sites, the 
+    'element of the adsorption site' is listed, meaning the element which the adsobate is placed on top of. 
+    Additionally, a list of the closest neighboring elements of the adsorption site is given, with the  distance to 
+    these neighbors given as (neighbor element, distance [Å]). For 'lattice O' sites, the reduced coordination of the 
+    lattice O is given, which is a measure of how many neighboring atoms the lattice O has compared to a fully 
+    coordinated lattice O in the bulk structure (e.g., a reduced coordination of 1 means that the lattice O atom has a
+     decreased coordination of 1.). Since this function can be called repeatedly, there is no need to write the result
+     to the canvas.
+    """
+    only_reduced_coord_O_sites = True # <<<--- FIXED FOR NOW...
+    df = _list_adsorption_sites(candidate_id, termination_index, only_reduced_coord_O_sites)
     out_string += df.to_string(index=True)
 
     if True:
