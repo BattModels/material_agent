@@ -582,7 +582,50 @@ def list_adsorption_sites(
      to the canvas.
     """
     only_reduced_coord_O_sites = True # <<<--- FIXED FOR NOW...
-    df = _list_adsorption_sites(candidate_id, termination_index, only_reduced_coord_O_sites)
+    out_string = ''
+    df = None
+
+    study = EXPLOG.relational_frame.candidates[candidate_id].study_obj
+
+    if study.get_termination_rankings() is None:
+        raise ValueError(f"Termination rankings have not been determined yet for candidate {candidate_id}. "\
+                          "Please determine the termination rankings first.")
+
+    surface_study_dict = study.get_surface_studies()
+    if termination_index in surface_study_dict.keys():
+        surface_study = surface_study_dict[termination_index]
+        if surface_study.get_relaxed_surface() != None:
+            if surface_study.get_adsorption_sites_df() is None:
+                    surface_study.determine_adsorption_sites(
+                        only_reduced_coord_O_sites = only_reduced_coord_O_sites)
+                    
+            out_string += 'The requested termination has been relaxed, hence the provided adsorption sites are final,'\
+                 ' though adorbtion energies may change after relaxation of the adsorption structures.\n\n' 
+            df = surface_study.get_adsorption_sites_df()
+
+    if df is None:
+        out_string += f'The requested termination has not been relaxed yet, '\
+        'hence, the provided sites are only preliminary and may change after '\
+        'relaxation.\n\n'
+
+        df = study.get_init_adsorption_sites_df(termination_index, 
+                    only_reduced_coord_O_sites=only_reduced_coord_O_sites)
+
+    # Removing unnecessary columns
+    df = df.drop(columns=['position', 'atom_index'])
+    
+    # Reshaping format:
+    df['ad site neighboring elements'] = df['ad site neighboring elements'].apply(lambda x: [(x[i][0], np.round(x[i][1],1)) for i in 
+        range(len(x))])
+
+    # Renaming columns for easier interpretation:
+    df.rename(columns={"ad site neighboring elements": 
+        "closest neighboring elemetns of adsorption site (element, distance [Å])"}, inplace=True)
+    df.rename(columns={"ad site element": "element of the adsorption site"}, inplace=True)
+    df.rename(columns={"reduced coordination": 
+        "reduced coordination of lattice O"}, inplace=True)
+    df.rename(columns={"site type": 
+    "type of adsorption site"}, inplace=True)
     out_string += df.to_string(index=True)
 
     if True:
