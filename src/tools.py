@@ -1,13 +1,5 @@
-<<<<<<< HEAD
-
-import traceback
-
 import sys
 sys.path.append('/home/energy/matnis/projects/dreams_colab/material_agent/src')
-=======
-# import sys
-# sys.path.append('/home/energy/matnis/projects/dreams_colab/material_agent/src')
->>>>>>> a98b85f9704c4e57c06f33358445ff5d654f26bd
 from copy import deepcopy
 from pathlib import Path
 from matplotlib import pyplot as plt

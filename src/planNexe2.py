@@ -119,11 +119,7 @@ def handle_tool_errors(request, handler):
         #
         # Return a custom error message to the model
         return ToolMessage(
-<<<<<<< HEAD
-            content=f"Tool error: Please check your input and try again. ({str(e)}) - traceback: {traceback.format_exc()}",
-=======
             content=f"Tool error: Please check your input and try again. ({str(e)}), the traceback is: {traceback.format_exc()}",
->>>>>>> a98b85f9704c4e57c06f33358445ff5d654f26bd
             tool_call_id=request.tool_call["id"]
         )
 
