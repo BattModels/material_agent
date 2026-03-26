@@ -457,8 +457,11 @@ def get_terminations_ranking(
     since this fucntion creates all initial surfaces and the corresponding terminations. Any number
     of terminations may be studied after the ranking is preformed. One the ranking has been 
     performed once, it will not be performed again, and the same ranking will be used for any 
-    subsequent calls of this function. Since this function can be called repeatedly, there is no need to write the result
-     to the canvas.
+    subsequent calls of this function. Once adsorption calculations have been carried out for 
+    any site on the termination, the adsorption energies are also listed in the returned table. 
+    Additionally, if OH adsorption calculations have been performed, the ideal overpotential and 
+    the overpotential from the scaling relation will also be listed. Since this function can be
+    called repeatedly, there is no need to write the result to the canvas.
     """
     
     # Args to leve out (for now):
