@@ -159,6 +159,43 @@ def print_stream(s):
         with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
             f.write("\n")
             
+def boss_node(state, agent):
+    # read "status.txt" in the working directory
+    with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
+        status = f.read()
+    while status == "stop":
+        print(f"Calculation pause, supervisor is waiting. cwd: {var.my_WORKING_DIRECTORY}")
+        # wait for 5 second
+        time.sleep(5)
+        with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
+            status = f.read()
+            
+    # Time thing. may or may not need this for the boss 
+    currentTime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    timeElapsed = timedelta(seconds= time.time() - var.startTime)
+    print(f"supervisor is processing!!!!! Current time: {currentTime}, time elapsed since the start of the project: {timeElapsed}.")
+    if var.my_SAVE_DIALOGUE:
+        with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+            f.write(f"supervisor is processing!!!!! Current time: {currentTime}, time elapsed since the start of the project: {timeElapsed}.\n")
+    # can't print state anymore because it now contains canvas and explog, and printing them will cause too much output
+    # print(state)
+    if var.my_SAVE_DIALOGUE:
+        with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+            f.write(str(state))
+            f.write("\n")
+            
+    response = state["response"]
+    
+    task_string = f"please judge if this {response} can achieve the goal {state['inputs']}. If it can achieve the goal, then answer 'yes', if it can't achieve the goal, then answer 'no'."
+    pass
+
+    for agent_response in agent.stream(
+        {"messages": [("user", task_string)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
+    ):
+        # set agent_response to be the value of the first key of the dictionary
+        agent_response = next(iter(agent_response.values()))
+        print_stream(agent_response)
+            
 def supervisor_chain_node(state, agent, name):
     
     # read "status.txt" in the working directory
@@ -320,8 +357,11 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
     }
     
 def whos_next(state):
-    return state["next"]
-
+    # if supervisor returned with Plan then:
+        return state["next"] # => "DFT_Agent"
+    # else if supervisor returned with Response then:
+        return "Boss_Agent"
+    
 def create_planning_graph(config: dict) -> StateGraph:
     # create a file named status.txt in the working directory
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
@@ -366,6 +406,16 @@ def create_planning_graph(config: dict) -> StateGraph:
 
     PAST_STEPS = []
     myCANVAS = {}
+    
+    boss_tools = []
+    boss_agent = create_agent(
+        model=llm,
+        tools=boss_tools,
+        system_prompt="",
+        # response_format=ToolStrategy(Act),  # Or ProviderStrategy for native models
+        middleware=[DisableParallelToolCallsMiddleware(), handle_tool_errors]
+    )
+    boss_node = functools.partial(boss_node, agent=boss_agent, name="Boss_Agent")
     
     supervisor_tools = [
         inspect_my_canvas,
@@ -490,6 +540,7 @@ def create_planning_graph(config: dict) -> StateGraph:
     # graph.add_node("DFT_Agent", dft_node)
     # graph.add_node("HPC_Agent", hpc_node)
     graph.add_node("OER_Agent", oer_node)
+    graph.add_node("Boss_Agent", boss_node)
     # graph.add_node("MD_Agent", md_node)
     # graph.add_node("CSS_Agent", css_node)
 
@@ -501,6 +552,10 @@ def create_planning_graph(config: dict) -> StateGraph:
     # The supervisor populates the "next" field in the graph state
     # which routes to a node or finishes
     conditional_map = {k: k for k in members}
+    # above line will crete a dict like:
+    # {"DFT_Agent": "DFT_Agent_node", "HPC_Agent": "HPC_Agent", "OER_Agent": "OER_Agent", ...}
+    
+    
     conditional_map["FINISH"] = END
     conditional_map["Supervisor"] = "Supervisor" 
     graph.add_conditional_edges("Supervisor", whos_next, conditional_map)
