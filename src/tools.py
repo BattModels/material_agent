@@ -449,16 +449,20 @@ def get_terminations_ranking(
     max_miller: Annotated[int, "Maximum miller index to consider for surface generation."] = 1,
 ):
     """
-    Get a ranking of suface terminations for a given candidate. The ranking is based on the reduced
-    coordination of the surface atoms, with respect to the coorsponding bulk coordination. The smaller
-    the diffrence the higher the Normalized ranking, equaling a higher likelihood of being the most 
-    stable termination. Uniqe surfaces will be created up to the maximum miller index specified.
-    This function must be run before any surface relaxation or adsorption calculations are performed, 
-    since this fucntion creates all initial surfaces and the corresponding terminations. Any number
-    of terminations may be studied after the ranking is preformed. One the ranking has been 
-    performed once, it will not be performed again, and the same ranking will be used for any 
-    subsequent calls of this function. Since this function can be called repeatedly, there 
-    is no need to write the result to the canvas.
+    Get a ranking of surface terminations for a given candidate. The ranking is based on the 
+    reduced coordination of the surface atoms with respect to the corresponding bulk coordination. 
+    The smaller the difference, the higher the normalized ranking, indicating a higher likelihood 
+    of being the most stable termination. Unique surfaces will be created up to the maximum Miller 
+    index specified. This function must be run before any surface relaxation or adsorption 
+    calculations are performed, since it creates all initial surfaces and their corresponding 
+    terminations. Any number of terminations may be studied after the ranking is performed. Once 
+    the ranking has been performed, it will not be recalculated, and the same ranking will be used 
+    for any subsequent calls to this function. Since this function can be called repeatedly, there 
+    is no need to write the results to the canvas.
+    It is recommended to call the list_adsorption_sites tool before choosing which surface to 
+    consider further, as this provides initial information about the potential adsorption sites. 
+    This is valuable for selecting the most relevant surfaces and terminations for subsequent 
+    adsorption studies, helping to focus computational efforts on the most promising candidates.
     """
     
     # Args to leve out (for now):
