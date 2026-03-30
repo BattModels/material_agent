@@ -194,6 +194,7 @@ oer_agent_prompt = f"""
                 Please note down your capability on CANVAS after you was asked about it.
                 When you determine that you will have to waite for calculations to finish, please use the wait_for_update tool.
             """
+  # NOTE - last sentence of the above prompt
 
 dft_agent_prompt ="""
             <Role>: 
