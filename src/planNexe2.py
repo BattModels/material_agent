@@ -329,8 +329,7 @@ def supervisor_chain_node(state, agent, name):
         return {
             # NOTE: supervisor completion - create a draft for boss review, not terminate immediately.
             "draft_response": agent_response.action.response,
-            # NOTE empty string for boss feedback - when submitting a fresh draft for review.
-            "boss_feedback": "",
+            # NOTE: keep existing boss feedback so the boss can compare the new draft against the prior review comments.
             "next": "Boss_Agent", 
             "canvas":CANVAS.canvas, 
             "explog_candidates": EXPLOG.relational_frame.candidates.df, 

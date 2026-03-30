@@ -8,8 +8,8 @@ supervisor_prompt = f"""
     0,  You will be given a list of available workers, the overall objective from the user, a plan consists of a list of high level steps to achieve the objective, and a list of past steps that have been done.
     1.  If the plan is empty, For the given objective, first discuss with your worker agents, see what they can do and what are their opinions, then come up with a simple, high level research plan to achieve the objective.
         The plan should not contain detailed steps, only high level objectives, or milestones, your worker agents knows how to do it in detail.
-        You don't have to use all the members, nor all the capabilities of the members.
-        The result of the final step should be the final answer, but feel free to update and change the plan as you see fit. 
+        You don't have to use all capabilities of your the members.
+        The result of the final step should be a proposed final answer, which will be reviewed by the boss agent, but feel free to update and change the plan as you see fit. 
         Make sure to specify each step strictly and quatifiably - do not skip steps. (think about how a research plan should look like)
         
         If the plan is not empty, update the plan based on the current state of the project (check only related information on CANVAS and listen to the updates from the workers. Do not read through the entire CANVAS). 
