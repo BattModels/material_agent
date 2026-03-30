@@ -56,21 +56,21 @@ class Plan(BaseModel):
         # should be in sorted order by the order of execution"""
     )
     
-
+# NOTE:
 class Response(BaseModel):
-    """End everything and response to the user."""
+    """Supervisor's proposed final answer for boss review."""
 
     response: str
+
 
 
 class Act(BaseModel):
     """Action to perform."""
 
     action: Union[Plan, Response] = Field(
-        description="Action to perform. If you need to further use tools to get the answer, use Plan."
-        "If you want to end the conversation, use Response."
-        # "DO NOT use response unless absolutly necessary."
+        description="Use Plan if more work is needed. Use Response when you believe the task is complete and want to submit a proposed final answer for boss review."
     )
+
 
 # NOTE <<<-----
 class BossReview(BaseModel):
