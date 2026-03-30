@@ -297,8 +297,12 @@ def query_explog(
 def read_explog(
     candidate_id: Annotated[str, "MaterialId of the candidate to read the experiment log for."],
     ) -> str:
-    """Read the experiment log for a specific candidate and return all information about the candidate together with all related jobs info, and for each adsorption job.
-    You can see the related site information as well (type, on-top element, closest neighboring elemetns, reduced coordination, G(O), G(H), and ideal overpotential) if the calculation finished."""
+    """
+    Get a summary of the experiment log for a specific candidate, including all related job information and details 
+    with respect to calculated adsorption energies. Details such as the site type, on-top element, closest neighboring 
+    elements, reduced coordination, G(O), G(H), and ideal overpotential, are provided given the necessary calculation 
+    has finished.
+    """
     _ = EXPLOG.update_log() # get the latest updates from the job handler and update the relational frame accordingly
     # save EXPLOG into a pickle file under WORKING_DIRECTORY for record and future reference
     # with open(os.path.join(var.my_WORKING_DIRECTORY, "EXPLOG.pkl"), "wb") as f:
@@ -310,12 +314,28 @@ def read_explog(
     
     answer = f"Candidate information:\n{cadidate_row_df.to_string(index=False)}\n\nRelated processes information:\n{related_process_df.to_string(index=False)}\n"
     # for each row in related_process_df, if the job_type is either O_adsorption or OH_adsorption, add the corresponding site information to the answer by calling the _list_adsorption_sites function
+    
+    # Init set of "seen" pairs of (termination_index, site_index).
+    # Is used to avoid repeating the same site information.
+    seen_pairs = set()
+    
     for index, row in related_process_df.iterrows():
         if row['job_type'] in ['O_adsorption', 'OH_adsorption']:
+
+            # The the indecies identifying the adsorption site:
             termination_index = row['termination_index']
             site_index = row['site_index']
+
+            # If either is Nan - continue:
             if pd.isna(termination_index) or pd.isna(site_index):
                 continue
+
+            # Define the pair of indecies, and continue if it has already been considered before:
+            index_pair = (int(termination_index), int(site_index)) 
+            if index_pair in seen_pairs:
+                continue
+            seen_pairs.add(index_pair) # Add pair to the set of "seen_pairs"
+
             site_info_df = _list_adsorption_sites(candidate_id, termination_index, only_reduced_coord_O_sites=True)
             # extract the row where the "Site index" column is equal to site_index
             site_info_row = site_info_df[site_info_df['Site index'] == site_index]
