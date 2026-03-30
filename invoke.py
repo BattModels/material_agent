@@ -127,7 +127,7 @@ if __name__ == "__main__":
     Available systems can be found in the default dataset. you must use Nsite < 20 and decomposition_energy < 0.5. Please use VASP as the calculator. 
     """
 
-    testMessage = """
+    testMessage2 = """
     Please conduct an acidic OER screening study to identify the best catalytic system for the oxygen evolution reaction 
     (OER) under a limited computational budget.
     You must design a screening strategy for selecting candidate materials and performing relevant DFT calculations to
@@ -143,6 +143,8 @@ if __name__ == "__main__":
     Zero-point energy (ZPE), entropy, and heat capacity (Cp) contributions are assumed to be constant and are taken from
     the literature beforhand, and applied in the backend.
     """
+    
+    testMessage3 = "please ask your worker agent to check the explog repetitivly for 6 times."
 
     config = load_config(os.path.join('./config', "default.yaml"))
     # check_config(config)
@@ -255,7 +257,7 @@ if __name__ == "__main__":
 
         if overwrite:
             inputs = {
-                "inputs": f"{testMessage}",
+                "inputs": f"{testMessage3}",
                 "plan": [],
                 "past_steps": [],
                 "canvas": CANVAS.canvas,
