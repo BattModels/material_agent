@@ -382,8 +382,8 @@ def create_planning_graph(config: dict) -> StateGraph:
         read_energy_from_output,
         get_convergence_suggestions,
         analyze_BEEF_result,
-        get_ase_atoms_property,
-        inspect_ase_atoms,
+        # get_ase_atoms_property,
+        # inspect_ase_atoms,
         ]
     dft_agent = create_agent(
         model=workerllm,

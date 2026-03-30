@@ -14,7 +14,6 @@ teamCapability = """
     - Read output file to get energy
     - Calculate lattice constant
     - Calculate formation energy
-    - Extract information about an ASE atoms object
 <HPC Agent>:
     - find job list from the job list file
     - Add resource suggestion base on the DFT input file
