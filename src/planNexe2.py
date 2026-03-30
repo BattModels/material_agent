@@ -135,6 +135,7 @@ POLLING_TOOLS = {
     "query_explog",
     "inspect_explog",
     "read_explog",
+    "extract_df",
     "OER_data_analasis_v2",
     "read_df",
     "arXiv_search",
@@ -182,17 +183,20 @@ def prevent_redundant_polling(request, handler):
     print(f"has repeated {len(recent_same)} times in the last 60 seconds for the same args and result")
     print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
 
-    if len(recent_same) >= 2 and len(recent_same) < 3:
+    if len(recent_same) >= 2 and len(recent_same) < 4:
+        toolMsg = f"""
+        You have called {tool_name} with the same arguments {args} and got the same result {content} for {len(recent_same)} times in the last 60 seconds.
+        Please do not call {tool_name} again right now. You could:
+            1) Move on to other tasks and come back to this later.
+            2) Call wait_for_update and wait for next dft job to finish if you have nothing else to do
+        """
+        
         return ToolMessage(
-            content=(
-                "Repeated identical status checks detected with no meaningful change. "
-                "Do not call query_explog again right now. "
-                "Use wait_for_update with the same target condition and the current observed state."
-            ),
+            content=(toolMsg),
             tool_call_id=request.tool_call["id"],
         )
         
-    if len(recent_same) >= 3:
+    if len(recent_same) >= 4:
         print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
         print(f"TOOL WITH NAME {tool_name} AND ARGS {args} HAS BEEN CALLED MORE THAN 5 TIMES WITH THE SAME RESULT IN THE LAST 60 SECONDS. PLEASE CHECK IF THERE IS A BUG IN THE MODEL OR THE TOOL IMPLEMENTATION CAUSING THIS ISSUE.")
         print("STUDY HALTED TO PREVENT POTENTIAL DAMAGE. PLEASE FIX THE ISSUE AND RESUME.")
@@ -296,14 +300,11 @@ def boss_node(state, agent, name):
     The overall goal is:
     {state['inputs']}
 
-    The supervisor's draft final answer is:
-    {state['draft_response']}
-
     This is what has been done so far:
     {old_tasks_string}
-
-    Previous boss feedback:
-    {prior_boss_feedback}
+    
+    The supervisor's draft final answer is:
+    {state['draft_response']}
 
     Please review the supervisor's draft final answer and decide whether to approve it or send it back for revision.
     """
@@ -379,25 +380,44 @@ def supervisor_chain_node(state, agent, name):
     # NOTE: include boss review feedback in the supervisor's next turn context. TODO: conider not having the feedback at everay stage!, will be None most of the time - and feedback will only be relevant for a limited time
     # if message is returning from the boss - keep this setting - if from worker remove the feedback part
     # TODO: Make two messages!!! 
+    
+    if state["boss_feedback"].strip() != "":
+        supervisorMessage =  f"""
+        Current time: {currentTime}, time elapsed since the start of the project: {timeElapsed}.
 
-    supervisorMessage =  f"""
-    Current time: {currentTime}, time elapsed since the start of the project: {timeElapsed}.
+        Your available agents are: {members}.
 
-    Your available agents are: {members}.
+        The overall goal is: {state['inputs']}. 
 
-    The overall goal is: {state['inputs']}. 
+        Below is what's left from your previous plan:
+        {plan_str}
 
-    the current plan is:
-    {plan_str}
+        this is what has been done:
+        {old_tasks_string}
 
-    this is what has been done:
-    {old_tasks_string}
+        Your previous draft final answer has been reviewed and rejected by the boss and received the following feedback:
+        {current_boss_feedback}
 
-    Previous boss feedback:
-    {current_boss_feedback}
+        Please update the plan accordingly.
+        """
+    else:
+        supervisorMessage =  f"""
+        Current time: {currentTime}, time elapsed since the start of the project: {timeElapsed}.
 
-    Please update the plan accordingly.
-    """
+        Your available agents are: {members}.
+
+        The overall goal is: {state['inputs']}. 
+
+        the current plan is:
+        {plan_str}
+
+        this is what has been done:
+        {old_tasks_string}
+
+        Please update the plan accordingly.
+        
+        You MUST response back when you are half way through the study!!!
+        """
         
     for agent_response in agent.stream(
         {"messages": [("user", supervisorMessage)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
@@ -637,7 +657,7 @@ def create_planning_graph(config: dict) -> StateGraph:
         get_terminations_ranking,
         list_adsorption_sites,
         read_explog,
-        get_top_k_candidates,
+        # get_top_k_candidates,
         extract_df,
         wait_for_update,
         query_explog,

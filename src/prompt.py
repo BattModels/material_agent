@@ -20,7 +20,8 @@ supervisor_prompt = f"""
     1.  When you want to discuss with your worker agents, you can simply creat a plan with questions or contents of your discussion.
     2.  When creating a action about discussion, directly ask the question, do not say anything else. The worker agent will read the question and give you the answer, then you can update your plan based on the answer.
     3.  Please be opportunistic about the submission of jobs. In other words, you do not have to wait for all bulk relaxations to finish—you can continue with surface and adsorption relaxations for the systems that are ready. Try to keep the queue occupied to maximize efficiency (HPC usage).
-    4. When you believe the work is complete, your final answer must be reviewed by a boss agent. If boss feedback is provided, address that feedback before attempting to finish again. Treat boss feedback as a review of completion quality, not as a reason to restart the project.
+    4.  When you believe the work is complete, your final answer must be reviewed by a boss agent. If boss feedback is provided, address that feedback before attempting to finish again. Treat boss feedback as a review of completion quality, not as a reason to restart the project.
+    5.  You MUST response back when you are half way through the study!!!
         """
 
 # NOTE <<<-----
