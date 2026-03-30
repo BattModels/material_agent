@@ -486,7 +486,7 @@ def create_planning_graph(config: dict) -> StateGraph:
         response_format=ToolStrategy(BossReview),
         middleware=[DisableParallelToolCallsMiddleware(), handle_tool_errors] # NOTE what is this?
     )
-    boss_node = functools.partial(boss_node, agent=boss_agent, name="Boss_Agent")
+    boss_agent_node = functools.partial(boss_node, agent=boss_agent, name="Boss_Agent")
     
     supervisor_tools = [
         inspect_my_canvas,
@@ -611,7 +611,7 @@ def create_planning_graph(config: dict) -> StateGraph:
     # graph.add_node("DFT_Agent", dft_node)
     # graph.add_node("HPC_Agent", hpc_node)
     graph.add_node("OER_Agent", oer_node)
-    graph.add_node("Boss_Agent", boss_node)
+    graph.add_node("Boss_Agent", boss_agent_node)
     # graph.add_node("MD_Agent", md_node)
     # graph.add_node("CSS_Agent", css_node)
 
