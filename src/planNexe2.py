@@ -32,6 +32,8 @@ from src import var
 from src.myCANVAS import CANVAS
 from gnome_dreams_oer_screening.explog.explog import EXPLOG
 
+import json, hashlib, time
+from collections import defaultdict, deque
 import traceback
 
 members = ["OER_Agent"]
@@ -117,6 +119,88 @@ class DisableParallelToolCallsMiddleware(AgentMiddleware):
     async def awrap_model_call(self, request, handler):
         request.model_settings["parallel_tool_calls"] = False
         return await handler(request)
+
+_POLL_HISTORY = defaultdict(lambda: deque(maxlen=10))
+
+def _stable_json(x):
+    try:
+        return json.dumps(x, sort_keys=True, default=str)
+    except Exception:
+        return repr(x)
+
+def _fingerprint(x):
+    return hashlib.sha256(_stable_json(x).encode()).hexdigest()
+
+POLLING_TOOLS = {
+    "query_explog",
+    "inspect_explog",
+    "read_explog",
+    "OER_data_analasis_v2",
+    "read_df",
+    "arXiv_search",
+    "enter_candidate_in_log",
+    "submit_dft_job",
+    }
+
+@wrap_tool_call
+def prevent_redundant_polling(request, handler):
+    # print(request)
+    tool_name = request.tool_call["name"]
+    args = request.tool_call.get("args", {}) or {}
+
+    result = handler(request)
+    
+
+    if tool_name not in POLLING_TOOLS:
+        print(f"Tool {tool_name} is not monitored for redundant polling.")
+        return result
+
+    # normalize tool output
+    content = getattr(result, "content", result)
+    fp = _fingerprint(content)
+    arg_key = _stable_json(args)
+
+    print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+    print(f"Tool called: {tool_name}\nwith args: {args}\n\ngot content: {content}\n\nfingerprint: {fp}\nand arg_key: {arg_key}\n\n")
+    
+    # choose a scope key; thread / agent / task if available
+    scope = (
+        request.runtime.config["configurable"].get("thread_id", "default"),
+        tool_name,
+        arg_key,
+    )
+
+    now = time.time()
+    hist = _POLL_HISTORY[scope]
+    hist.append((now, fp))
+
+    recent_same = [
+        1 for t, old_fp in hist
+        if now - t < 60 and old_fp == fp
+    ]
+    
+    print(f"has repeated {len(recent_same)} times in the last 60 seconds for the same args and result")
+    print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+
+    if len(recent_same) >= 2 and len(recent_same) < 3:
+        return ToolMessage(
+            content=(
+                "Repeated identical status checks detected with no meaningful change. "
+                "Do not call query_explog again right now. "
+                "Use wait_for_update with the same target condition and the current observed state."
+            ),
+            tool_call_id=request.tool_call["id"],
+        )
+        
+    if len(recent_same) >= 3:
+        print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        print(f"TOOL WITH NAME {tool_name} AND ARGS {args} HAS BEEN CALLED MORE THAN 5 TIMES WITH THE SAME RESULT IN THE LAST 60 SECONDS. PLEASE CHECK IF THERE IS A BUG IN THE MODEL OR THE TOOL IMPLEMENTATION CAUSING THIS ISSUE.")
+        print("STUDY HALTED TO PREVENT POTENTIAL DAMAGE. PLEASE FIX THE ISSUE AND RESUME.")
+        print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        # time.sleep(99999)
+        quit()
+
+    return result
 
 @wrap_tool_call
 def handle_tool_errors(request, handler):
@@ -565,7 +649,7 @@ def create_planning_graph(config: dict) -> StateGraph:
         tools=oer_tools,
         system_prompt=oer_agent_prompt,
         response_format=ToolStrategy(wokerResponse),
-        middleware=[DisableParallelToolCallsMiddleware(), handle_tool_errors]
+        middleware=[DisableParallelToolCallsMiddleware(), prevent_redundant_polling, handle_tool_errors]
     )
     oer_node = functools.partial(worker_agent_node, agent=oer_agent, name="OER_Agent")
 
