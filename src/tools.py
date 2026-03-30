@@ -184,7 +184,7 @@ def wait_for_update():
 
 @tool
 def inspect_explog(only_get_updates: Annotated[bool, "Whether to only get updates since last inspection."] = False) -> str:
-    """Inspect the experiment log to get a summary of the candidates and processes."""
+    """Inspect the experiment log to get a high level and short summary of the candidates and processes."""
     _ = EXPLOG.update_log() # get the latest updates from the job handler and update the relational frame accordingly
     # save EXPLOG into a pickle file under WORKING_DIRECTORY for record and future reference
     # with open(os.path.join(var.my_WORKING_DIRECTORY, "EXPLOG.pkl"), "wb") as f:
@@ -237,10 +237,10 @@ def inspect_explog(only_get_updates: Annotated[bool, "Whether to only get update
                 cand_status += 'running'
             elif 'pending' in sub_pdf.status.tolist():
                 cand_status += 'pending'
-            # elif 'submitted' in sub_pdf.status.tolist():
-            #     cand_status += 'submitted'
-            elif 'un-submitted' in sub_pdf.status.tolist():
-                cand_status += 'un-submitted'
+            elif 'unrecoverable' in sub_pdf.status.tolist():
+                cand_status += 'unrecoverable'
+            # elif 'un-submitted' in sub_pdf.status.tolist():
+            #     cand_status += 'un-submitted'
             else:
                 raise ValueError(f'unknown status for {cant_id}, status list: {sub_pdf.status.tolist()}')
             
@@ -297,8 +297,12 @@ def query_explog(
 def read_explog(
     candidate_id: Annotated[str, "MaterialId of the candidate to read the experiment log for."],
     ) -> str:
-    """Read the experiment log for a specific candidate and return all information about the candidate together with all related jobs info, and for each adsorption job.
-    You can see the related site information as well (type, on-top element, closest neighboring elemetns, reduced coordination, G(O), G(H), and ideal overpotential) if the calculation finished."""
+    """
+    Get a summary of the experiment log for a specific candidate, including all related job information and details 
+    with respect to calculated adsorption energies. Details such as the site type, on-top element, closest neighboring 
+    elements, reduced coordination, G(O), G(H), and ideal overpotential, are provided given the necessary calculation 
+    has finished.
+    """
     _ = EXPLOG.update_log() # get the latest updates from the job handler and update the relational frame accordingly
     # save EXPLOG into a pickle file under WORKING_DIRECTORY for record and future reference
     # with open(os.path.join(var.my_WORKING_DIRECTORY, "EXPLOG.pkl"), "wb") as f:
@@ -310,12 +314,28 @@ def read_explog(
     
     answer = f"Candidate information:\n{cadidate_row_df.to_string(index=False)}\n\nRelated processes information:\n{related_process_df.to_string(index=False)}\n"
     # for each row in related_process_df, if the job_type is either O_adsorption or OH_adsorption, add the corresponding site information to the answer by calling the _list_adsorption_sites function
+    
+    # Init set of "seen" pairs of (termination_index, site_index).
+    # Is used to avoid repeating the same site information.
+    seen_pairs = set()
+    
     for index, row in related_process_df.iterrows():
         if row['job_type'] in ['O_adsorption', 'OH_adsorption']:
+
+            # The the indecies identifying the adsorption site:
             termination_index = row['termination_index']
             site_index = row['site_index']
+
+            # If either is Nan - continue:
             if pd.isna(termination_index) or pd.isna(site_index):
                 continue
+
+            # Define the pair of indecies, and continue if it has already been considered before:
+            index_pair = (int(termination_index), int(site_index)) 
+            if index_pair in seen_pairs:
+                continue
+            seen_pairs.add(index_pair) # Add pair to the set of "seen_pairs"
+
             site_info_df = _list_adsorption_sites(candidate_id, termination_index, only_reduced_coord_O_sites=True)
             # extract the row where the "Site index" column is equal to site_index
             site_info_row = site_info_df[site_info_df['Site index'] == site_index]
@@ -449,16 +469,20 @@ def get_terminations_ranking(
     max_miller: Annotated[int, "Maximum miller index to consider for surface generation."] = 1,
 ):
     """
-    Get a ranking of suface terminations for a given candidate. The ranking is based on the reduced
-    coordination of the surface atoms, with respect to the coorsponding bulk coordination. The smaller
-    the diffrence the higher the Normalized ranking, equaling a higher likelihood of being the most 
-    stable termination. Uniqe surfaces will be created up to the maximum miller index specified.
-    This function must be run before any surface relaxation or adsorption calculations are performed, 
-    since this fucntion creates all initial surfaces and the corresponding terminations. Any number
-    of terminations may be studied after the ranking is preformed. One the ranking has been 
-    performed once, it will not be performed again, and the same ranking will be used for any 
-    subsequent calls of this function. Since this function can be called repeatedly, there 
-    is no need to write the result to the canvas.
+    Get a ranking of surface terminations for a given candidate. The ranking is based on the 
+    reduced coordination of the surface atoms with respect to the corresponding bulk coordination. 
+    The smaller the difference, the higher the normalized ranking, indicating a higher likelihood 
+    of being the most stable termination. Unique surfaces will be created up to the maximum Miller 
+    index specified. This function must be run before any surface relaxation or adsorption 
+    calculations are performed, since it creates all initial surfaces and their corresponding 
+    terminations. Any number of terminations may be studied after the ranking is performed. Once 
+    the ranking has been performed, it will not be recalculated, and the same ranking will be used 
+    for any subsequent calls to this function. Since this function can be called repeatedly, there 
+    is no need to write the results to the canvas.
+    It is recommended to call the 'list_adsorption_sites' tool before choosing which surface to 
+    consider further, as this provides initial information about the potential adsorption sites. 
+    This is valuable for selecting the most relevant surfaces and terminations for subsequent 
+    adsorption studies, helping to focus computational efforts on the most promising candidates.
     """
     
     # Args to leve out (for now):
