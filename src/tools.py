@@ -184,7 +184,7 @@ def wait_for_update():
 
 @tool
 def inspect_explog(only_get_updates: Annotated[bool, "Whether to only get updates since last inspection."] = False) -> str:
-    """Inspect the experiment log to get a summary of the candidates and processes."""
+    """Inspect the experiment log to get a high level and short summary of the candidates and processes."""
     _ = EXPLOG.update_log() # get the latest updates from the job handler and update the relational frame accordingly
     # save EXPLOG into a pickle file under WORKING_DIRECTORY for record and future reference
     # with open(os.path.join(var.my_WORKING_DIRECTORY, "EXPLOG.pkl"), "wb") as f:
@@ -237,10 +237,10 @@ def inspect_explog(only_get_updates: Annotated[bool, "Whether to only get update
                 cand_status += 'running'
             elif 'pending' in sub_pdf.status.tolist():
                 cand_status += 'pending'
-            # elif 'submitted' in sub_pdf.status.tolist():
-            #     cand_status += 'submitted'
-            elif 'un-submitted' in sub_pdf.status.tolist():
-                cand_status += 'un-submitted'
+            elif 'unrecoverable' in sub_pdf.status.tolist():
+                cand_status += 'unrecoverable'
+            # elif 'un-submitted' in sub_pdf.status.tolist():
+            #     cand_status += 'un-submitted'
             else:
                 raise ValueError(f'unknown status for {cant_id}, status list: {sub_pdf.status.tolist()}')
             
