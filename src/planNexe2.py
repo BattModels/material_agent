@@ -252,7 +252,6 @@ def boss_node(state, agent, name):
             "explog_processes": EXPLOG.relational_frame.processes.df,
         }
     else:
-        # NOTE NOTE NOTE: fail loudly if the boss returns an unexpected decision value, so invalid control flow is visible during development.
         raise ValueError(f"Unexpected boss decision: {agent_response.decision}")
 ### ------------------------------------------------------------------- 
             
@@ -293,7 +292,10 @@ def supervisor_chain_node(state, agent, name):
     if current_boss_feedback == "":
         current_boss_feedback = "None"
     
-    # NOTE: include boss review feedback in the supervisor's next turn context.
+    # NOTE: include boss review feedback in the supervisor's next turn context. TODO: conider not having the feedback at everay stage!, will be None most of the time - and feedback will only be relevant for a limited time
+    # if message is returning from the boss - keep this setting - if from worker remove the feedback part
+    # TODO: Make two messages!!! 
+
     supervisorMessage =  f"""
     Current time: {currentTime}, time elapsed since the start of the project: {timeElapsed}.
 
@@ -426,7 +428,6 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
     }
     
 def whos_next(state):
-    # NOTE: Route nodes purely from the shared state's `next` field.
     return state["next"]
     
 def create_planning_graph(config: dict) -> StateGraph:
