@@ -27,7 +27,7 @@ from langgraph.prebuilt import ToolNode, create_react_agent
 from pydantic import BaseModel, Field
 
 from src.tools import *
-from src.prompt import dft_agent_prompt,hpc_agent_prompt,supervisor_prompt, oer_agent_prompt
+from src.prompt import dft_agent_prompt,hpc_agent_prompt,supervisor_prompt, oer_agent_prompt, boss_prompt
 from src import var
 from src.myCANVAS import CANVAS
 from gnome_dreams_oer_screening.explog.explog import EXPLOG
@@ -71,6 +71,18 @@ class Act(BaseModel):
         "If you want to end the conversation, use Response."
         # "DO NOT use response unless absolutly necessary."
     )
+
+# NOTE <<<-----
+class BossReview(BaseModel):
+    """Structured response from the boss review gate."""
+
+    decision: Literal["approve", "revise"] = Field(
+        description="Review decision. Use 'approve' if the supervisor draft can be returned to the user, otherwise use 'revise'."
+    )
+
+    feedback: str = Field(
+        description="Concrete review feedback. Leave this empty if the decision is 'approve'. If the decision is 'revise', explain exactly what is missing, unclear, or contradictory."
+    )
     
 class wokerResponse(BaseModel):
     """Response from the worker agent."""
@@ -87,6 +99,8 @@ class PlanExecute(TypedDict):
     inputs: str
     plan: List[myStep]
     past_steps: List[myStep]
+    draft_response: str # NOTE: separate the supervisor's proposed final answer from the boss-approved final answer.
+    boss_feedback: str # NOTE:  store boss review feedback when the draft answer is rejected.
     response: str
     canvas: Dict
     explog_candidates: pd.DataFrame
@@ -158,13 +172,16 @@ def print_stream(s):
     if var.my_SAVE_DIALOGUE:
         with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
             f.write("\n")
-            
-def boss_node(state, agent):
+
+
+
+### ------------------------------------------------------------------- NOTE
+def boss_node(state, agent, name):
     # read "status.txt" in the working directory
     with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
         status = f.read()
     while status == "stop":
-        print(f"Calculation pause, supervisor is waiting. cwd: {var.my_WORKING_DIRECTORY}")
+        print(f"Calculation pause, {name} is waiting. cwd: {var.my_WORKING_DIRECTORY}")
         # wait for 5 second
         time.sleep(5)
         with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
@@ -173,10 +190,10 @@ def boss_node(state, agent):
     # Time thing. may or may not need this for the boss 
     currentTime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     timeElapsed = timedelta(seconds= time.time() - var.startTime)
-    print(f"supervisor is processing!!!!! Current time: {currentTime}, time elapsed since the start of the project: {timeElapsed}.")
+    print(f"{name} is processing!!!!! Current time: {currentTime}, time elapsed since the start of the project: {timeElapsed}.")
     if var.my_SAVE_DIALOGUE:
         with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-            f.write(f"supervisor is processing!!!!! Current time: {currentTime}, time elapsed since the start of the project: {timeElapsed}.\n")
+            f.write(f"{name} is processing!!!!! Current time: {currentTime}, time elapsed since the start of the project: {timeElapsed}.\n")
     # can't print state anymore because it now contains canvas and explog, and printing them will cause too much output
     # print(state)
     if var.my_SAVE_DIALOGUE:
@@ -184,17 +201,60 @@ def boss_node(state, agent):
             f.write(str(state))
             f.write("\n")
             
-    response = state["response"]
-    
-    task_string = f"please judge if this {response} can achieve the goal {state['inputs']}. If it can achieve the goal, then answer 'yes', if it can't achieve the goal, then answer 'no'."
-    pass
+    old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step}" for i, step in enumerate(state["past_steps"]))
+    prior_boss_feedback = state["boss_feedback"].strip()
+    if prior_boss_feedback == "":
+        prior_boss_feedback = "None"
+
+    bossMessage = f"""
+    Current time: {currentTime}, time elapsed since the start of the project: {timeElapsed}.
+
+    The overall goal is:
+    {state['inputs']}
+
+    The supervisor's draft final answer is:
+    {state['draft_response']}
+
+    This is what has been done so far:
+    {old_tasks_string}
+
+    Previous boss feedback:
+    {prior_boss_feedback}
+
+    Please review the supervisor's draft final answer and decide whether to approve it or send it back for revision.
+    """
 
     for agent_response in agent.stream(
-        {"messages": [("user", task_string)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
+        {"messages": [("user", bossMessage)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
     ):
         # set agent_response to be the value of the first key of the dictionary
         agent_response = next(iter(agent_response.values()))
         print_stream(agent_response)
+
+    agent_response = agent_response['structured_response']
+
+    if agent_response.decision == "approve":
+        return {
+            "response": state["draft_response"],
+            "boss_feedback": "",
+            "next": "FINISH",
+            "canvas": CANVAS.canvas,
+            "explog_candidates": EXPLOG.relational_frame.candidates.df,
+            "explog_processes": EXPLOG.relational_frame.processes.df,
+        }
+    elif agent_response.decision == "revise":
+        return {
+            # Boss rejection stores concrete review feedback and hands control back to the supervisor.
+            "boss_feedback": agent_response.feedback,
+            "next": "Supervisor",
+            "canvas": CANVAS.canvas,
+            "explog_candidates": EXPLOG.relational_frame.candidates.df,
+            "explog_processes": EXPLOG.relational_frame.processes.df,
+        }
+    else:
+        # NOTE NOTE NOTE: fail loudly if the boss returns an unexpected decision value, so invalid control flow is visible during development.
+        raise ValueError(f"Unexpected boss decision: {agent_response.decision}")
+### ------------------------------------------------------------------- 
             
 def supervisor_chain_node(state, agent, name):
     
@@ -228,22 +288,29 @@ def supervisor_chain_node(state, agent, name):
     # task_formatted = f"""For the following plan:
     # {plan_str}\n\nYou are tasked with executing step {1}, {task}."""
     old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step}" for i, step in enumerate(state["past_steps"]))
+
+    current_boss_feedback = state["boss_feedback"].strip() # Remove leading/trailing whitespaces
+    if current_boss_feedback == "":
+        current_boss_feedback = "None"
     
-    
+    # NOTE: include boss review feedback in the supervisor's next turn context.
     supervisorMessage =  f"""
-Current time: {currentTime}, time elapsed since the start of the project: {timeElapsed}.
+    Current time: {currentTime}, time elapsed since the start of the project: {timeElapsed}.
 
-Your available agents are: {members}.
+    Your available agents are: {members}.
 
-The overall goal is: {state['inputs']}. 
+    The overall goal is: {state['inputs']}. 
 
-the current plan is:
-{plan_str}
+    the current plan is:
+    {plan_str}
 
-this is what has been done:
-{old_tasks_string}
+    this is what has been done:
+    {old_tasks_string}
 
-Please update the plan accordingly.
+    Previous boss feedback:
+    {current_boss_feedback}
+
+    Please update the plan accordingly.
     """
         
     for agent_response in agent.stream(
@@ -260,8 +327,11 @@ Please update the plan accordingly.
     agent_response = agent_response['structured_response']
     if isinstance(agent_response.action, Response):
         return {
-            "response": agent_response.action.response, 
-            "next": "FINISH", 
+            # NOTE: supervisor completion - create a draft for boss review, not terminate immediately.
+            "draft_response": agent_response.action.response,
+            # NOTE empty string for boss feedback - when submitting a fresh draft for review.
+            "boss_feedback": "",
+            "next": "Boss_Agent", 
             "canvas":CANVAS.canvas, 
             "explog_candidates": EXPLOG.relational_frame.candidates.df, 
             "explog_processes": EXPLOG.relational_frame.processes.df,
@@ -357,10 +427,8 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
     }
     
 def whos_next(state):
-    # if supervisor returned with Plan then:
-        return state["next"] # => "DFT_Agent"
-    # else if supervisor returned with Response then:
-        return "Boss_Agent"
+    # NOTE: Route nodes purely from the shared state's `next` field.
+    return state["next"]
     
 def create_planning_graph(config: dict) -> StateGraph:
     # create a file named status.txt in the working directory
@@ -407,13 +475,16 @@ def create_planning_graph(config: dict) -> StateGraph:
     PAST_STEPS = []
     myCANVAS = {}
     
+
+
     boss_tools = []
     boss_agent = create_agent(
-        model=llm,
+        model=llm, # <-- Same as supervisor
         tools=boss_tools,
-        system_prompt="",
-        # response_format=ToolStrategy(Act),  # Or ProviderStrategy for native models
-        middleware=[DisableParallelToolCallsMiddleware(), handle_tool_errors]
+        system_prompt=boss_prompt,
+        # NOTE: boss agent sends BossReview structured output.
+        response_format=ToolStrategy(BossReview),
+        middleware=[DisableParallelToolCallsMiddleware(), handle_tool_errors] # NOTE what is this?
     )
     boss_node = functools.partial(boss_node, agent=boss_agent, name="Boss_Agent")
     
@@ -555,10 +626,18 @@ def create_planning_graph(config: dict) -> StateGraph:
     # above line will crete a dict like:
     # {"DFT_Agent": "DFT_Agent_node", "HPC_Agent": "HPC_Agent", "OER_Agent": "OER_Agent", ...}
     
-    
+    # NOTE: BOSS added to conditioanl map:
+    conditional_map["Boss_Agent"] = "Boss_Agent"
     conditional_map["FINISH"] = END
     conditional_map["Supervisor"] = "Supervisor" 
     graph.add_conditional_edges("Supervisor", whos_next, conditional_map)
+
+    # NOTE: - boss can either end the workflow or hand control back to the supervisor.
+    boss_conditional_map = {
+        "FINISH": END,
+        "Supervisor": "Supervisor",
+    }
+    graph.add_conditional_edges("Boss_Agent", whos_next, boss_conditional_map)
     graph.add_edge(START, "Supervisor") 
     # checkpointer = InMemorySaver()
     # return graph.compile(checkpointer=checkpointer)

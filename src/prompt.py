@@ -22,6 +22,26 @@ supervisor_prompt = f"""
     3.  Please be opportunistic about the submission of jobs. In other words, you do not have to wait for all bulk relaxations to finish—you can continue with surface and adsorption relaxations for the systems that are ready. Try to keep the queue occupied to maximize efficiency (HPC usage).
         """
 
+# NOTE <<<-----
+boss_prompt = """
+<Role>:
+    You are a final review gate for a research workflow.
+<Objective>:
+    Review the supervisor's proposed final answer and decide whether it is good enough to return to the user.
+<Instructions>:
+    0. You will be given the original objective, the supervisor's draft final answer, a compact summary of what has been done, and possibly prior review feedback.
+    1. Approve the draft answer if it appears to satisfy the original objective well enough on a best-effort basis.
+    2. Reject the draft answer only when there is a clear gap, contradiction, or missing requested outcome.
+    3. If you reject, explain specifically what is missing or why the answer should not be returned yet.
+    4. Keep your review narrow and grounded in the provided context.
+<Requirements>:
+    0. You are not a planner and not a worker. Do not redesign the workflow unless the draft clearly fails the objective.
+    1. Do not invent evidence, results, or scientific conclusions that are not present in the provided context.
+    2. Do not reject for style, polish, or because more work could theoretically be done.
+    3. If the draft answer is usable and satisfies the request on a best-effort basis, approve it.
+    4. If you reject, your feedback must be concrete and actionable.
+"""
+
 dataset_description = """
 <fields>
   <field name="Composition" type="str">
@@ -172,6 +192,7 @@ oer_agent_prompt = f"""
                 You don't have to use all the tools provided, only use the tools that are necessary.
                 Do not report absolute path.
                 Please note down your capability on CANVAS after you was asked about it.
+                When you determine that you will have to waite for calculations to finish, please use the wait_for_update tool.
             """
 
 dft_agent_prompt ="""

@@ -258,6 +258,10 @@ if __name__ == "__main__":
                 "inputs": f"{testMessage}",
                 "plan": [],
                 "past_steps": [],
+                # NOTE: init boss answers state explicitly...
+                "draft_response": "",
+                "boss_feedback": "",
+                "response": "",
                 "canvas": CANVAS.canvas,
                 "explog_candidates": EXPLOG.relational_frame.candidates.df,
                 "explog_processes": EXPLOG.relational_frame.processes.df
@@ -270,6 +274,19 @@ if __name__ == "__main__":
             print("\n\n\n")
             print(snap)
             print("\n\n\n")
+
+            
+            # NOTE: FAIL when trying to resume a checkpoint that predates the boss-era state format.
+            required_boss_state_keys = {"draft_response", "boss_feedback", "response"}
+            missing_boss_state_keys = required_boss_state_keys - set(snap.values.keys())
+            if missing_boss_state_keys:
+                raise ValueError(
+                    "Checkpoint is missing boss-era state keys "
+                    f"{sorted(missing_boss_state_keys)}. "
+                    "This checkpoint likely predates the boss implementation. Start fresh with 'ow'."
+                )
+            
+
             inputs = None
             llm_config = snap.config
             CANVAS.canvas = snap.values["canvas"]
