@@ -459,7 +459,7 @@ def get_terminations_ranking(
     the ranking has been performed, it will not be recalculated, and the same ranking will be used 
     for any subsequent calls to this function. Since this function can be called repeatedly, there 
     is no need to write the results to the canvas.
-    It is recommended to call the list_adsorption_sites tool before choosing which surface to 
+    It is recommended to call the 'list_adsorption_sites' tool before choosing which surface to 
     consider further, as this provides initial information about the potential adsorption sites. 
     This is valuable for selecting the most relevant surfaces and terminations for subsequent 
     adsorption studies, helping to focus computational efforts on the most promising candidates.
