@@ -58,7 +58,6 @@ class Plan(BaseModel):
         # should be in sorted order by the order of execution"""
     )
     
-# NOTE:
 class Response(BaseModel):
     """Supervisor's proposed final answer for boss review."""
 
@@ -73,8 +72,6 @@ class Act(BaseModel):
         description="Use Plan if more work is needed. Use Response when you believe the task is complete and want to submit a proposed final answer for boss review."
     )
 
-
-# NOTE <<<-----
 class BossReview(BaseModel):
     """Structured response from the boss review gate."""
 
@@ -101,8 +98,8 @@ class PlanExecute(TypedDict):
     inputs: str
     plan: List[myStep]
     past_steps: List[myStep]
-    draft_response: str # NOTE: separate the supervisor's proposed final answer from the boss-approved final answer.
-    boss_feedback: str # NOTE:  store boss review feedback when the draft answer is rejected.
+    draft_response: str
+    boss_feedback: str
     response: str
     canvas: Dict
     explog_candidates: pd.DataFrame
@@ -262,8 +259,6 @@ def print_stream(s):
             f.write("\n")
 
 
-
-### ------------------------------------------------------------------- NOTE
 def boss_node(state, agent, name):
     # read "status.txt" in the working directory
     with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
@@ -290,10 +285,6 @@ def boss_node(state, agent, name):
             f.write("\n")
             
     old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step}" for i, step in enumerate(state["past_steps"]))
-    prior_boss_feedback = state["boss_feedback"].strip()
-    if prior_boss_feedback == "":
-        prior_boss_feedback = "None"
-
     bossMessage = f"""
     Current time: {currentTime}, time elapsed since the start of the project: {timeElapsed}.
 
@@ -338,7 +329,6 @@ def boss_node(state, agent, name):
         }
     else:
         raise ValueError(f"Unexpected boss decision: {agent_response.decision}")
-### ------------------------------------------------------------------- 
             
 def supervisor_chain_node(state, agent, name):
     
@@ -376,10 +366,6 @@ def supervisor_chain_node(state, agent, name):
     current_boss_feedback = state["boss_feedback"].strip() # Remove leading/trailing whitespaces
     if current_boss_feedback == "":
         current_boss_feedback = "None"
-    
-    # NOTE: include boss review feedback in the supervisor's next turn context. TODO: conider not having the feedback at everay stage!, will be None most of the time - and feedback will only be relevant for a limited time
-    # if message is returning from the boss - keep this setting - if from worker remove the feedback part
-    # TODO: Make two messages!!! 
     
     if state["boss_feedback"].strip() != "":
         supervisorMessage =  f"""
@@ -433,9 +419,7 @@ def supervisor_chain_node(state, agent, name):
     agent_response = agent_response['structured_response']
     if isinstance(agent_response.action, Response):
         return {
-            # NOTE: supervisor completion - create a draft for boss review, not terminate immediately.
             "draft_response": agent_response.action.response,
-            # NOTE: keep existing boss feedback so the boss can compare the new draft against the prior review comments.
             "next": "Boss_Agent", 
             "canvas":CANVAS.canvas, 
             "explog_candidates": EXPLOG.relational_frame.candidates.df, 
@@ -586,9 +570,8 @@ def create_planning_graph(config: dict) -> StateGraph:
         model=llm, # <-- Same as supervisor
         tools=boss_tools,
         system_prompt=boss_prompt,
-        # NOTE: boss agent sends BossReview structured output.
         response_format=ToolStrategy(BossReview),
-        middleware=[DisableParallelToolCallsMiddleware(), handle_tool_errors] # NOTE what is this?
+        middleware=[DisableParallelToolCallsMiddleware(), handle_tool_errors]
     )
     boss_agent_node = functools.partial(boss_node, agent=boss_agent, name="Boss_Agent")
     
@@ -730,13 +713,11 @@ def create_planning_graph(config: dict) -> StateGraph:
     # above line will crete a dict like:
     # {"DFT_Agent": "DFT_Agent_node", "HPC_Agent": "HPC_Agent", "OER_Agent": "OER_Agent", ...}
     
-    # NOTE: BOSS added to conditioanl map:
     conditional_map["Boss_Agent"] = "Boss_Agent"
     conditional_map["FINISH"] = END
     conditional_map["Supervisor"] = "Supervisor" 
     graph.add_conditional_edges("Supervisor", whos_next, conditional_map)
 
-    # NOTE: - boss can either end the workflow or hand control back to the supervisor.
     boss_conditional_map = {
         "FINISH": END,
         "Supervisor": "Supervisor",
