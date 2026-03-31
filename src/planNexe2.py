@@ -401,8 +401,6 @@ def supervisor_chain_node(state, agent, name):
         {old_tasks_string}
 
         Please update the plan accordingly.
-        
-        You MUST response back when you are half way through the study!!!
         """
         
     for agent_response in agent.stream(
