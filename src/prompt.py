@@ -195,8 +195,113 @@ oer_agent_prompt = f"""
                 Do not report absolute path.
                 Please note down your capability on CANVAS after you was asked about it.
                 When you determine that you will have to waite for calculations to finish, please use the wait_for_update tool.
+
+
+              Available systems are provided in the default dataset. The backend DFT calculator employs a PBE+U level of theory, with U parameters taken from the Materials Project computational framework.
+
+The overall reaction
+
+2
+𝐻
+2
+𝑂
+→
+2
+𝐻
+2
++
+𝑂
+2
+2H
+2
+	​
+
+O→2H
+2
+	​
+
++O
+2
+	​
+
+
+is assumed to have an energy cost of 4.92 eV. This corresponds to ideal adsorption energies of:
+
+𝐺
+(
+O
+H
+)
+=
+1.23
+G(OH)=1.23 eV
+𝐺
+(
+O
+)
+=
+2.46
+G(O)=2.46 eV
+𝐺
+(
+O
+O
+H
+)
+=
+3.69
+G(OOH)=3.69 eV
+
+The ideal overpotential is calculated once 
+𝐺
+(
+O
+)
+G(O) and 
+𝐺
+(
+O
+H
+)
+G(OH) have been obtained via DFT. This assumes that the missing 
+𝐺
+(
+O
+O
+H
+)
+G(OOH) value minimizes the overpotential.
+
+In addition, an overpotential based on the scaling relation
+
+𝐺
+(
+O
+O
+H
+)
+=
+𝐺
+(
+O
+H
+)
++
+3.2
+G(OOH)=G(OH)+3.2
+is also calculated.
+
+Zero-point energy (ZPE), entropy, and heat capacity (
+𝐶
+𝑝
+C
+p
+	​
+
+) contributions are assumed to be constant. These corrections are taken from the literature beforehand and are applied automatically in the backend.
+
+
             """
-  # NOTE - last sentence of the above prompt
 
 dft_agent_prompt ="""
             <Role>: 

@@ -146,6 +146,33 @@ if __name__ == "__main__":
     
     testMessage3 = "please ask your worker agent to check the explog repetitivly for 6 times."
 
+    revised_message = """
+    Please conduct an acidic OER screening study to identify the best catalytic candidate for the oxygen evolution 
+    reaction (OER) in the Google DeepMind GNoME database under a limited computational budget. Consider both catalytic 
+    activity and cost/availability of candidates.
+
+    Design a screening strategy to select candidate materials and perform relevant DFT calculations 
+    and analysis using the available tools.
+
+    You must:
+    Perform multiple rounds of screening.
+    Learn from each round and apply insights to new candidates, surfaces/terminations, or active sites.
+
+    In your conclusion, state:
+    What you learned.
+    What worked and what did not.
+    Which hypotheses were confirmed or rejected, and why.
+    Provide a comparison of the best candidates with available literature.
+
+    Leverage available data from the provided tools, including:
+    AQ-GNoME: aqueous stability data and HHI metrics (supply availability).
+    The ideal overpotential, which assumes the ideal adsorption energy of OOH given the calculated energies of O and 
+    OH, and the overpotential from scaling relations calculated assuming G(OOH)=G(OH)+3.2.
+
+    You have a maximum of 4 hours to complete the entire study.
+    """
+
+
     config = load_config(os.path.join('./config', "default.yaml"))
     # check_config(config)
 
@@ -257,7 +284,7 @@ if __name__ == "__main__":
 
         if overwrite:
             inputs = {
-                "inputs": f"{testMessage3}",
+                "inputs": f"{revised_message}",
                 "plan": [],
                 "past_steps": [],
                 # NOTE: init boss answers state explicitly...
