@@ -425,7 +425,7 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
     func = eval(f"ase.build.{crystal_structures}{facets}")
     tmpAtom = func(species, size=(1,1,1), a = a_dict[species])
     for site in mySites.keys():
-        mySites[site] = np.sum(tmpAtom.cell*[mySites[site][0], mySites[site][1], 0], axis=0)[:2]
+        mySites[site] = (np.asarray(mySites[site]) @ tmpAtom.cell.array[:2])[:2]
     
     output_capture = io.StringIO()
     with contextlib.redirect_stdout(output_capture):
