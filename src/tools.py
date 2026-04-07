@@ -50,7 +50,7 @@ from src import var
 def inspect_my_canvas():
     """Inspect the working canvas to get available keys"""
     # get all keys in myCANVAS and return them as a list [key1, key2, ...]
-    print(CANVAS)
+    # print(CANVAS)
     return CANVAS.inspect()
 
 @tool
@@ -59,14 +59,146 @@ def read_my_canvas(key: Annotated[str, "key"]):
     # read a value from myCANVAS given a key
     return CANVAS.read(key)
 
+# TODO: need more work
 @tool
 def write_my_canvas(key: Annotated[str, "key"],
                     value: Annotated[Any, "value"],
-                    overwrite: Annotated[bool, "True to overwrite if key already exist. only set to True if you are certain you want to overwrite the existing value"] = False):
+                    overwrite: Annotated[bool, "True to overwrite if key already exist. only set to True if you are certain you want to overwrite the existing value"] = False,
+                    source_result_id: Annotated[Optional[str], "the result_id of the tool output that this numerical canvas entry is based on. If provided, it will be recorded as verified "] = None
+                    ):
     """Write a value to the working canvas. If the key already exists, it will not overwrite unless specified."""
     # write a value to myCANVAS given a key and a value
-    return CANVAS.write(key, value, overwrite)
+    return CANVAS.write(
+        key=key,
+        value=value,
+        entry_type="note",
+        overwrite=overwrite,
+        )
+    
+@tool
+def register_parameter_choice_by_LLM_agent(
+    value: Annotated[float, "The value of the parameter chosen by the LLM agent. It should be a numeric value that can be used for calculations."],
+    reason: Annotated[str, "A brief reason of why a certain parameter was chosen to be this value. You must clarify the unit of the value."]
+):
+    """Register the choice of a specific parameter by the LLM agent, along with the reason for the choice with unit clarified. """
 
+    
+    result_id = CANVAS.register_tool_output(
+        tool_name="register_parameter_choice_by_LLM_agent",
+        value=value,
+        numerical_result=True,
+        parent_result_ids=[],
+        metadata={
+            "reason": reason,
+        },
+    )
+    
+    return f"value: {value} is registered with result_id: {result_id}."
+    
+    
+
+@tool
+def extract_numeric_from_tool_output(
+    source_tool_call_id: Annotated[str, "The tool_call_id of the previously executed text-returning tool whose output you want to extract the numeric value from."],
+    value: Annotated[float, "The numeric value you want to verify and extract from the tool output."],
+    evidence_snippet: Annotated[str, "An substring from the tool output that contains the number. To avoid ambiguate when the same number may appear multiple times." ],
+    description: Annotated[str, "A brief description of what this number represents. You must clarify the unit of the number in this description, e.g. 'the adsorption energy in eV', 'the length of the cell in Angstrom', etc."],
+):
+    """
+    Verify that a numeric value was explicitly present in the raw output of a prior tool call,
+    then register it as a trusted numeric artifact and return a result_id.
+
+    Args:
+        source_tool_call_id: The tool_call_id of the previously executed text-returning tool.
+        value: The numeric value the agent wants to extract.
+        evidence_snippet: An substring from the tool output that contains the number. 
+                          To avoid ambiguate when the same number may appear multiple times.
+        description: A brief description of what this number represents. You must clarify the unit of the number in this description. 
+                     e.g. 'the adsorption energy in eV', 'the length of the cell in Angstrom', etc.
+
+    Returns:
+        str: A message indicating the result of the extraction and verification process.
+    """
+    abs_tol = 1e-8,
+    record = CANVAS.get_other_artifact(source_tool_call_id)
+    if record is None:
+        return (
+            f"EXTRACTION_FAILED: source_tool_call_id='{source_tool_call_id}' "
+            "was not found in the tool output registry. Please check the canvas and try again"
+        )
+        
+    raw_text = record.raw_output
+
+    # Search space
+    snippet_spans = util_find_all_substring_spans(raw_text, evidence_snippet)
+    if not snippet_spans:
+        return (
+            "EXTRACTION_FAILED: evidence_snippet was not found in the recorded tool output. "
+            f"tool_call_id='{source_tool_call_id}'"
+        )
+
+    candidate_matches = []
+    for s0, s1 in snippet_spans:
+        candidate_matches.extend(
+            util_numeric_matches_in_region(
+                text=raw_text,
+                region_start=s0,
+                region_end=s1,
+                target_value=float(value),
+                abs_tol=abs_tol,
+            )
+        )
+
+
+    if not candidate_matches:
+        return (
+            "EXTRACTION_FAILED: The claimed numeric value was not found in the recorded tool output "
+            f"for tool_call_id='{source_tool_call_id}'."
+        )
+
+    # Disambiguation
+    # if occurrence_index is not None:
+    #     if occurrence_index < 0 or occurrence_index >= len(candidate_matches):
+    #         return (
+    #             "EXTRACTION_FAILED: occurrence_index is out of range. "
+    #             f"Found {len(candidate_matches)} matching occurrence(s), got occurrence_index={occurrence_index}."
+    #         )
+    #     chosen = candidate_matches[occurrence_index]
+    # else:
+    if len(candidate_matches) > 1:
+        preview = [
+            {
+                "token": m["token"],
+                "char_span": [m["start"], m["end"]],
+            }
+            for m in candidate_matches[:10]
+        ]
+        return (
+            "EXTRACTION_FAILED: Multiple matching numeric occurrences were found. "
+            "Please refine your evidence_snippet disambiguate."
+            f"Candidates: {preview}"
+        )
+    chosen = candidate_matches[0]
+
+    matched_text = raw_text[chosen["start"]:chosen["end"]]
+
+    result_id = CANVAS.register_tool_output(
+        tool_name="extract_numeric_from_tool_output",
+        value=float(value),
+        numerical_result=True,
+        parent_result_ids=[],
+        metadata={
+            "source_tool_call_id": source_tool_call_id,
+            "source_tool_name": record.tool_name,
+            "source_tool_args": record.args,
+            "matched_text": matched_text,
+            "char_span": [chosen["start"], chosen["end"]],
+            "evidence_snippet": evidence_snippet,
+            "description": description,
+        },
+    )
+
+    return f"value: {value} is now registered with id {result_id} and can be used for further calculations."
 ##################################################################################################
 ##                                          DFT tools                                           ##
 ##################################################################################################
@@ -679,7 +811,7 @@ def write_QE_script_w_ASE(
         destiJobList = 'ready_to_run_job_list'
     
     job_list = [filename]
-    old_job_list = CANVAS.canvas.get(destiJobList, []).copy()
+    old_job_list = CANVAS.get(destiJobList, []).copy()
     job_list = list(set(old_job_list + job_list))
     CANVAS.write(destiJobList,job_list, overwrite=True)
     
@@ -712,7 +844,7 @@ def write_LAMMPS_script(
     
     job_list.append(file_name)
     
-    old_job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
+    old_job_list = CANVAS.get('ready_to_run_job_list', []).copy()
     job_list = list(set(old_job_list + job_list))
     CANVAS.write('ready_to_run_job_list',job_list, overwrite=True)
         
@@ -774,7 +906,7 @@ def generate_convergence_test(input_file_name: Annotated[str, "Name of the templ
     cell = atom.cell
     ecutwfc_max = max(ecutwfc)
     kspacing_min = min(kspacing)
-    job_list_dict = CANVAS.canvas.get('jobs_K_and_ecut', {})
+    job_list_dict = CANVAS.get('jobs_K_and_ecut', {})
     job_list = []
     # Generate the input script for highest ecutwfc different kspacing
     for k in kspacing:
@@ -855,7 +987,7 @@ def generate_convergence_test(input_file_name: Annotated[str, "Name of the templ
     ## Remove duplicate files
     job_list = list(set(job_list))
     ## Save the job list
-    old_job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
+    old_job_list = CANVAS.get('ready_to_run_job_list', []).copy()
     job_list = list(set(old_job_list + job_list))
     CANVAS.write('ready_to_run_job_list',job_list, overwrite=True)
     CANVAS.write('jobs_K_and_ecut',job_list_dict)
@@ -875,7 +1007,7 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int, stepSize:
     assert stepSize > 0.01 and stepSize < 0.1, "stepSize should be between 0.01 and 0.1"
     
     # CANVAS.write('job_list', [], overwrite=True)
-    CANVAS.canvas['jobs_K_and_ecut'] = {}
+    CANVAS['jobs_K_and_ecut'] = {}
     
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     input_file = os.path.join(WORKING_DIRECTORY, input_file_name)
@@ -934,7 +1066,7 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int, stepSize:
     job_list = list(set(job_list))
     print(job_list)
     ## Save the job list as json file
-    old_job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
+    old_job_list = CANVAS.get('ready_to_run_job_list', []).copy()
     job_list = list(set(old_job_list + job_list))
     CANVAS.write('ready_to_run_job_list',job_list, overwrite=True)
     
@@ -1124,7 +1256,7 @@ def calculate_lc(jobFileIdx: Annotated[List[int], "indexs of files in the finish
         assert isinstance(i, int), "jobFileIdx should be a list of index of files of interest"
     
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
-    job_list = CANVAS.canvas.get('finished_job_list', []).copy()
+    job_list = CANVAS.get('finished_job_list', []).copy()
     job_list = np.array(job_list, dtype=str)[jobFileIdx]
     print(f"actual job list: {job_list}")
 
@@ -1258,8 +1390,8 @@ def get_kspacing_ecutwfc(jobFileIdx: Annotated[List[int], "indexs of files in th
     for i in jobFileIdx:
         assert isinstance(i, int), "jobFileIdx should be a list of index of files of interest"
     
-    job_dict = CANVAS.canvas.get('jobs_K_and_ecut', {})
-    job_list = CANVAS.canvas.get('finished_job_list', []).copy()
+    job_dict = CANVAS.get('jobs_K_and_ecut', {})
+    job_list = CANVAS.get('finished_job_list', []).copy()
     job_list = np.array(job_list, dtype=str)[jobFileIdx]
     print(f"actual job list: {job_list}")
     assert len(job_list) > 0, "job list 0"
@@ -1466,7 +1598,7 @@ def find_job_list() -> str:
     """Return the list of job files to be submitted."""
 
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
-    job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
+    job_list = CANVAS.get('ready_to_run_job_list', []).copy()
     
     # time.sleep(60)
     return f'The files need to be submitted are {job_list}. Please continue to submit the job.'
@@ -1521,7 +1653,7 @@ echo "Job Ended at `date`"\n \
         # time.sleep(60)
         return "Invalid input, please check the input format"
     
-    assert qeInputFileName in CANVAS.canvas.get('ready_to_run_job_list', []), f"{qeInputFileName} is not in the ready_to_run_job_list, please check the job list and make sure the file name is correct"
+    assert qeInputFileName in CANVAS.get('ready_to_run_job_list', []), f"{qeInputFileName} is not in the ready_to_run_job_list, please check the job list and make sure the file name is correct"
     
     # craete the json file if it does not exist, otherwise load it
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
@@ -1555,7 +1687,7 @@ def submit_and_monitor_job(
         # time.sleep(60)
         return "Resource suggestion file not found, please use the add_resource_suggestion tool to add the resource suggestion"
         
-    # job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
+    # job_list = CANVAS.get('ready_to_run_job_list', []).copy()
     job_list = []
     
     # load reousrce suggestions
@@ -1587,7 +1719,7 @@ def submit_and_monitor_job(
     conn.close()
     print(f"loaded resource suggestions: {json.dumps(resource_dict, indent=4)}")
     
-    CANVAS.canvas['ready_to_run_job_list'] = job_list.copy()
+    CANVAS['ready_to_run_job_list'] = job_list.copy()
     wasJobList = deepcopy(job_list)
     
     ## Check resource key is valid
@@ -1742,7 +1874,7 @@ def submit_and_monitor_job(
         #     #         print(f"Job {inputFile} failed, will resubmit the job")
         #     if len(job_list) == 0:
         #         # load jobs frm job_list.json
-        #         job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
+        #         job_list = CANVAS.get('ready_to_run_job_list', []).copy()
                 
         #         # read all energies into a dict
         #         energies = {}
@@ -1786,9 +1918,9 @@ def submit_and_monitor_job(
         #             break
     
     # reset resource_suggestions.db and job lists
-    finishedJobs = CANVAS.canvas.get('finished_job_list', [])
+    finishedJobs = CANVAS.get('finished_job_list', [])
     finishedJobs += wasJobList
-    CANVAS.canvas['finished_job_list'] = finishedJobs
+    CANVAS['finished_job_list'] = finishedJobs
     CANVAS.write('ready_to_run_job_list', [], overwrite=True)
     db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
     os.remove(db_file)
@@ -1928,7 +2060,7 @@ def read_energy_from_output(jobFileIdx: Annotated[List[int], "indexs of files in
     
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     # load job_list.jason
-    job_list = CANVAS.canvas.get('finished_job_list', []).copy()
+    job_list = CANVAS.get('finished_job_list', []).copy()
     job_list = np.array(job_list, dtype=str)[jobFileIdx]
     print(f"actual job list: {job_list}")
     

@@ -11,6 +11,9 @@ import pandas as pd
 from src import var
 from ase.io import read
 import numpy as np
+import re
+from typing import Annotated, Dict, Literal, Optional, Sequence, Tuple, Any
+import math
 
 def load_config(path: str):
     ## Load the configuration file
@@ -286,3 +289,65 @@ def read_BEEF_output(file_path: str):
     energies = np.array(energies)
 
     return energies
+
+
+_NUMERIC_RE = re.compile(
+    r"""
+    (?<![\w.])                       # avoid letters/underscore immediately before
+    [+-]?                            # optional sign
+    (?:
+        (?:\d+\.\d*|\.\d+|\d+)       # int or decimal
+        (?:[eE][+-]?\d+)?            # optional scientific notation
+    )
+    (?![\w.])                        # avoid letters/underscore immediately after
+    """,
+    re.VERBOSE,
+)
+
+
+def util_find_all_substring_spans(text: str, snippet: str) -> List[tuple[int, int]]:
+    spans = []
+    start = 0
+    while True:
+        idx = text.find(snippet, start)
+        if idx == -1:
+            break
+        spans.append((idx, idx + len(snippet)))
+        start = idx + 1
+    return spans
+
+
+def util_numeric_matches_in_region(
+    text: str,
+    region_start: int,
+    region_end: int,
+    target_value: float,
+    abs_tol: float,
+) -> List[Dict[str, Any]]:
+    matches = []
+    region_text = text[region_start:region_end]
+
+    for m in _NUMERIC_RE.finditer(region_text):
+        token = m.group(0)
+        try:
+            parsed = float(token)
+        except ValueError:
+            continue
+
+        if math.isclose(parsed, float(target_value), rel_tol=0.0, abs_tol=abs_tol):
+            matches.append(
+                {
+                    "token": token,
+                    "parsed_value": parsed,
+                    "start": region_start + m.start(),
+                    "end": region_start + m.end(),
+                }
+            )
+    return matches
+
+def is_floatable(x):
+    try:
+        float(x)
+        return True
+    except:
+        return False
