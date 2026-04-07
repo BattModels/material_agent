@@ -256,7 +256,11 @@ if __name__ == "__main__":
         if not os.path.exists(db_file):
             initialize_database(db_file)
 
-    EXPLOG.init(Path(WORKING_DIRECTORY)/"TEMP_vasp_calcs", "test")
+    EXPLOG.init(Path(WORKING_DIRECTORY)/"TEMP_vasp_calcs",
+                "test", 
+                reject_if_failed_exists = True,
+                require_relaxed_o_for_oh = True
+                )
     # print(EXPLOG.relational_frame.candidates.df.dtypes)
     # print(EXPLOG.relational_frame.processes.df.dtypes)
     # new_candidate_row = {"candidate_id": "test_candidate",
