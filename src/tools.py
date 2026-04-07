@@ -88,7 +88,7 @@ async def _arXiv_search(arxiv_search_query, context):  # Your async operation
     config = var.OTHER_GLOBAL_VARIABLES
     ursaWorkspace = Path(os.path.join(var.my_WORKING_DIRECTORY, "ursa_workspace"))
     llm = ChatAnthropic(model="claude-haiku-4-5-20251001", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-    agent = ArxivAgent(llm=llm, process_images=False, max_results=1, workspace=ursaWorkspace)
+    agent = ArxivAgent(llm=llm, process_images=False, max_results=5, workspace=ursaWorkspace)
     result = await agent.ainvoke(
         arxiv_search_query=arxiv_search_query, 
         context=context
@@ -114,7 +114,9 @@ def arXiv_search(
 
 
 @tool
-def wait_for_update():
+def wait_for_update(
+    patient: Annotated[int, "If nothing was updated, you will be waken up regardless after waiting for this many minutes"] = 1440,
+):
     """Only call wait tool after checking the EXPLOG and you decided there is nothing you want to do currently"""
     
     statusList = EXPLOG.relational_frame.processes.df["status"].tolist()
@@ -138,7 +140,7 @@ def wait_for_update():
                 status = f.read()
 
 
-        time.sleep(2)
+        time.sleep(60)
         tmpUpdate = EXPLOG.update_log()
         # Sort through the updates, remove non-failed/completed jobs (ignore going from pending to running)
         
@@ -161,16 +163,6 @@ def wait_for_update():
         print('-----------------------\n')
 
 
-        # time.sleep(10)
-        # tmpUpdate = EXPLOG.update_log()
-        # # Sort through the updates, remove non-failed/completed jobs (ignore going from pending to running)
-        # for key, value in tmpUpdate.items():
-        #     if value not in ["completed", "failed"]:
-        #         del tmpUpdate[key]
-
-        # currentTime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        # timeElapsed = timedelta(seconds= time.time() - var.startTime)
-        # print(timeElapsed)
         if len(tmpUpdate) > 0:
             timeWaited = timedelta(seconds= time.time() - waitStartTime)
 
@@ -178,9 +170,107 @@ def wait_for_update():
             for key, value in tmpUpdate.items():
                 outText += f"\nprocess_id {key} status is now {value}."
             return outText
-        elif time.time() - var.startTime > 24*60*60:
-            return f"Current time is {currentTime}, you have been waiting for more than 24 hours with no update in the EXPLOG, time elapsed since the start of the study: {timeElapsed}. You may want to check the EXPLOG and see if there is anything you can do to move the study forward."
+        elif time.time() - var.startTime > patient*60:
+            return f"Current time is {currentTime}, you have been waiting for {patient} minutes with no update in the EXPLOG, time elapsed since the start of the study: {timeElapsed}. You may want to check the EXPLOG and see if there is anything you can do to move the study forward."
                        
+@tool
+def new_inspect_explog():
+    """some desciption here"""
+    """
+    
+    outString = ""
+    For each candidate
+        outString += this candidate has x/y bulk job finished, x/y surface job finished, x/y O job finished, and x/y OH job finished.\n 
+        Below is what's still in progress: 
+        extract process of each candidate
+            if bulk not finished
+                outString += bulk status\n
+            else 
+                For each surface (termination_idx)
+                    if surface not finished
+                        outString += surface status\n
+                    else
+                        for each O_relax (at site_idx)
+                            if O_relax not finish
+                                outString += O_relax status\n
+                            else
+                                if delta_G(O) is small and no OH_relax at site_idx on termi_idx:
+                                    outString += this site is good but no OH_relax\n
+                                elif delta_G(O) is small 
+                                    gather status of all OH_relax at site_idx on termi_idx
+                                    if any status contain "failed":
+                                        outString += OH_relax failed\n
+                                    elif any status conttain "pending":
+                                        outString += OH_relax pending\n
+                                    elif any status contain "running":
+                                        outString += OH_relax running\n
+                                    else
+                                        do nothing
+    """
+    outString = ""
+    all_candidates_id = EXPLOG.relational_frame.candidates.df["candidate_id"].tolist()
+    for cant_id in all_candidates_id:
+        sub_pdf = EXPLOG.relational_frame.processes.df[EXPLOG.relational_frame.processes.df['candidate_id'] == cant_id]
+        # number of bulk job finished
+        N_finished_bulk = len(sub_pdf[(sub_pdf['job_type'] == 'bulk_relaxation') & (sub_pdf['status'] == 'completed')])
+        N_finished_surface = len(sub_pdf[(sub_pdf['job_type'] == 'surface_relaxation') & (sub_pdf['status'] == 'completed')])
+        N_finished_O = len(sub_pdf[(sub_pdf['job_type'] == 'O_adsorption') & (sub_pdf['status'] == 'completed')])
+        N_finished_OH = len(sub_pdf[(sub_pdf['job_type'] == 'OH_adsorption') & (sub_pdf['status'] == 'completed')])
+        
+        N_surf_tot = len(sub_pdf[sub_pdf['job_type'] == 'surface_relaxation'])
+        N_O_tot = len(sub_pdf[sub_pdf['job_type'] == 'O_adsorption'])
+        N_OH_tot = len(sub_pdf[sub_pdf['job_type'] == 'OH_adsorption'])
+        
+        outString += f'candidate {cant_id} has {N_finished_bulk}/1 bulk relaxation job finished, {N_finished_surface}/{N_surf_tot} surface relaxation job finished, {N_finished_O}/{N_O_tot} O adsorption job finished, and {N_finished_OH}/{N_OH_tot} OH adsorption job finished.\n'
+        
+        #-------------------------------------------------
+        # Maybe we don't need to display so much info
+        #-------------------------------------------------
+        # outString += "Below is what's still in progress: \n"
+        # # extrct job with type "bulk_relaxation"
+        # bulk_relaxation_job = sub_pdf[sub_pdf['job_type'] == 'bulk_relaxation']
+        # if len(bulk_relaxation_job) == 0:
+        #     continue
+        # elif bulk_relaxation_job.status.tolist()[0] != 'completed':
+        #     outString += f'    candidate {cant_id} has bulk relaxation job which is {bulk_relaxation_job.status.tolist()[0]}\n'
+        # else:
+        #     # extract jobs with type "surface_relaxation"
+        #     surface_relaxation_jobs = sub_pdf[sub_pdf['job_type'] == 'surface_relaxation']
+        #     for _, row in surface_relaxation_jobs.iterrows():
+        #         termi_idx = row['termination_index']
+        #         if row['status'] != 'completed':
+        #             outString += f'        candidate {cant_id} has surface relaxation job for termination {termi_idx} which is {row["status"]}\n'
+        #         else:
+        #             O_relaxation_jobs = sub_pdf[(sub_pdf['job_type'] == 'O_adsorption') & (sub_pdf['termination_index'] == termi_idx)]
+        #             for _, row in O_relaxation_jobs.iterrows():
+        #                 site_idx = row['site_index']
+        #                 if row['status'] != 'completed':
+        #                     outString += f'            candidate {cant_id} has O adsorption job for termination {termi_idx} and site {site_idx} which is {row["status"]}\n'
+        #                 else:
+        #                     # check if delta_G_O is small
+        #                     # if small, check OH jobs at the same termination and site
+        #                     # if not small, do nothing
+        #                     tmp_delta_GO = EXPLOG.relational_frame.candidates[cant_id].study_obj.get_adsorption_site_study(term_idx=termi_idx, site_idx=site_idx).delta_G_O
+        #                     # extract OH adsorption jobs at the same termination and site
+        #                     OH_relaxation_jobs = sub_pdf[(sub_pdf['job_type'] == 'OH_adsorption') & (sub_pdf['termination_index'] == termi_idx) & (sub_pdf['site_index'] == site_idx)]
+        #                     if tmp_delta_GO < 0.1 and len(OH_relaxation_jobs) == 0:
+        #                         outString += f'                candidate {cant_id} has a promising O adsorption at termination {termi_idx} and site {site_idx} with delta_G_O {tmp_delta_GO}, but no OH adsorption job yet\n'
+        #                     elif tmp_delta_GO < 0.1:
+        #                         tmp_status_list = OH_relaxation_jobs['status'].tolist()
+        #                         if 'failed' in tmp_status_list:
+        #                             outString += f'                andidate {cant_id} has a promising O adsorption at termination {termi_idx} and site {site_idx} with delta_G_O {tmp_delta_GO}, but OH adsorption job failed\n'
+        #                         elif 'pending' in tmp_status_list:
+        #                             outString += f'                candidate {cant_id} has a promising O adsorption at termination {termi_idx} and site {site_idx} with delta_G_O {tmp_delta_GO}, but OH adsorption job pending\n'
+        #                         elif 'running' in tmp_status_list:
+        #                             outString += f'                candidate {cant_id} has a promising O adsorption at termination {termi_idx} and site {site_idx} with delta_G_O {tmp_delta_GO}, and OH adsorption job is running\n'
+        #                         elif 'completed' in tmp_status_list:
+        #                             outString += f'                candidate {cant_id} has a promising O adsorption at termination {termi_idx} and site {site_idx} with delta_G_O {tmp_delta_GO}, and OH adsorption job is completed\n'
+        #                         else:
+        #                             # unrecoverable
+        #                             outString += f'                candidate {cant_id} has a promising O adsorption at termination {termi_idx} and site {site_idx} with delta_G_O {tmp_delta_GO}, but OH adsorption job status is unrecoverable\n'
+    
+    return outString
+            
 
 @tool
 def inspect_explog(only_get_updates: Annotated[bool, "Whether to only get updates since last inspection."] = False) -> str:
@@ -300,7 +390,7 @@ def read_explog(
     """
     Get a summary of the experiment log for a specific candidate, including all related job information and details 
     with respect to calculated adsorption energies. Details such as the site type, on-top element, closest neighboring 
-    elements, reduced coordination, G(O), G(H), and ideal overpotential, are provided given the necessary calculation 
+    elements, reduced coordination, G(O), G(OH), and ideal overpotential, are provided given the necessary calculation 
     has finished.
     """
     _ = EXPLOG.update_log() # get the latest updates from the job handler and update the relational frame accordingly
@@ -319,6 +409,7 @@ def read_explog(
     # Is used to avoid repeating the same site information.
     seen_pairs = set()
     
+    rows = []  # collect each 1-row dataframe here
     for index, row in related_process_df.iterrows():
         if row['job_type'] in ['O_adsorption', 'OH_adsorption']:
 
@@ -339,7 +430,12 @@ def read_explog(
             site_info_df = _list_adsorption_sites(candidate_id, termination_index, only_reduced_coord_O_sites=True)
             # extract the row where the "Site index" column is equal to site_index
             site_info_row = site_info_df[site_info_df['Site index'] == site_index]
-            answer += f"\nFor this candidate termination index {termination_index} and site index {site_index}, the adsorption site information is:\n{site_info_row.to_string()}\n"
+            
+            new_site_info_row = site_info_row.copy()
+            rows.append(new_site_info_row)
+                        
+    final_site_info = pd.concat(rows, ignore_index=True)
+    answer += f"\nThe adsorption site information is:\n{final_site_info.to_string}\n"
 
     return answer
 

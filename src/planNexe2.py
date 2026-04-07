@@ -279,10 +279,10 @@ def boss_node(state, agent, name):
             f.write(f"{name} is processing!!!!! Current time: {currentTime}, time elapsed since the start of the project: {timeElapsed}.\n")
     # can't print state anymore because it now contains canvas and explog, and printing them will cause too much output
     # print(state)
-    if var.my_SAVE_DIALOGUE:
-        with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-            f.write(str(state))
-            f.write("\n")
+    # if var.my_SAVE_DIALOGUE:
+    #     with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+    #         f.write(str(state))
+    #         f.write("\n")
             
     old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step}" for i, step in enumerate(state["past_steps"]))
     bossMessage = f"""
