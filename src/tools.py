@@ -556,7 +556,8 @@ def get_terminations_ranking(
         out_string += f"Termination ranking for candidate {candidate_id} has already been determined, "\
              "hence the same ranking is provided as before:"
         
-    ranking.sort_values('Normalized score', ascending=False)
+    # Sort terminations by normalized score in descending order:
+    ranking = ranking.sort_values('Normalized score', ascending=False)
     
     out_string += ranking.to_string(index=True)
 
