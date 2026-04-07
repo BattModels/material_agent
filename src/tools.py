@@ -498,8 +498,8 @@ def submit_dft_job(
 
 @tool
 def get_terminations_ranking(
-    candidate_id: Annotated[str, "MaterialId of the candidate to get termination rankings for."],
-    max_miller: Annotated[int, "Maximum miller index to consider for surface generation."] = 1,
+    candidate_id: Annotated[str, "MaterialId of the candidate for which to get termination rankings."],
+    max_miller: Annotated[int, "Maximum Miller index to consider for surface generation."] = 1,
 ):
     """
     Get a ranking of surface terminations for a given candidate. The ranking is based on the 
@@ -518,9 +518,9 @@ def get_terminations_ranking(
     adsorption studies, helping to focus computational efforts on the most promising candidates.
     """
     
-    # Args to leve out (for now):
+    # Arguments left fixed for now:
     method = 'all'      # What coordination to consider
-    stoichiometry_tolerance = 0.2 # Allowed stoichiometry diviation from bulk
+    stoichiometry_tolerance = 0.2 # Allowed stoichiometry deviation from bulk
     all_species_present = True # Only surfaces with all bulk species present
     symmetrize = True # Whether to symmetrize the surfaces
     select_closest_O_stoichiometry = True # Select surfaces with closest O stoichiometry to bulk
@@ -528,16 +528,23 @@ def get_terminations_ranking(
     max_slab_thickness = 20 # Maximum slab thickness in Å
     min_atoms = 20 # Minimum number of atoms in the slab
     max_atoms = 120 # Maximum number of atoms in the slab
-    max_layers = 6 # Maximum number of layers, considered when building the slabs
+    max_layers = 6 # Maximum number of layers considered when building slabs
 
-    study = EXPLOG.relational_frame.candidates[candidate_id].study_obj
+    if max_miller < 1:
+        raise ValueError("max_miller must be at least 1.")
+
+    # Ensure candidate exists in EXPLOG:
+    try:
+        study = EXPLOG.relational_frame.candidates[candidate_id].study_obj
+    except Exception:
+        raise ValueError(f"Unknown candidate_id: {candidate_id}")
 
     out_string = ''
 
     ranking = study.get_termination_rankings() # None on first call
     if ranking is None:
-        out_string += f"This is the first termination ranking for candidate {candidate_id}:"\
-        # No arguments needs to be provided (all have defaults as shown above):
+        out_string += f"This is the first termination ranking for candidate {candidate_id}:"
+        
         study.predict_most_likely_surfaces(
         max_miller = max_miller,
         method = method,
@@ -553,17 +560,40 @@ def get_terminations_ranking(
         )
         ranking = study.get_termination_rankings()
     else:
-        out_string += f"Termination ranking for candidate {candidate_id} has already been determined, "\
-             "hence the same ranking is provided as before:"
+        out_string += f"Termination ranking for candidate {candidate_id} has already been " \
+            "determined, so the same ranking is returned as before:"
         
     # Sort terminations by normalized score in descending order:
     ranking = ranking.sort_values('Normalized score', ascending=False)
+
+    has_valid_surfaces = len(study.get_terminations_dict()) > 0
+    if not has_valid_surfaces:
+        new_status = "unrecoverable: no valid surface can be determined"
+
+        pdf = EXPLOG.relational_frame.processes.df
+        mask = (
+            (pdf["candidate_id"] == candidate_id)
+            & (pdf["job_type"] == "bulk_relaxation")
+        )
+
+        for idx in pdf[mask].index:
+            process_id = int(pdf.at[idx, "process_id"])
+            EXPLOG.relational_frame.processes.set_value(
+                process_id, "status", new_status
+            )
     
     out_string += ranking.to_string(index=True)
 
-    if True:
-        out_string += '\n\n Original reason or hypothesis for selecting this candidate:\n'
-        out_string += EXPLOG.relational_frame.candidates[candidate_id].reason_or_hypothesis
+    # Append original reason or hypothesis if it exists:
+    candidate_reason = EXPLOG.relational_frame.candidates[candidate_id].reason_or_hypothesis
+    if candidate_reason is not None and candidate_reason != "":
+        out_string += "\n\nOriginal reason or hypothesis for selecting this candidate:\n"
+        out_string += candidate_reason
+
+    if not has_valid_surfaces:
+        out_string += "\n\nNo valid surface terminations could be determined for this candidate. "\
+                      "No further surface or adsorption calculations can be performed for this " \
+                      "candidate, and the candidate is marked as unrecoverable."
 
     return out_string
 
