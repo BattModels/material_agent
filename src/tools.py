@@ -683,8 +683,6 @@ def OER_data_analasis_v2(
         path_to_data_directory = var.OTHER_GLOBAL_VARIABLES.get('path_to_data_directory', None)
         
         )
-
-    dh.remove_entries_without_elements(['Ir'], True)
     
     # if len(elements_to_exclude) > 0:
     #     dh.remove_entries_with_elements(elements_to_exclude)
