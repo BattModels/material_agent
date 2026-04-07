@@ -412,50 +412,83 @@ def enter_candidate_in_log(
 
 @tool
 def submit_dft_job(
-    MaterialId: Annotated[str, "MaterialId of the candidate to submit DFT job for."],
-    calculation_type: Annotated[Literal['bulk_relaxation', 'surface_relaxation', 'OH_adsorption', 'O_adsorption'], "Type of DFT calculation to submit. The OH_adsorption calculation will submit three jobs with slightly different initial OH adsorbate positions, increasing the likelihood of finding the global minimum."],
-    note: Annotated[str, "Short note you want to leave for the calculation"],
-    termination_index: Annotated[int, "termination index. Only needed for surface and adsorption calculations"] = None,
-    ad_site_index: Annotated[int, "index of the site you want to adsorb O or OH onto. Only neeeded for adsorption calculations"] = None,
-    partition: Annotated[Literal['xeon56', 'xeon40el8', 'xeon24el8', 'auto'], "Partition to submit the job to"] = "auto",
+    MaterialId: Annotated[str, "MaterialId of the candidate for which to submit a DFT job."],
+    calculation_type: Annotated[Literal['bulk_relaxation', 'surface_relaxation', 'OH_adsorption', 'O_adsorption'], "Type of DFT calculation to submit. The OH_adsorption option submits three jobs with slightly different initial OH adsorbate positions, increasing the likelihood of finding the global minimum."],
+    note: Annotated[str, "Short note for the calculation; state the reason for submitting the job, including why the selected termination and adsorption site are relevant."],
+    termination_index: Annotated[int | None, "Termination index. Only required for surface and adsorption calculations."] = None,
+    ad_site_index: Annotated[int | None, "Index of the site onto which O or OH is adsorbed. Only required for adsorption calculations."] = None,
+    partition: Annotated[Literal['xeon56', 'xeon40el8', 'xeon24el8', 'auto'], "Partition to which the job will be submitted."] = "auto",
 ):
-    """Submit different types of DFT jobs to the cluster for a cadidate"""
+    """
+    Submit a DFT job (or OH job batch) for a candidate and submit all created processes to the selected partition.
+    """
 
-    # --- Sanity checks for input arguments ----------------------------
-    if ad_site_index is not None and termination_index is None:
-        raise ValueError("termination_index must be provided for" \
-        " adsorption calculations")
-    
-    # MORE CHECKS NEEDED...!!!
-
-    # ------------------------------------------------------------------
-    
-    # --- Initializing surface- and adsorption studies if not 
-    # already initialized ----------------------------------------------
-    if termination_index is not None:
+    # Does candidate exist in EXPLOG:
+    try:
         study = EXPLOG.relational_frame.candidates[MaterialId].study_obj
+    except Exception:
+        raise ValueError(f"Unknown candidate MaterialId: {MaterialId}")
 
-        surface_study_dict = study.get_surface_studies()
-        if termination_index not in surface_study_dict.keys():
+    # Ensure surface study exists when needed - initialize it if needed:
+    if calculation_type in ["surface_relaxation", "O_adsorption", "OH_adsorption"]:
+        if termination_index is None:
+            raise ValueError(
+                f"{calculation_type} requires termination_index."
+            )
+        if not isinstance(termination_index, int) or termination_index < 0:
+            raise ValueError("termination_index must be a non-negative int.")
+
+        surface_studies = study.get_surface_studies() or {}
+        if termination_index not in surface_studies:
             study.initialize_oer_surface_study(termination_index)
-        surface_study = study.get_surface_studies()[termination_index]
 
-        if ad_site_index is not None:
-            ad_site_studies_dict = surface_study.get_adsorption_site_studies_dict()
-            if ad_site_index not in ad_site_studies_dict.keys():
-                surface_study.initialize_adsorption_site_study(ad_site_index)
-            ad_site_study = surface_study.get_adsorption_site_studies_dict()[ad_site_index]
-    # ------------------------------------------------------------------
+        # Re-fetch after potential initialization
+        surface_studies = study.get_surface_studies() or {}
+        if termination_index not in surface_studies:
+            raise RuntimeError(
+                "Failed to initialize/get surface study for "
+                f"termination_index={termination_index}."
+            )
+        surface_study = surface_studies[termination_index]
+
+    # Ensure adsorption-site study exists when needed - initialize it if needed:
+    if calculation_type in ["O_adsorption", "OH_adsorption"]:
+        if ad_site_index is None:
+            raise ValueError(f"{calculation_type} requires ad_site_index.")
+        if not isinstance(ad_site_index, int) or ad_site_index < 0:
+            raise ValueError("ad_site_index must be a non-negative int.")
+
+        ad_site_studies = surface_study.get_adsorption_site_studies_dict() or {}
+        if ad_site_index not in ad_site_studies:
+            surface_study.initialize_adsorption_site_study(ad_site_index)
+
+        # Re-fetch after potential initialization
+        ad_site_studies = surface_study.get_adsorption_site_studies_dict() or {}
+        if ad_site_index not in ad_site_studies:
+            raise RuntimeError(
+                "Failed to initialize/get adsorption-site study for "
+                f"ad_site_index={ad_site_index} on "
+                f"termination_index={termination_index}."
+            )
+
+    # EXPLOG check --- before mutation of EXPLOG
+    validation_result = EXPLOG.can_add_process(
+        MaterialId,
+        calculation_type,
+        termination_index,
+        ad_site_index,
+    )
+    if not validation_result.ok:
+        validation_result.raise_for_error()
+        assert False, "Unreachable: raise_for_error() should have raised"
 
     # a list of ids will be provided for OH_calculations and not for all other:
     id_list = EXPLOG.add_process(MaterialId, calculation_type, termination_index, ad_site_index, note)
     if not isinstance(id_list, list):
         id_list = [id_list]
-    else:
-        id_list = id_list
 
-    for id in id_list:
-        EXPLOG.submit_process(id, partition)
+    for process_id in id_list:
+        EXPLOG.submit_process(process_id, partition)
     # save EXPLOG into a pickle file under WORKING_DIRECTORY for record and future reference
     # with open(os.path.join(var.my_WORKING_DIRECTORY, "EXPLOG.pkl"), "wb") as f:
     #     pickle.dump(EXPLOG, f)
