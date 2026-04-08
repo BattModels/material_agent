@@ -345,12 +345,13 @@ def query_explog(
     sort: List[SortSpec] = [],
 ) -> str:
     """Query the experiment log relational frame with a given filter and sort criteria.
-    candidates table contains: 
+    candidates table contains:
         candidate_id (str, MaterialID of the candidate),
         reason_or_hypothesis (str, for selecting the candidate),
         notes (str, any notes you've added for the candidate),
-        OHDone (boolean, whether the OH adsorption calculation has been done for the candidate),
-        idealOverPotential (Float64, the ideal overpotential calculated based on currently available data)
+        G(O) deviation (Float64, deviation of best available G(O) from ideal 2.46 eV),
+        Overpotential_from_scaling (Float64, best available overpotential from OH-OOH scaling relation),
+        idealOverPotential (Float64, best available ideal overpotential across all studied sites)
     processes table contains:
         process_id (str, unique id for each process),
         candidate_id (str, MaterialID of the candidate this process belongs to),
@@ -359,7 +360,15 @@ def query_explog(
         status (str, current status of the job, either un-submitted, submitted, pending, running, completed, or failed),
         termination_index (Int64, termination index for surface relaxation and adsorption calculations, NaN for bulk relaxation),
         site_index (Int64, adsorption site index for adsorption calculations, NaN for bulk and surface relaxation),
-        processNote (str, any note you've left for this process)
+        processNote (str, any note you've left for this process),
+        G(O) (Float64, adsorption free energy of O* at this site in eV, NaN until O_adsorption job completes),
+        G(O) deviation (Float64, absolute deviation of G(O) from ideal 2.46 eV),
+        G(OH) (Float64, adsorption free energy of OH* at this site in eV, NaN until OH_adsorption job completes),
+        G(OH) deviation (Float64, absolute deviation of G(OH) from ideal 1.23 eV),
+        G(OOH) from scaling relation (Float64, G(OOH) = G(OH) + 3.2 eV),
+        G(OOH, scaling) deviation (Float64, absolute deviation of G(OOH) from ideal 3.69 eV),
+        ideal overpotential (Float64, best-case overpotential assuming optimal G(OOH), NaN until both G(O) and G(OH) are available),
+        overpotential from OH-OOH scaling relation (Float64, overpotential using G(OOH) = G(OH) + 3.2 eV)
     """
 
     # print dtype of both df
@@ -598,20 +607,22 @@ def get_terminations_ranking(
     max_miller: Annotated[int, "Maximum Miller index to consider for surface generation."] = 1,
 ):
     """
-    Get a ranking of surface terminations for a given candidate. The ranking is based on the 
-    reduced coordination of the surface atoms with respect to the corresponding bulk coordination. 
-    The smaller the difference, the higher the normalized ranking, indicating a higher likelihood 
-    of being the most stable termination. Unique surfaces will be created up to the maximum Miller 
-    index specified. This function must be run before any surface relaxation or adsorption 
-    calculations are performed, since it creates all initial surfaces and their corresponding 
-    terminations. Any number of terminations may be studied after the ranking is performed. Once 
-    the ranking has been performed, it will not be recalculated, and the same ranking will be used 
-    for any subsequent calls to this function. Since this function can be called repeatedly, there 
-    is no need to write the results to the canvas.
-    It is recommended to call the 'list_adsorption_sites' tool before choosing which surface to 
-    consider further, as this provides initial information about the potential adsorption sites. 
-    This is valuable for selecting the most relevant surfaces and terminations for subsequent 
-    adsorption studies, helping to focus computational efforts on the most promising candidates.
+    Ranks surface terminations for a given candidate using a coordination-based
+    heuristic: terminations where surface atoms retain more of their bulk
+    coordination are ranked higher (in terms of normalized score) as a proxy for stability. This is not based
+    on calculated surface energies — it is a heuristic guide only.
+    The score is the reduced coordination per surface area (Å⁻²). A less negative
+    score means the coordination is reduced less compared to the bulk (and also a higher, more positive, normalized score).
+
+    This function must be run before any surface relaxation or adsorption
+    calculations, as it generates all surface structures up to the specified
+    maximum Miller index. Once run, the ranking is fixed and will not be
+    recalculated on subsequent calls.
+
+    Output includes: Miller indices, termination index, normalized score, and
+    exposed surface atom types. It is recommended to also call
+    'list_adsorption_sites' to inspect the available adsorption sites before
+    committing to a termination.
     """
     
     # Arguments left fixed for now:
