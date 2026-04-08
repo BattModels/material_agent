@@ -59,44 +59,46 @@ def read_my_canvas(key: Annotated[str, "key"]):
     # read a value from myCANVAS given a key
     return CANVAS.read(key)
 
-# TODO: need more work
 @tool
 def write_my_canvas(key: Annotated[str, "key"],
                     value: Annotated[Any, "value"],
+                    entry_type: Annotated[Literal["note", "numerical_result"], "entry type. 'note' is for general note or text, not allowed to be use to generate final report. 'numerical_result' is verifiable with tools output and will be verified. Must provide source_result_id if entry_type is 'numerical_result'."],
                     overwrite: Annotated[bool, "True to overwrite if key already exist. only set to True if you are certain you want to overwrite the existing value"] = False,
-                    source_result_id: Annotated[Optional[str], "the result_id of the tool output that this numerical canvas entry is based on. If provided, it will be recorded as verified "] = None
+                    source_result_id: Annotated[Optional[str], "the result_id of the tool output that this numerical canvas entry is based on."] = None
                     ):
     """Write a value to the working canvas. If the key already exists, it will not overwrite unless specified."""
     # write a value to myCANVAS given a key and a value
+    if entry_type == "numerical_result":
+        assert source_result_id is not None, "source_result_id must be provided for numerical_result entry type."
     return CANVAS.write(
         key=key,
         value=value,
-        entry_type="note",
+        entry_type=entry_type,
         overwrite=overwrite,
+        source_result_id=source_result_id
         )
     
-@tool
-def register_parameter_choice_by_LLM_agent(
-    value: Annotated[float, "The value of the parameter chosen by the LLM agent. It should be a numeric value that can be used for calculations."],
-    reason: Annotated[str, "A brief reason of why a certain parameter was chosen to be this value. You must clarify the unit of the value."]
-):
-    """Register the choice of a specific parameter by the LLM agent, along with the reason for the choice with unit clarified. """
+# @tool
+# def register_parameter_choice_by_LLM_agent(
+#     value: Annotated[float, "The value of the parameter chosen by the LLM agent. It should be a numeric value that can be used for calculations."],
+#     reason: Annotated[str, "A brief reason of why a certain parameter was chosen to be this value. You must clarify the unit of the value."]
+# ):
+#     """Register the choice of a specific parameter by the LLM agent, along with the reason for the choice with unit clarified. """
 
     
-    result_id = CANVAS.register_tool_output(
-        tool_name="register_parameter_choice_by_LLM_agent",
-        value=value,
-        numerical_result=True,
-        parent_result_ids=[],
-        metadata={
-            "reason": reason,
-        },
-    )
+#     result_id = CANVAS.register_tool_output(
+#         tool_name="register_parameter_choice_by_LLM_agent",
+#         value=value,
+#         numerical_result=True,
+#         parent_result_ids=[],
+#         metadata={
+#             "reason": reason,
+#         },
+#     )
     
-    return f"value: {value} is registered with result_id: {result_id}."
+#     return f"value: {value} is registered with result_id: {result_id}."
     
     
-
 @tool
 def extract_numeric_from_tool_output(
     source_tool_call_id: Annotated[str, "The tool_call_id of the previously executed text-returning tool whose output you want to extract the numeric value from."],
@@ -186,7 +188,7 @@ def extract_numeric_from_tool_output(
         tool_name="extract_numeric_from_tool_output",
         value=float(value),
         numerical_result=True,
-        parent_result_ids=[],
+        parent_result_ids=[source_tool_call_id],
         metadata={
             "source_tool_call_id": source_tool_call_id,
             "source_tool_name": record.tool_name,
@@ -525,14 +527,21 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
                                         crystal_structures: Annotated[str, "Crystal structure. Must be one of sc, fcc, bcc, tetragonal, bct, hcp, rhombohedral, orthorhombic, mcl, diamond, zincblende, rocksalt, cesiumchloride, fluorite or wurtzite."],
                                         # a_dict: Annotated[Dict[str, float], "Dictionary of lattice parameters for the crystal structure: Dict[species, lattice_parameter_a]. i.e. {'Pt': 4.0}"],
                                         facets: Annotated[str, "Facet of the surface. Must be one of 100, 110, 111, 210, 211, 310, 311, 320, 321, 410, 411, 420, 421, 510, 511, 520, 521, 530, 531, 540, 541, 610, 611, 620, 621, 630, 631, 640, 641, 650, 651, 660, 661"],
-                                        supercell_dim: Annotated[List[int], "typically [int, int, 6]. Supercell dimension, how many times do you want to repeat the primitive cell in each direction: [int, int, int]"],
+                                        supercell_dim_xy: Annotated[List[int], "Supercell dimension, how many times do you want to repeat the primitive cell in XY direction: [int, int]"],
+                                        supercell_dim_z:Annotated[int, "typically 6. Supercell dimension, how many times do you want to repeat the primitive cell in Z direction."] = 6,
+                                        supercell_dim_z_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of supercell_dim_z. If not provided, the result will not be registered and you can't use the result to proceed"] = "",
                                         n_fixed_layers: Annotated[int, "typically 3. Number of fixed layers in the slab"] = 3,
+                                        n_fixed_layers_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of n_fixed_layers. If not provided, the result will not be registered and you can't use the result to proceed"] = "",
                                         vacuum: Annotated[float, "typically 10.0. Vacuum size in Angstrom"] = 10.0,
+                                        vacuum_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of vacuum size. If not provided, the result will not be registered and you can't use the result to proceed"] = "",
                                         surfaceFilename: Annotated[str, "Name (not a path) of the surface file to be saved in traj format"] = "surface.traj"
                                         ):
-    """Generate a surface structure and get the available adsorption sites."""
+    """Generate a surface structure and get the available adsorption sites. 
+    You can try out different supercell_dim_z, n_fixed_layers and vacuum size to see the effect.
+    However, only when you specify the source_result_id reference for these parameters, the result will be registered in the canvas and you can use them in the production run.
+    Otherwise, the tool will still execute and return the generated surface structure and available adsorption sites, but they will not be registered and you can't use them in the production run"""
     a_dict = {'Pt': 3.92}
-    supercell_dim[-1] = 6
+    supercell_dim = [supercell_dim_xy[0], supercell_dim_xy[1], supercell_dim_z]
     surface_dict = generate_surface_structures(
         species_list=[species],
         crystal_structures={species: crystal_structures},

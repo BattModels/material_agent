@@ -65,7 +65,7 @@ class OtherArtifact(BaseModel):
 
 
 class CanvasEntry(BaseModel):
-    entry_type: Literal["note", "numerical_result", "special", "LLM_Choice"]
+    entry_type: Literal["note", "numerical_result", "special"]
     value: Any
     trusted: bool = False
     source_result_id: Optional[str] = None
