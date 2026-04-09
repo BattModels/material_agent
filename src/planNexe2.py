@@ -45,6 +45,16 @@ class myStep(BaseModel):
     agent: str = Field(
         description=f"Agent to perform the step. Should be one of {members}."
     )
+    
+class myPastStep(BaseModel):
+    """Step in the plan."""
+
+    step: str = Field(description="Step to perform.")
+    agent: str = Field(
+        description=f"Agent to perform the step. Should be one of {members}."
+    )
+    timeStamp: str = Field(description="The time when the step is completed.")
+    timeSpent: str = Field(description="The time spent on this step.")
 
 class Plan(BaseModel):
     """Plan to follow in future"""
@@ -284,7 +294,7 @@ def boss_node(state, agent, name):
     #         f.write(str(state))
     #         f.write("\n")
             
-    old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step}" for i, step in enumerate(state["past_steps"]))
+    old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step} [total time elapsed since project start: {str(step.timeStamp).split(".")[0]}, time spent on step {i+1}: {step.timeSpent}]" for i, step in enumerate(state["past_steps"]))
     bossMessage = f"""
     Current time: {timeElapsed}.
 
@@ -361,7 +371,7 @@ def supervisor_chain_node(state, agent, name):
     plan_str = "\n".join(f"{i+1}. {step.step}" for i, step in enumerate(plan))
     # task_formatted = f"""For the following plan:
     # {plan_str}\n\nYou are tasked with executing step {1}, {task}."""
-    old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step}" for i, step in enumerate(state["past_steps"]))
+    old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step} [total time elapsed since project start: {str(step.timeStamp).split(".")[0]}, time spent on step {i+1}: {step.timeSpent}]" for i, step in enumerate(state["past_steps"]))
 
     current_boss_feedback = state["boss_feedback"].strip() # Remove leading/trailing whitespaces
     if current_boss_feedback == "":
@@ -466,7 +476,7 @@ def worker_agent_node(state, agent, name):
     task = plan[0]
 #     task_formatted = f"""For the following plan:
 # {plan_str}\n\nYou are tasked with executing step {1}, {task}."""
-    old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step}" for i, step in enumerate(state["past_steps"]))
+    old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step} [total time elapsed since project start: {str(step.timeStamp).split(".")[0]}, time spent on step {i+1}: {step.timeSpent}]" for i, step in enumerate(state["past_steps"]))
     task_formatted = f"""
 Here are what has been done so far:
 {old_tasks_string}
@@ -487,7 +497,6 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
         with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
             f.write(f"Agent {name} is processing!!!!!\n")
     
-    
     for agent_response in agent.stream(
         {"messages": [("user", task_formatted)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
     ):
@@ -500,9 +509,21 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
     # )
     structured_response = agent_response['structured_response']
     
-    
+    timeElapsed = timedelta(seconds= time.time() - var.startTime)
+    timeElapsedStr = str(timeElapsed).split(".")[0] # Remove microseconds for cleaner display
     # state["past_steps"].append((task, agent_response["messages"][-1].content))
-    state["past_steps"].append(myStep(step=structured_response.summary, agent=name))
+    if len(state["past_steps"]) > 0:
+        prevTimeStamp = state["past_steps"][-1].timeStamp
+    else:
+        prevTimeStamp = timedelta(seconds=0)
+    state["past_steps"].append(
+        myPastStep(
+            step=structured_response.summary, 
+            agent=name, 
+            timeStamp=timeElapsed,
+            timeSpent=str(timeElapsed-prevTimeStamp).split(".")[0]
+            )
+        )
     
     print_stream(structured_response.summary)
     
