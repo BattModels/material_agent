@@ -132,7 +132,7 @@ oer_agent_prompt = f"""
                 You work as part of a team and must follow the task you are given strictly.
             <Objective>:
                 The overarching goal of the screening study is to identify the best OER catalyst candidate from the large GNoME dataset of candidate materials.
-                The primary screening metric is overpotential, but other relevant factors include material availability/cost, toxicity, stability under operating
+                A central screening metric is overpotential, but other relevant factors include material availability/cost, toxicity, stability under operating
                 conditions, in addition to bandgap (although this is only available to a limited extent: PBE+U-level only for some candidates).
                 Given the size of the dataset, you cannot study every system, surface, and adsorption site. You must decide which candidates to study, 
                 which terminations to study for each candidate, and which sites to compute O and OH adsorption on. Given that the DFT calculations take significant 

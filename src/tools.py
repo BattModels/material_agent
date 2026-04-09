@@ -103,8 +103,8 @@ async def _arXiv_search(arxiv_search_query, context):  # Your async operation
 
 @tool
 def arXiv_search(
-    arxiv_search_query: Annotated[str, "key word search query for arXiv."],
-    context: Annotated[str, "The context or question to focus the search on."]
+    arxiv_search_query: Annotated[str, "The specific question or focus that the summary should address."],
+    context: Annotated[str, "Keyword search query used to retrieve papers from arXiv."]
     ) -> str:
     """Perform an arXiv search for papers with a given arxiv_search_query and context and provide a summary"""
 
@@ -473,14 +473,17 @@ def get_top_k_candidates(
 
 @tool
 def enter_candidate_in_log(
-    reason_or_hypothesis: Annotated[str, "Detailed Reason or hypothesis for selecting this candidate."],
-    df_name: Annotated[str, "Name of the dataframe in canvas to read."],
+    reason_or_hypothesis: Annotated[str, "Detailed Reason and hypothesis for selecting this candidate. To be used later for analysis and summarization."],
+    df_name: Annotated[str, "Key of the dataframe in CANVAS containing the candidate entry."],
     MaterialId: Annotated[str, "MaterialId of the candidate in the dataframe."],
     note: Annotated[str | None, "Any notes you want to add."] = None,
     ) -> str:
     """
-    Initialize a catalyst candidate in the experiment-log, such that it
-    can be studied further.
+    Initialize a catalyst candidate from an AQ-GNoME dataframe in the experiment log (EXPLOG),
+    enabling it to be studied further with DFT.
+
+    Reads the candidate's structure from the dataframe stored in CANVAS under
+    `df_name`, initialises an OER catalyst study object.
     """
 
     afdb = CANVAS.canvas.get('afdb', None)
@@ -833,17 +836,35 @@ def list_adsorption_sites(
 @tool
 def OER_data_analasis_v2(
     pHs: Annotated[Union[List[float], float], "The pH in which the materials should be stable, may either be a float (specifying a single pH) or a pH range specified as two floats in a list i.e. [min, max]"],
-    Us: Annotated[Union[List[float], float], "Eletrochemical potantial in which the materials should be stable, may either be a float (specifying a single potential) or a potential range specified as two floats in a list i.e. [min, max]"],
-    decomposition_threshold: Annotated[float, "Decomposition energy threshold for stability criteria. (pourbaix stability)"],
-    solid_filter: Annotated[bool, "Whether to apply solid filter: "],
-    gga_only: Annotated[bool, "Whether to use only GGA calculations (True), or include r2SCAN data via the MP-mixing scheme (False)."],
-    dir_of_data: Annotated[Optional[str], "Path to data directory. If None, use default data directory."] = None,
-    # elements_to_exclude: Annotated[List[str], "List of element symbols to exclude from the analysis."] = [],
+    Us: Annotated[Union[List[float], float], "Electrochemical potential in which the materials should be stable, may either be a float (specifying a single potential) or a potential range specified as two floats in a list i.e. [min, max]"],
+    decomposition_threshold: Annotated[float, "Decomposition energy threshold for stability criteria, in units of eV/atom (pourbaix stability)"],
+    solid_filter: Annotated[bool, "Whether to apply solid filter: which excludes compounds from the Pourbaix-stability calculations which are not located on the solid-phase convex hull."],
+    gga_only: Annotated[bool, "Whether to use only GGA calculations (True), or include r2SCAN data via the MP-mixing scheme (False). GGA data will be applied when no r2SCAN data is available regardless."],
+    # dir_of_data: Annotated[Optional[str], "Path to data directory. If None, use default data directory."] = None,
+    # elements_to_exclude: Annotated[List[str], "List of element symbols to exclude from the analysis."] = [], 
     # elements_whic_must_be_included: Annotated[List[str], "List of element symbols that must be included in the analysis."] = [],
     filters: List[Filter] = [],
     sort: List[SortSpec] = [],
-    ) -> None:
-    """Perform data analysis on stable entries for OER based on specified criteria and filters, sort, and save the resulting dataframe on CANVAS. If you want to exclude or include certain elements, just apply filter to the Elements column"""
+    ) -> str:
+    """
+    Get a pandas dataframe of material entries from the AQ-GNoME database that fulfill
+    given Pourbaix stability criteria under specified electrochemical conditions
+    (pH and potential U vs. SHE), and save the resulting filtered dataframe to
+    CANVAS under the key 'OER_stable_entries_df'.
+
+    The output dataframe contains material entries that are stable under the
+    specified conditions, with columns including: MaterialId, Composition,
+    Reduced Formula, Elements, Bandgap, HHI indices (availability/cost proxy),
+    and Disorder Probability.
+
+    The following filters are hardcoded and always applied:
+        - Elements P, B, S, C, F are excluded.
+        - All radioactive elements are excluded.
+        - Only O-containing materials are included.
+
+    The optional `filters` and `sort` parameters can be used to further refine
+    or order the results based on the output dataframe columns.
+    """
 
     dh = Data_Handler(
     # Whether to apply solid filter:
@@ -855,10 +876,25 @@ def OER_data_analasis_v2(
         
         )
     
-    # if len(elements_to_exclude) > 0:
-    #     dh.remove_entries_with_elements(elements_to_exclude)
-    # if len(elements_whic_must_be_included) > 0:
-    #     dh.remove_entries_without_elements(elements_whic_must_be_included, True)
+    # ------------------------------------------------------------------
+    # A USER DEFINED FILTER: <<< ---- NOTE edit also dock string if this is removed
+    elements_to_exclude = ['P', 'B', 'S', 'C', 'F'] 
+    elements_whic_must_be_included = ['O']
+
+    # Add radioactive elements to the exclusion list:
+    radioactive_elements = ['Tc',  'Ra', 'Rf', 'Db', 'Sg', 'Bh', 'Hs',
+                            'Mt', 'Ds', 'Rg', 'Cn', 'Nh', 'Fl', 'Mc', 
+                            'Lv', 'Ts', 'Og', 'Pm', 'Ac', 'Th', 'Pa', 
+                            'U', 'Np', 'Pu', 'Am', 'Cm', 'Bk', 'Cf', 
+                            'Es', 'Fm', 'Md', 'No', 'Lr', 'Po', 'At', 
+                            'Rn']
+    elements_to_exclude += radioactive_elements
+    
+    if len(elements_to_exclude) > 0:
+        dh.remove_entries_with_elements(elements_to_exclude)
+    if len(elements_whic_must_be_included) > 0:
+        dh.remove_entries_without_elements(elements_whic_must_be_included, True)
+    # ------------------------------------------------------------------
     
     SCS = [Stability_Criteria(pHs=pHs, Us=Us, decomposition_threshold=decomposition_threshold),
        # Stability_Criteria(pHs=0, Us=[1.2, 1.6], decomposition_threshold=0.05),
@@ -867,6 +903,11 @@ def OER_data_analasis_v2(
     
     se = Stable_Entries(dh, SCS)
     df = se.get_stable_df()
+
+    # ------------------------------------------------------------------
+    # We should consider adding this: <<< ---- NOTE
+    # df = df[df['Dimensionality Cheon'] == '3D']
+    # ------------------------------------------------------------------
     
     df = df_query(df, filters, sort)
     df = get_simplified_df(df) # <<<<---- new change 2026-02-18
@@ -914,6 +955,53 @@ def read_df(
     df = CANVAS.read(df_name)
     print(df)
     return df.iloc[startIdx:endIdx].to_string(index=True)
+
+
+@tool
+def browse_df(
+    df_name: Annotated[str, "Name of the dataframe in canvas to extract."],
+    startIdx: Annotated[int, "Row index to start reading from (inclusive). Use 0 to start from the beginning."] = 0,
+    endIdx: Annotated[int, "Row index to stop reading at (exclusive). Maximum window is 50 rows (endIdx - startIdx <= 50)."] = 50,
+    filters: List[Filter] = [],
+    sort: List[SortSpec] = [],
+    ) -> str:
+    """
+    Read and inspect a dataframe stored in CANVAS by key, with optional filtering,
+    sorting, and pagination.
+
+    Filters and sort are applied first to the full dataframe, then the specified
+    row window [startIdx, endIdx) is returned. This allows systematic exploration
+    of large dataframes — for example, narrowing down candidates by column
+    values without modifying the stored dataframe.
+
+    Use the `filters` parameter to select rows by column value (e.g. filter by
+    element composition, HHI index, or bandgap), and `sort` to order results before
+    reading. Pagination via startIdx/endIdx can then be used to step through results
+    that exceed the 50-row display limit.
+
+    Returns the selected rows as a string with row index. The row index refers to
+    the position in the filtered/sorted dataframe, not the original stored dataframe.
+    """
+
+    # Ensure that the provided start/end indices to not exceed 50 (as speficied in the docstring/annotations):
+    if endIdx - startIdx > 50:
+        return "Read no more than 50 rows at a time. Adjust startIdx and endIdx."
+    
+    # Get df, apply filters, sort and read length:
+    df = CANVAS.read(df_name)
+    df = df_query(df, filters, sort)
+    total = len(df)
+
+    # "cut-out" the requested portion of the dataframe, and convert to string for display:
+    result = df.iloc[startIdx:endIdx].to_string(index=True)
+
+    # Add a footer to indicate the range of rows being shown and the total number of rows after filtering/sorting:
+    footer = f"\nShowing rows {startIdx}–{min(endIdx, total)-1} of {total} total."
+    if total > endIdx:
+        footer += f" Call again with startIdx={endIdx} to see more rows."
+
+    return result + footer
+
 
 # def get_facets(
 #     df_name: Annotated[str, "Name of the dataframe in canvas to read."],

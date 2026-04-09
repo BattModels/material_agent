@@ -632,6 +632,8 @@ def create_planning_graph(config: dict) -> StateGraph:
         read_my_canvas,
         OER_data_analasis_v2,
         read_df,
+        extract_df,
+        # browse_df
         arXiv_search,
         enter_candidate_in_log,
         submit_dft_job,
@@ -639,7 +641,6 @@ def create_planning_graph(config: dict) -> StateGraph:
         list_adsorption_sites,
         read_explog,
         # get_top_k_candidates,
-        extract_df,
         wait_for_update,
         query_explog,
         ]
