@@ -178,49 +178,52 @@ def wait_for_update(
 
 
         if len(tmpUpdate) > 0:
-            timeWaited = timedelta(seconds= time.time() - waitStartTime)
+            hWaited = int((time.time() - waitStartTime)/3600)
+            mWaited = int(((time.time() - waitStartTime)%3600)/60)
 
-            outText = f"Current time is {currentTime}, time waited: {timeWaited}, time elapsed since the start of the study: {timeElapsed}.\n Here are the updates while you are waiting: "
+            outText = f"Current time is {timeElapsed}, time waited: {hWaited}hours and {mWaited} minutes.\n Here are the updates while you are waiting: "
             for key, value in tmpUpdate.items():
                 outText += f"\nprocess_id {key} status is now {value}."
             return outText
         elif time.time() - var.startTime > patience*60:
-            return f"Current time is {currentTime}, you have been waiting for {patience} minutes with no update in the EXPLOG, time elapsed since the start of the study: {timeElapsed}. You may want to check the EXPLOG and see if there is anything you can do to move the study forward."
+            return f"Current time is {timeElapsed}, you have been waiting for {patience} minutes with no update in the EXPLOG. You may want to check the EXPLOG and see if there is anything you can do to move the study forward."
                        
 @tool
-def new_inspect_explog():
-    """some desciption here"""
+def inspect_explog():
+    """
+    Inspect the experiment log to get a high level summary of the candidates study progress.
+    More specifically _/_ bulk job finished, _/_ surface job finished, _/_ O job finished, and _/_ OH job finished for each candidate.
     """
     
-    outString = ""
-    For each candidate
-        outString += this candidate has x/y bulk job finished, x/y surface job finished, x/y O job finished, and x/y OH job finished.\n 
-        Below is what's still in progress: 
-        extract process of each candidate
-            if bulk not finished
-                outString += bulk status\n
-            else 
-                For each surface (termination_idx)
-                    if surface not finished
-                        outString += surface status\n
-                    else
-                        for each O_relax (at site_idx)
-                            if O_relax not finish
-                                outString += O_relax status\n
-                            else
-                                if delta_G(O) is small and no OH_relax at site_idx on termi_idx:
-                                    outString += this site is good but no OH_relax\n
-                                elif delta_G(O) is small 
-                                    gather status of all OH_relax at site_idx on termi_idx
-                                    if any status contain "failed":
-                                        outString += OH_relax failed\n
-                                    elif any status conttain "pending":
-                                        outString += OH_relax pending\n
-                                    elif any status contain "running":
-                                        outString += OH_relax running\n
-                                    else
-                                        do nothing
-    """
+    # outString = ""
+    # For each candidate
+    #     outString += this candidate has x/y bulk job finished, x/y surface job finished, x/y O job finished, and x/y OH job finished.\n 
+    #     Below is what's still in progress: 
+    #     extract process of each candidate
+    #         if bulk not finished
+    #             outString += bulk status\n
+    #         else 
+    #             For each surface (termination_idx)
+    #                 if surface not finished
+    #                     outString += surface status\n
+    #                 else
+    #                     for each O_relax (at site_idx)
+    #                         if O_relax not finish
+    #                             outString += O_relax status\n
+    #                         else
+    #                             if delta_G(O) is small and no OH_relax at site_idx on termi_idx:
+    #                                 outString += this site is good but no OH_relax\n
+    #                             elif delta_G(O) is small 
+    #                                 gather status of all OH_relax at site_idx on termi_idx
+    #                                 if any status contain "failed":
+    #                                     outString += OH_relax failed\n
+    #                                 elif any status conttain "pending":
+    #                                     outString += OH_relax pending\n
+    #                                 elif any status contain "running":
+    #                                     outString += OH_relax running\n
+    #                                 else
+    #                                     do nothing
+    _ = EXPLOG.update_log() # get the latest updates from the job handler and update the relational frame accordingly
     outString = ""
     all_candidates_id = EXPLOG.relational_frame.candidates.df["candidate_id"].tolist()
     for cant_id in all_candidates_id:
@@ -287,7 +290,7 @@ def new_inspect_explog():
             
 
 @tool
-def inspect_explog(only_get_updates: Annotated[bool, "Whether to only get updates since last inspection."] = False) -> str:
+def old_inspect_explog(only_get_updates: Annotated[bool, "Whether to only get updates since last inspection."] = False) -> str:
     """Inspect the experiment log to get a high level and short summary of the candidates and processes."""
     _ = EXPLOG.update_log() # get the latest updates from the job handler and update the relational frame accordingly
     # save EXPLOG into a pickle file under WORKING_DIRECTORY for record and future reference

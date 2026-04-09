@@ -273,10 +273,10 @@ def boss_node(state, agent, name):
     # Time thing. may or may not need this for the boss 
     currentTime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     timeElapsed = timedelta(seconds= time.time() - var.startTime)
-    print(f"{name} is processing!!!!! Current time: {currentTime}, time elapsed since the start of the project: {timeElapsed}.")
+    print(f"{name} is processing!!!!! Current time: {timeElapsed}.")
     if var.my_SAVE_DIALOGUE:
         with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-            f.write(f"{name} is processing!!!!! Current time: {currentTime}, time elapsed since the start of the project: {timeElapsed}.\n")
+            f.write(f"{name} is processing!!!!! Current time: {timeElapsed}.\n")
     # can't print state anymore because it now contains canvas and explog, and printing them will cause too much output
     # print(state)
     # if var.my_SAVE_DIALOGUE:
@@ -286,7 +286,7 @@ def boss_node(state, agent, name):
             
     old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step}" for i, step in enumerate(state["past_steps"]))
     bossMessage = f"""
-    Current time: {currentTime}, time elapsed since the start of the project: {timeElapsed}.
+    Current time: {timeElapsed}.
 
     The overall goal is:
     {state['inputs']}
@@ -345,10 +345,10 @@ def supervisor_chain_node(state, agent, name):
     currentTime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     timeElapsed = timedelta(seconds= time.time() - var.startTime)
     
-    print(f"supervisor is processing!!!!! Current time: {currentTime}, time elapsed since the start of the project: {timeElapsed}.")
+    print(f"supervisor is processing!!!!! Current time: {timeElapsed}.")
     if var.my_SAVE_DIALOGUE:
         with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-            f.write(f"supervisor is processing!!!!! Current time: {currentTime}, time elapsed since the start of the project: {timeElapsed}.\n")
+            f.write(f"supervisor is processing!!!!! Current time: {timeElapsed}.\n")
 
     # can't print state anymore because it now contains canvas and explog, and printing them will cause too much output
     # print(state)
@@ -369,7 +369,7 @@ def supervisor_chain_node(state, agent, name):
     
     if state["boss_feedback"].strip() != "":
         supervisorMessage =  f"""
-        Current time: {currentTime}, time elapsed since the start of the project: {timeElapsed}.
+        Current time: {timeElapsed}.
 
         Your available agents are: {members}.
 
@@ -388,7 +388,7 @@ def supervisor_chain_node(state, agent, name):
         """
     else:
         supervisorMessage =  f"""
-        Current time: {currentTime}, time elapsed since the start of the project: {timeElapsed}.
+        Current time: {timeElapsed}.
 
         Your available agents are: {members}.
 
