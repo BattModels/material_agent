@@ -631,9 +631,9 @@ def create_planning_graph(config: dict) -> StateGraph:
         write_my_canvas,
         read_my_canvas,
         OER_data_analasis_v2,
-        read_df,
-        extract_df,
-        # browse_df
+        # read_df, # Depriciated, functionallity now under browse_df
+        # extract_df, # Depriciated, functionallity now under browse_df
+        browse_df,
         arXiv_search,
         enter_candidate_in_log,
         submit_dft_job,

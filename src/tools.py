@@ -103,10 +103,14 @@ async def _arXiv_search(arxiv_search_query, context):  # Your async operation
 
 @tool
 def arXiv_search(
-    arxiv_search_query: Annotated[str, "The specific question or focus that the summary should address."],
-    context: Annotated[str, "Keyword search query used to retrieve papers from arXiv."]
+    arxiv_search_query: Annotated[str, "Keyword search query used to retrieve papers from arXiv."],
+    context: Annotated[str, "The specific question or focus that the summary should address."]
     ) -> str:
-    """Perform an arXiv search for papers with a given arxiv_search_query and context and provide a summary"""
+    """
+    Perform an arXiv search for papers with a given arxiv_search_query and context and provide a summary.
+    Only 5 papers will be considered in the search. If you want to consider more papers, you will need to refine
+    your search arguments.
+    """
 
     result = asyncio.run(_arXiv_search(arxiv_search_query, context))
 
@@ -115,10 +119,20 @@ def arXiv_search(
 
 @tool
 def wait_for_update(
-    patient: Annotated[int, "If nothing was updated, you will be waken up regardless after waiting for this many minutes"] = 1440,
-):
-    """Only call wait tool after checking the EXPLOG and you decided there is nothing you want to do currently"""
-    
+    patience: Annotated[int, "Timeout in minutes: if no jobs complete or fail within this time, the tool returns regardless. Defaults to 24 hours."] = 1440,
+) -> str:
+    """
+    Pause execution and periodically check the HPC job queue until at least one job completes
+    or fails, or until the timeout (`patience` minutes) is reached.
+
+    Only call this tool after checking the EXPLOG and confirming there is nothing productive
+    to do while waiting. The tool will refuse to wait if no jobs are currently pending or running.
+
+    Returns a message listing which process IDs changed status (completed or failed) during
+    the wait, along with the time waited and total time elapsed. If the timeout is reached
+    with no updates, returns a timeout message prompting further action.
+    """
+
     statusList = EXPLOG.relational_frame.processes.df["status"].tolist()
     if 'pending' not in statusList and 'running' not in statusList:
         return "No pending or running jobs found in the EXPLOG. Please check the EXPLOG and see if there is anything you can do to move the study forward, instead of waiting for updates."
@@ -170,8 +184,8 @@ def wait_for_update(
             for key, value in tmpUpdate.items():
                 outText += f"\nprocess_id {key} status is now {value}."
             return outText
-        elif time.time() - var.startTime > patient*60:
-            return f"Current time is {currentTime}, you have been waiting for {patient} minutes with no update in the EXPLOG, time elapsed since the start of the study: {timeElapsed}. You may want to check the EXPLOG and see if there is anything you can do to move the study forward."
+        elif time.time() - var.startTime > patience*60:
+            return f"Current time is {currentTime}, you have been waiting for {patience} minutes with no update in the EXPLOG, time elapsed since the start of the study: {timeElapsed}. You may want to check the EXPLOG and see if there is anything you can do to move the study forward."
                        
 @tool
 def new_inspect_explog():
@@ -340,11 +354,13 @@ def inspect_explog(only_get_updates: Annotated[bool, "Whether to only get update
 
 @tool
 def query_explog(
-    tableName: Annotated[str, "Name of the table in the relational frame to query, either 'candidates' or 'processes'."],
+    table_name: Annotated[str, "Table to query: 'candidates' (one row per candidate, with best available OER metrics) or 'processes' (one row per DFT job, with per-site adsorption energies and overpotentials)."],
     filters: List[Filter] = [],
     sort: List[SortSpec] = [],
 ) -> str:
-    """Query the experiment log relational frame with a given filter and sort criteria.
+    """Query the experiment log (EXPLOG) with optional filter and sort criteria. Automatically
+    fetches the latest job updates before returning. Returns the filtered table as a string with row index.
+
     candidates table contains:
         candidate_id (str, MaterialID of the candidate),
         reason_or_hypothesis (str, for selecting the candidate),
@@ -371,22 +387,24 @@ def query_explog(
         overpotential from OH-OOH scaling relation (Float64, overpotential using G(OOH) = G(OH) + 3.2 eV)
     """
 
+    _ = EXPLOG.update_log()  # fetch latest job updates before querying
+
     # print dtype of both df
     print("candidates df dtype:\n", EXPLOG.relational_frame.candidates.df.dtypes)
     print("processes df dtype:\n", EXPLOG.relational_frame.processes.df.dtypes)
-    
-    if tableName == 'candidates':
+
+    if table_name == 'candidates':
         df = EXPLOG.relational_frame.candidates.df.copy()
         # drop the "study_obj" column since it contains complex objects that are not easy to display in a dataframe format
         df = df.drop(columns=["study_obj"])
-    elif tableName == 'processes':
+    elif table_name == 'processes':
         df = EXPLOG.relational_frame.processes.df.copy()
         df = df.drop(columns=["VASP_dir"]) # drop the "VASP_dir" column since it contains file directory strings that are not easy to display in a dataframe format
     else:
-        return "tableName must be either 'candidates' or 'processes'"
-    
+        return "table_name must be either 'candidates' or 'processes'"
+
     filteredDF = df_query(df, filters, sort)
-    
+
     print(filteredDF)
     return filteredDF.to_string(index=True)
     
@@ -397,10 +415,13 @@ def read_explog(
     candidate_id: Annotated[str, "MaterialId of the candidate to read the experiment log for."],
     ) -> str:
     """
-    Get a summary of the experiment log for a specific candidate, including all related job information and details 
-    with respect to calculated adsorption energies. Details such as the site type, on-top element, closest neighboring 
-    elements, reduced coordination, G(O), G(OH), and ideal overpotential, are provided given the necessary calculation 
-    has finished.
+    Get a summary of the experiment log for a specific candidate, including all related job information and details
+    with respect to calculated adsorption energies. Automatically fetches the latest updates from the job handler
+    before returning: no manual update needed.
+
+    Details such as the site type, on-top element, closest neighboring elements, reduced coordination, G(O), G(OH),
+    G(OOH) from the OH-OOH scaling relation, ideal overpotential, and overpotential from the scaling relation are
+    provided given the necessary calculations have finished.
     """
     _ = EXPLOG.update_log() # get the latest updates from the job handler and update the relational frame accordingly
     # save EXPLOG into a pickle file under WORKING_DIRECTORY for record and future reference
@@ -521,14 +542,25 @@ def enter_candidate_in_log(
 @tool
 def submit_dft_job(
     MaterialId: Annotated[str, "MaterialId of the candidate for which to submit a DFT job."],
-    calculation_type: Annotated[Literal['bulk_relaxation', 'surface_relaxation', 'OH_adsorption', 'O_adsorption'], "Type of DFT calculation to submit. The OH_adsorption option submits three jobs with slightly different initial OH adsorbate positions, increasing the likelihood of finding the global minimum."],
+    calculation_type: Annotated[Literal['bulk_relaxation', 'surface_relaxation', 'OH_adsorption', 'O_adsorption'], "Type of DFT calculation to submit. O_adsorption yields G(O); OH_adsorption yields G(OH) — both are required to compute overpotentials. OH_adsorption submits three jobs with slightly different initial adsorbate positions to increase the likelihood of finding the global minimum."],
     note: Annotated[str, "Short note for the calculation; state the reason for submitting the job, including why the selected termination and adsorption site are relevant."],
     termination_index: Annotated[int | None, "Termination index. Only required for surface and adsorption calculations."] = None,
     ad_site_index: Annotated[int | None, "Index of the site onto which O or OH is adsorbed. Only required for adsorption calculations."] = None,
-    partition: Annotated[Literal['xeon56', 'xeon40el8', 'xeon24el8', 'auto'], "Partition to which the job will be submitted."] = "auto",
-):
+    partition: Annotated[Literal['xeon56', 'xeon40el8', 'xeon24el8', 'auto'], "HPC partition to submit the job to. Use 'auto' to let the system select the partition automatically."] = "auto",
+) -> str:
     """
-    Submit a DFT job (or OH job batch) for a candidate and submit all created processes to the selected partition.
+    Submit a DFT job for a candidate to the HPC cluster.
+
+    Prerequisites:
+        - The candidate must first be registered in EXPLOG via enter_candidate_in_log.
+        - For surface_relaxation, O_adsorption, and OH_adsorption: call
+          get_terminations_ranking and list_adsorption_sites first to identify
+          a suitable termination index and adsorption site index.
+
+    OH_adsorption submits three jobs with slightly varied initial adsorbate
+    positions to increase the likelihood of finding the global minimum.
+
+    Returns a confirmation message including the submitted process ID(s).
     """
 
     # Does candidate exist in EXPLOG:
@@ -601,32 +633,40 @@ def submit_dft_job(
     # with open(os.path.join(var.my_WORKING_DIRECTORY, "EXPLOG.pkl"), "wb") as f:
     #     pickle.dump(EXPLOG, f)
     
-    return f"Submitted {calculation_type} for candidate {MaterialId}"
+    return f"Submitted {calculation_type} for candidate {MaterialId}. Process ID(s): {id_list}."
 
 
 @tool
 def get_terminations_ranking(
     candidate_id: Annotated[str, "MaterialId of the candidate for which to get termination rankings."],
-    max_miller: Annotated[int, "Maximum Miller index to consider for surface generation."] = 1,
-):
+    #max_miller: Annotated[int, "Maximum Miller index to consider for surface generation."] = 1,
+) -> str:
     """
     Ranks surface terminations for a given candidate using a coordination-based
     heuristic: terminations where surface atoms retain more of their bulk
     coordination are ranked higher (in terms of normalized score) as a proxy for stability. This is not based
     on calculated surface energies — it is a heuristic guide only.
-    The score is the reduced coordination per surface area (Å⁻²). A less negative
-    score means the coordination is reduced less compared to the bulk (and also a higher, more positive, normalized score).
+    The score is the reduced coordination per surface area (Å⁻²) — a less negative
+    score indicates less disruption of bulk coordination, corresponding to a higher
+    normalized score.
 
-    This function must be run before any surface relaxation or adsorption
-    calculations, as it generates all surface structures up to the specified
-    maximum Miller index. Once run, the ranking is fixed and will not be
-    recalculated on subsequent calls.
+    This tool must be called before any surface relaxation or adsorption calculations.
+    Once run, the ranking is fixed and will not be recalculated on subsequent calls.
 
     Output includes: Miller indices, termination index, normalized score, and
     exposed surface atom types. It is recommended to also call
     'list_adsorption_sites' to inspect the available adsorption sites before
     committing to a termination.
     """
+
+    # Old part of docksrting:
+        # This function must be run before any surface relaxation or adsorption
+        # calculations, as it generates all surface structures up to the specified
+        # maximum Miller index. Once run, the ranking is fixed and will not be
+        # recalculated on subsequent calls.
+
+    # max_miller now fixed to 2
+    max_miller = 2
     
     # Arguments left fixed for now:
     method = 'all'      # What coordination to consider
@@ -709,6 +749,7 @@ def get_terminations_ranking(
 
 
 def _list_adsorption_sites(
+        
     candidate_id, 
     termination_index, 
     only_reduced_coord_O_sites = True
@@ -764,20 +805,22 @@ def _list_adsorption_sites(
 @tool
 def list_adsorption_sites(
     candidate_id: Annotated[str, "MaterialId of the candidate to list adsorption sites for."],
-    termination_index: Annotated[int, "termination index, of the surface to list adsorbtion sites for."],
-    # only_reduced_coord_O_sites = True, DISABELD FOR NOW...
-): 
+    termination_index: Annotated[int, "Termination index of the surface to list adsorption sites for."],
+    # only_reduced_coord_O_sites = True, DISABLED FOR NOW...
+):
     """
-    Gives an preliminary list of adsorbtion sites if the termination has not been relaxed yet, or a list of final 
-    adsorption sites if the termination has been relaxed. Sites may be 'on-top' or 'lattice O' the latter beeing an 
-    espoused surface oxygen atom that is part of the lattice and may act as an adsorption site. For 'on-top' sites, the 
-    'element of the adsorption site' is listed, meaning the element which the adsobate is placed on top of. 
-    Additionally, a list of the closest neighboring elements of the adsorption site is given, with the  distance to 
-    these neighbors given as (neighbor element, distance [Å]). For 'lattice O' sites, the reduced coordination of the 
-    lattice O is given, which is a measure of how many neighboring atoms the lattice O has compared to a fully 
+    This tool requires get_terminations_ranking to have been called first for the candidate.
+
+    Gives a preliminary list of adsorption sites if the termination has not been relaxed yet, or a list of final
+    adsorption sites if the termination has been relaxed. Sites may be 'on-top' or 'lattice O', the latter being an
+    exposed surface oxygen atom that is part of the lattice and may act as an adsorption site. For 'on-top' sites, the
+    'element of the adsorption site' is listed, meaning the element which the adsorbate is placed on top of.
+    Additionally, a list of the closest neighboring elements of the adsorption site is given, with the distance to
+    these neighbors given as (neighbor element, distance [Å]). For 'lattice O' sites, the reduced coordination of the
+    lattice O is given, which is a measure of how many neighboring atoms the lattice O has compared to a fully
     coordinated lattice O in the bulk structure (e.g., a reduced coordination of 1 means that the lattice O atom has a
-     decreased coordination of 1.). Since this function can be called repeatedly, there is no need to write the result
-     to the canvas.
+    decreased coordination of 1.). Since this function can be called repeatedly, there is no need to write the result
+    to the canvas.
     """
     only_reduced_coord_O_sites = True # <<<--- FIXED FOR NOW...
     out_string = ''
@@ -840,6 +883,8 @@ def OER_data_analasis_v2(
     decomposition_threshold: Annotated[float, "Decomposition energy threshold for stability criteria, in units of eV/atom (pourbaix stability)"],
     solid_filter: Annotated[bool, "Whether to apply solid filter: which excludes compounds from the Pourbaix-stability calculations which are not located on the solid-phase convex hull."],
     gga_only: Annotated[bool, "Whether to use only GGA calculations (True), or include r2SCAN data via the MP-mixing scheme (False). GGA data will be applied when no r2SCAN data is available regardless."],
+    save_name: Annotated[str, "Key under which the resulting dataframe is saved in CANVAS. Use a descriptive name to distinguish between runs with different criteria."],
+    overwrite: Annotated[bool, "If True, overwrite an existing dataframe stored under the same key in CANVAS. If False (default), the tool will abort if a dataframe with that key already exists."] = False,
     # dir_of_data: Annotated[Optional[str], "Path to data directory. If None, use default data directory."] = None,
     # elements_to_exclude: Annotated[List[str], "List of element symbols to exclude from the analysis."] = [], 
     # elements_whic_must_be_included: Annotated[List[str], "List of element symbols that must be included in the analysis."] = [],
@@ -850,7 +895,7 @@ def OER_data_analasis_v2(
     Get a pandas dataframe of material entries from the AQ-GNoME database that fulfill
     given Pourbaix stability criteria under specified electrochemical conditions
     (pH and potential U vs. SHE), and save the resulting filtered dataframe to
-    CANVAS under the key 'OER_stable_entries_df'.
+    CANVAS under the key specified by `save_name`.
 
     The output dataframe contains material entries that are stable under the
     specified conditions, with columns including: MaterialId, Composition,
@@ -896,10 +941,7 @@ def OER_data_analasis_v2(
         dh.remove_entries_without_elements(elements_whic_must_be_included, True)
     # ------------------------------------------------------------------
     
-    SCS = [Stability_Criteria(pHs=pHs, Us=Us, decomposition_threshold=decomposition_threshold),
-       # Stability_Criteria(pHs=0, Us=[1.2, 1.6], decomposition_threshold=0.05),
-       # Stability_Criteria(pHs=[2, 5], Us=[0., 2], decomposition_threshold=1),
-       ]
+    SCS = [Stability_Criteria(pHs=pHs, Us=Us, decomposition_threshold=decomposition_threshold)]
     
     se = Stable_Entries(dh, SCS)
     df = se.get_stable_df()
@@ -914,19 +956,21 @@ def OER_data_analasis_v2(
     if len(df) == 0:
         return "No stable entries found based on the specified criteria and filters."
     
-    # save df
-    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
-    save_path = os.path.join(WORKING_DIRECTORY, 'stable_entries.csv')
-    df.to_csv(save_path, index=False)
-    
-    # write to canvas
-    CANVAS.write('OER_stable_entries_df', df, overwrite=True)
-    
-    # if dataframe is too long
+    # Save df:
+    # WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+    # save_path = os.path.join(WORKING_DIRECTORY, 'stable_entries.csv')
+    # df.to_csv(save_path, index=False)
+
+    # Write to canvas:
+    canvas_result = CANVAS.write(save_name, df, overwrite=overwrite)
+    if "already exists" in canvas_result:
+        return f"Aborted: {canvas_result} Use overwrite=True to overwrite."
+
+    # If dataframe is too long:
     if len(df) > 20:
-        return f"Stable entries data analysis completed. Results saved to {save_path}. The dataframe has {len(df)} entries, too long to display here. Please check the dataframe in canvas with key 'OER_stable_entries_df' using read dataframe tool."
+        return f"Stable entries data analysis completed, yielding {len(df)} entries. The dataframe has {len(df)} entries, too long to display here. Please check the dataframe in canvas with key '{save_name}' using browse_df tool."
     else:
-        return f"Stable entries data analysis completed. Results saved to {save_path}. Below shows the dataframe with row index: \n{df.to_string(index=True)}. the same dataframe is also saved in canvas with key 'OER_stable_entries_df' and can be accessed using read dataframe tool."
+        return f"Stable entries data analysis completed, yielding {len(df)} entries. Below shows the dataframe with row index: \n{df.to_string(index=True)}. The same dataframe is also saved in canvas with key '{save_name}' and can be accessed using browse_df tool."
 
 
 @tool
