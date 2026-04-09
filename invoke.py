@@ -199,7 +199,8 @@ if __name__ == "__main__":
 
     Screening strategy:
     Use literature searches to inform your candidate selection and hypothesis formation. Record your hypotheses
-    and major reasoning behind each screening decision on the CANVAS as you go. This will support your final report.
+    and major reasoning behind each high-level screening strategy on the CANVAS and detaild resoning with respect to 
+    candidate, terminatino and site selection in the EXPLOG as you go. This will support your final report.
     Design a multi-round screening strategy, learning from each round and applying insights to new candidates,
     surfaces/terminations, or active sites if and when possible.
     Prioritise O adsorption calculations broadly across many candidates. Use the resulting G(O) values to identify the
@@ -313,7 +314,7 @@ if __name__ == "__main__":
             initialize_database(db_file)
 
     EXPLOG.init(Path(WORKING_DIRECTORY)/"TEMP_vasp_calcs",
-                "test", 
+                "test", # TODO <<<--- SET MODE...
                 reject_if_failed_exists = True,
                 require_relaxed_o_for_oh = True
                 )
@@ -350,7 +351,7 @@ if __name__ == "__main__":
 
         if overwrite:
             inputs = {
-                "inputs": f"{revised_message}",
+                "inputs": f"{minimal_test_message}", # TODO <<<---
                 "plan": [],
                 "past_steps": [],
                 # NOTE: init boss answers state explicitly...
