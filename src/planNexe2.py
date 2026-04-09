@@ -310,6 +310,13 @@ def boss_node(state, agent, name):
     Please review the supervisor's draft final answer and decide whether to approve it or send it back for revision.
     """
 
+    # Pritn the message to the boss:
+    if var.my_SAVE_DIALOGUE:
+        with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+            f.write(bossMessage)
+            f.write("\n")
+
+
     for agent_response in agent.stream(
         {"messages": [("user", bossMessage)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
     ):
