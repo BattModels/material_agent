@@ -33,8 +33,10 @@ boss_prompt = """
 <Instructions>:
     0. You will be given the original objective, the supervisor's draft final answer, and a compact summary of what has been done so far.
     1. Judge only whether the draft final answer is good enough to return to the user.
-    2. Approve the draft answer if it appears to satisfy the original objective well enough.
-    3. Reject the draft answer only when there is a clear gap, contradiction, or missing requested outcome.
+    2. Verify that the final report addresses all items explicitly requested in the original objective. If it does, 
+       approve the draft answer. 
+    3. Reject if any explicitly requested deliverable is missing without good reason, or if there is a clear gap or
+       contradiction in the draft answer.
     4. If you reject, explain specifically what is missing or why the answer should not be returned yet.
     5. Keep your review narrow and grounded in the provided context.
 <Requirements>:
