@@ -178,6 +178,62 @@ if __name__ == "__main__":
     You have a maximum of 4 hours to complete the entire study.
     """
 
+    # NOTE NOTE NOTE TODO -- place holder for time: XXXXXX
+    revised_message_v2 = """
+    Please conduct an acidic OER screening study to identify the best catalytic candidate for the oxygen evolution
+    reaction (OER) in the Google DeepMind GNoME database. 
+    You have a maximum of XXXXXX hours/days to complete the entire study and make your final report.
+    Adjust your plan as needed to make full use of the available time. Specifically, if the study is progressing
+    faster than expected, extend the scope of the study; or if time is running short, narrow the focus to ensure the
+    study is completed with overpotential computed for key candidates and a final report is produced.
+    Consider catalytic activity, cost/availability, and stability under operating conditions when evaluating candidates.
+    Toxicity of the constituent elements should also be considered where possible, though note that no toxicity data is
+    available in the dataset, hence this assessment will be limited to qualitative reasoning based on literature.
+
+    Dataset filtering:
+    The AQ-GNoME database is available, which enables filtering based on aqueous stability across pH and
+    electrochemical potential (V vs. SHE). As this is an acidic study, filter for materials that are stable under
+    acidic conditions. Choose an appropriate Pourbaix decomposition threshold for the filtering.
+    To make best use of your computational resources, you should consider your filtering criteria and
+    relevant literature when making a candidate selection.
+
+    Screening strategy:
+    Use literature searches to inform your candidate selection and hypothesis formation. Record your hypotheses
+    and major reasoning behind each screening decision on the CANVAS as you go. This will support your final report.
+    Design a multi-round screening strategy, learning from each round and applying insights to new candidates,
+    surfaces/terminations, or active sites if and when possible.
+    Prioritise O adsorption calculations broadly across many candidates. Use the resulting G(O) values to identify the
+    most promising candidates and sites before submitting OH adsorption calculations. Avoid submitting OH adsorption
+    jobs for sites where G(O) is far from the ideal value of 2.46 eV, as such sites will not yield competitive
+    overpotentials regardless of G(OH).
+
+    HPC usage:
+    Try to keep the HPC queue occupied with meaningful jobs, to make sure you make the most of the available
+    resources. Do not wait for all jobs in one phase to complete before submitting new ones. Instead, submit new
+    calculations opportunistically if you have no queued jobs. Periodically check the EXPLOG for completed results and
+    use these to guide the next submissions, rather than sticking strictly to one phase at a time.
+
+    Final report:
+    At the end of the study, produce an extensive report structured as a mini scientific paper. Every conclusion and
+    claim must be directly supported by concrete results from the study — cite specific candidates, sites, terminations,
+    G(O), G(OH), and overpotential values explicitly. Be critical of your conclusions and assumptions: acknowledge
+    limitations, uncertainties, and cases where the data is inconclusive. Do not make claims that are not backed by
+    data. The report should include:
+    - A summary of the screening strategy and how it evolved.
+    - The best candidates identified, with their G(O), G(OH), ideal overpotential, and scaling-relation overpotential.
+    - A comparison of the best candidates with available literature.
+    - What was learned, what worked, and what did not.
+    - Which hypotheses were confirmed or rejected, with explicit reference to the supporting data.
+    - Any trends worth noting across the dataset, even if these trends do not lead to competitive candidates.
+    - Any recommendations for future studies or next steps based on the findings and limitations of the current study.
+    """
+
+    minimal_test_message = """
+    Please conduct a minimal OER screening study for testing purposes.
+    Select 1-2 candidate materials from the AQ-GNoME database and study them end-to-end:
+    filter the dataset, enter candidates into the experiment log, run bulk relaxation, surface relaxation,
+    and at least one O and OH adsorption calculation. Report what you find.
+    """
 
     config = load_config(os.path.join('./config', "default.yaml"))
     # check_config(config)
