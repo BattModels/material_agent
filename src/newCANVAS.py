@@ -167,7 +167,7 @@ class myCANVAS:
 
         if entry.entry_type == "note":
             # maybe not as dramatic
-            return f"below is your note about {key}:\n{entry.value}\n Notes are memory only. Final numerical claims must come from trusted numerical_result entries."
+            return f"below is your note about {key}:\n{entry.value}\n Notes are memory only. Final numerical claims must come from numerical_result entries."
 
         if entry.entry_type == "numerical_result":
             # just say it's verified and trusted
@@ -224,7 +224,7 @@ class myCANVAS:
         """
         assert not numerical_result or isinstance(value, (int, float)), "For numerical_result=True, value must be int or float."
         
-        result_id = _new_id("num")
+        result_id = _new_id("")
         if numerical_result:
             artifact = NumericArtifact(
                 result_id=result_id,
@@ -233,6 +233,7 @@ class myCANVAS:
                 parent_result_ids=parent_result_ids or [],
                 metadata=metadata or {},
             )
+            # add duplication check
             self.result_registry[result_id] = artifact
             self._persist()
             return result_id

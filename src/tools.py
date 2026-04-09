@@ -62,21 +62,29 @@ def read_my_canvas(key: Annotated[str, "key"]):
 @tool
 def write_my_canvas(key: Annotated[str, "key"],
                     value: Annotated[Any, "value"],
-                    entry_type: Annotated[Literal["note", "numerical_result"], "entry type. 'note' is for general note or text, not allowed to be use to generate final report. 'numerical_result' is verifiable with tools output and will be verified. Must provide source_result_id if entry_type is 'numerical_result'."],
-                    overwrite: Annotated[bool, "True to overwrite if key already exist. only set to True if you are certain you want to overwrite the existing value"] = False,
-                    source_result_id: Annotated[Optional[str], "the result_id of the tool output that this numerical canvas entry is based on."] = None
-                    ):
+                    overwrite: Annotated[bool, "True to overwrite if key already exist. only set to True if you are certain you want to overwrite the existing value"] = False):
     """Write a value to the working canvas. If the key already exists, it will not overwrite unless specified."""
     # write a value to myCANVAS given a key and a value
-    if entry_type == "numerical_result":
-        assert source_result_id is not None, "source_result_id must be provided for numerical_result entry type."
-    return CANVAS.write(
-        key=key,
-        value=value,
-        entry_type=entry_type,
-        overwrite=overwrite,
-        source_result_id=source_result_id
-        )
+    return CANVAS.write(key, value, overwrite)
+
+# @tool
+# def write_my_canvas(key: Annotated[str, "key"],
+#                     value: Annotated[Any, "value"],
+#                     entry_type: Annotated[Literal["note", "numerical_result"], "entry type. 'note' is for general note or text, not allowed to be use to generate final report. 'numerical_result' is verifiable with tools output and will be verified. Must provide source_result_id if entry_type is 'numerical_result'."],
+#                     overwrite: Annotated[bool, "True to overwrite if key already exist. only set to True if you are certain you want to overwrite the existing value"] = False,
+#                     source_result_id: Annotated[Optional[str], "the result_id of the tool output that this numerical canvas entry is based on."] = None
+#                     ):
+#     """Write a value to the working canvas. If the key already exists, it will not overwrite unless specified."""
+#     # write a value to myCANVAS given a key and a value
+#     if entry_type == "numerical_result":
+#         assert source_result_id is not None, "source_result_id must be provided for numerical_result entry type."
+#     return CANVAS.write(
+#         key=key,
+#         value=value,
+#         entry_type=entry_type,
+#         overwrite=overwrite,
+#         source_result_id=source_result_id
+#         )
     
 # @tool
 # def register_parameter_choice_by_LLM_agent(
@@ -122,7 +130,7 @@ def extract_numeric_from_tool_output(
         str: A message indicating the result of the extraction and verification process.
     """
     abs_tol = 1e-8,
-    record = CANVAS.get_other_artifact(source_tool_call_id)
+    record = CANVAS.get_artifact(source_tool_call_id)
     if record is None:
         return (
             f"EXTRACTION_FAILED: source_tool_call_id='{source_tool_call_id}' "
@@ -440,62 +448,6 @@ def get_ase_atoms_property(
     }, indent=2)
 
 
-def get_kpoints(atoms, kspacing: float) -> list:
-    """Returns the kpoints of a given ase atoms object and specific kspacing."""
-    cell = atoms.cell
-    # ## Check input kspacing is valid
-    # if kspacing <= 0:
-    #     return "Invalid kspacing, should be greater than 0"
-    # if kspacing > 0.5:
-    #     return "Too Coarse kspacing, should be less than 0.5"
-    ## Calculate the kpoints
-    kpoints = [
-            2 * ((np.ceil(2 * np.pi / np.linalg.norm(ii) / kspacing).astype(int)) // 2 + 1) for ii in cell
-        ]
-    
-    ## Check if kpoints is even
-    for i in range(len(kpoints)):
-        if kpoints[i] % 2 == 0:
-            if kpoints[i] > 1:
-                kpoints[i] -= 1
-            else:
-                kpoints[i] += 1
-    # time.sleep(60)
-    return kpoints
-
-@tool
-def get_files_in_dir(dir_path: Annotated[str, "Directory path"],
-                     file_extension: Annotated[str, "File extension to filter by. If you want all files and folders, use ''"] = ''
-                     ) -> list:
-    """Returns a list of files in a given directory with a specific file extension."""
-    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
-    files = ""
-    # list all files in the directory
-    for file in os.listdir(os.path.join(WORKING_DIRECTORY, dir_path)):
-        # check if the file has the specified extension
-        if file.endswith(file_extension):
-            files += file + "\n"
-    # time.sleep(60)
-    return files
-
-@tool
-def dummy_structure(concentration: float,
-                    scale_factor: float) -> AtomsDict:
-    """Returns a crystal structure with a given concentration of Cu atoms and the rest Au atoms, and a scale factor for the cell size."""  
-    atoms = FaceCenteredCubic("Cu", latticeconstant=3.58)
-    atoms *= (1,1,2)
-    # Calculate the number of Cu atoms to replace
-    num_atoms_to_replace = int((1.0-concentration) * len(atoms))
-    # Randomly select indices to replace
-    indices_to_replace = np.random.choice(len(atoms), num_atoms_to_replace, replace=False)
-    atoms.numbers[indices_to_replace] = 79
-    # scaleFactor = (1.0 - concentration) * (6.5 - 3.58) / 3.58 + 1
-    # scaleFactor = 1.0
-    atoms.set_cell(atoms.cell * scale_factor, scale_atoms=True)
-    # time.sleep(60)
-    return atoms.todict()
-
-
 @tool
 def init_structure_data(
     element: Annotated[str, "Element symbol"],
@@ -519,8 +471,17 @@ def init_structure_data(
     # save the atoms into working dir
     saveDir = os.path.join(WORKING_DIRECTORY, f"{element}-{lattice}.xyz")
     write(saveDir, atoms)
+    result_id = CANVAS.register_tool_output(
+        tool_name="init_structure_data",
+        value=saveDir,
+        description="Path of the saved initial structure data file.",
+        parent_result_ids=[],
+        metadata={},
+        # include modification check, to ensure validity of the actualy file content
+    )
+    
     # time.sleep(60)
-    return f"Created atoms saved in {saveDir}"
+    return f"Created atoms saved in '{saveDir}'. ID={result_id}"
 
 @tool
 def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"],
@@ -574,6 +535,19 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
     
     mySites_str = output_capture.getvalue()
     
+    if supercell_dim_z_ref != "" and n_fixed_layers_ref != "" and vacuum_ref != "":
+        ids = {}
+        for k, v in mySites.items():
+            ids[k] = CANVAS.register_tool_output(
+                tool_name="generateSurface_and_getPossibleSite",
+                value=v,
+                description=f"Adsorption {k} site",
+                parent_result_ids=[supercell_dim_z_ref, n_fixed_layers_ref, vacuum_ref],
+                metadata={}
+            )
+    
+    
+    
     CANVAS.write('Possible_CO_site_on_Pt_surface', mySites)
     
     absPath = surface_dict[species][f'{crystal_structures}{facets}']['traj_file_path']
@@ -610,7 +584,9 @@ def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure
                     adsorbatePath: Annotated[str, "Path to the adsorbate structure"],
                     mySites: Annotated[List[List[float]], "List of adsorption sites you want to put adsorbates on, e.g. [[x1, y1], [x2, y2], ...]"],
                     rotations: Annotated[List[Tuple[float, str]], "List of rotations for the ith adsorbates, e.g. [[90.0, 'x'], [180.0, 'y'], ...]"],
-                    surfaceWithAdsorbateFileName: Annotated[str, "Name (not a path) of the surface adsorbated with adsorbate to be saved in traj format"]
+                    surfaceWithAdsorbateFileName: Annotated[str, "Name (not a path) of the surface adsorbated with adsorbate to be saved in traj format"],
+                    # why how what effect
+                    mySites_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of adsorption sites. If not provided, the result will not be registered and you can't use the result to proceed"] = "",
                     ):
     """
     Add adsorbate to the surface structure and save it.
