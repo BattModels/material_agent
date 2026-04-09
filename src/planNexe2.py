@@ -2,7 +2,7 @@ from langchain.agents.structured_output import ToolStrategy
 from langchain.agents.middleware import ToolCallLimitMiddleware, AgentMiddleware, ModelRequest, wrap_tool_call
 from langchain.agents import create_agent
 
-from typing import Annotated, Sequence, TypedDict,Literal, List, Dict, Tuple, Union
+from typing import Annotated, Sequence, TypedDict,Literal, List, Dict, Tuple, Union, Any
 import functools
 import pandas as pd
 import os
@@ -53,7 +53,7 @@ class myPastStep(BaseModel):
     agent: str = Field(
         description=f"Agent to perform the step. Should be one of {members}."
     )
-    timeStamp: str = Field(description="The time when the step is completed.")
+    timeStamp: Any = Field(description="The time when the step is completed.")
     timeSpent: str = Field(description="The time spent on this step.")
 
 class Plan(BaseModel):
@@ -294,7 +294,7 @@ def boss_node(state, agent, name):
     #         f.write(str(state))
     #         f.write("\n")
             
-    old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step} [total time elapsed since project start: {str(step.timeStamp).split(".")[0]}, time spent on step {i+1}: {step.timeSpent}]" for i, step in enumerate(state["past_steps"]))
+    old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step} [total time elapsed since project start: {str(step.timeStamp).split('.')[0]}, time spent on step {i+1}: {step.timeSpent}]" for i, step in enumerate(state["past_steps"]))
     bossMessage = f"""
     Current time: {timeElapsed}.
 
@@ -371,7 +371,7 @@ def supervisor_chain_node(state, agent, name):
     plan_str = "\n".join(f"{i+1}. {step.step}" for i, step in enumerate(plan))
     # task_formatted = f"""For the following plan:
     # {plan_str}\n\nYou are tasked with executing step {1}, {task}."""
-    old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step} [total time elapsed since project start: {str(step.timeStamp).split(".")[0]}, time spent on step {i+1}: {step.timeSpent}]" for i, step in enumerate(state["past_steps"]))
+    old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step} [total time elapsed since project start: {str(step.timeStamp).split('.')[0]}, time spent on step {i+1}: {step.timeSpent}]" for i, step in enumerate(state["past_steps"]))
 
     current_boss_feedback = state["boss_feedback"].strip() # Remove leading/trailing whitespaces
     if current_boss_feedback == "":
@@ -476,7 +476,7 @@ def worker_agent_node(state, agent, name):
     task = plan[0]
 #     task_formatted = f"""For the following plan:
 # {plan_str}\n\nYou are tasked with executing step {1}, {task}."""
-    old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step} [total time elapsed since project start: {str(step.timeStamp).split(".")[0]}, time spent on step {i+1}: {step.timeSpent}]" for i, step in enumerate(state["past_steps"]))
+    old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step} [total time elapsed since project start: {str(step.timeStamp).split('.')[0]}, time spent on step {i+1}: {step.timeSpent}]" for i, step in enumerate(state["past_steps"]))
     task_formatted = f"""
 Here are what has been done so far:
 {old_tasks_string}

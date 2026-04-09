@@ -181,12 +181,12 @@ def wait_for_update(
             hWaited = int((time.time() - waitStartTime)/3600)
             mWaited = int(((time.time() - waitStartTime)%3600)/60)
 
-            outText = f"Current time is {timeElapsed}, time waited: {hWaited}hours and {mWaited} minutes.\n Here are the updates while you are waiting: "
+            outText = f"Total time elapsed since project start {timeElapsed}, time waited: {hWaited}hours and {mWaited} minutes.\n Here are the updates while you are waiting: "
             for key, value in tmpUpdate.items():
                 outText += f"\nprocess_id {key} status is now {value}."
             return outText
         elif time.time() - var.startTime > patience*60:
-            return f"Current time is {timeElapsed}, you have been waiting for {patience} minutes with no update in the EXPLOG. You may want to check the EXPLOG and see if there is anything you can do to move the study forward."
+            return f"Total time elapsed since project start {timeElapsed}, you have been waiting for {patience} minutes with no update in the EXPLOG. You may want to check the EXPLOG and see if there is anything you can do to move the study forward."
                        
 @tool
 def inspect_explog():
