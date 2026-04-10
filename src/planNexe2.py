@@ -114,6 +114,7 @@ class PlanExecute(TypedDict):
     canvas: Dict
     explog_candidates: pd.DataFrame
     explog_processes: pd.DataFrame
+    time: float
     next: str
 
 
@@ -189,13 +190,17 @@ def prevent_redundant_polling(request, handler):
     
     print(f"has repeated {len(recent_same)} times in the last 60 seconds for the same args and result")
     print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
-
-    if len(recent_same) >= 2 and len(recent_same) < 4:
+    
+    complainPatient = 4
+    goWildPatient = 6
+    
+    if len(recent_same) >= complainPatient and len(recent_same) < goWildPatient:
         toolMsg = f"""
         You have called {tool_name} with the same arguments {args} and got the same result {content} for {len(recent_same)} times in the last 60 seconds.
         Please do not call {tool_name} again right now. You could:
             1) Move on to other tasks and come back to this later.
             2) Call wait_for_update and wait for next dft job to finish if you have nothing else to do
+        You have a grace period of {goWildPatient - len(recent_same)} more calls with the same args and result before the entire system halts indefinitely to prevent damage. Please use this grace period wisely to avoid halting the system.
         """
         
         return ToolMessage(
@@ -203,9 +208,9 @@ def prevent_redundant_polling(request, handler):
             tool_call_id=request.tool_call["id"],
         )
         
-    if len(recent_same) >= 4:
+    if len(recent_same) >= goWildPatient:
         print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-        print(f"TOOL WITH NAME {tool_name} AND ARGS {args} HAS BEEN CALLED MORE THAN 5 TIMES WITH THE SAME RESULT IN THE LAST 60 SECONDS. PLEASE CHECK IF THERE IS A BUG IN THE MODEL OR THE TOOL IMPLEMENTATION CAUSING THIS ISSUE.")
+        print(f"TOOL WITH NAME {tool_name} AND ARGS {args} HAS BEEN CALLED MORE THAN {goWildPatient} TIMES WITH THE SAME RESULT IN THE LAST 60 SECONDS. PLEASE CHECK IF THERE IS A BUG IN THE MODEL OR THE TOOL IMPLEMENTATION CAUSING THIS ISSUE.")
         print("STUDY HALTED TO PREVENT POTENTIAL DAMAGE. PLEASE FIX THE ISSUE AND RESUME.")
         print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
         # time.sleep(99999)
@@ -287,6 +292,11 @@ def boss_node(state, agent, name):
     if var.my_SAVE_DIALOGUE:
         with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
             f.write(f"{name} is processing!!!!! Current time: {timeElapsed}.\n")
+            
+    if var.my_SAVE_DIALOGUE:
+        with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+            f.write(bossMessage)
+            f.write("\n")
     # can't print state anymore because it now contains canvas and explog, and printing them will cause too much output
     # print(state)
     # if var.my_SAVE_DIALOGUE:
@@ -401,7 +411,7 @@ def supervisor_chain_node(state, agent, name):
         Your previous draft final answer has been reviewed and rejected by the boss and received the following feedback:
         {current_boss_feedback}
 
-        Please update the plan accordingly.
+        Please inspect and extract related information from CANVAS and EXPLOG, then update the plan accordingly.
         """
     else:
         supervisorMessage =  f"""
@@ -417,7 +427,7 @@ def supervisor_chain_node(state, agent, name):
         this is what has been done:
         {old_tasks_string}
 
-        Please update the plan accordingly.
+        Please inspect and extract related information from CANVAS and EXPLOG, then update the plan accordingly.
         """
         
     for agent_response in agent.stream(
@@ -516,8 +526,8 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
     # )
     structured_response = agent_response['structured_response']
     
-    timeElapsed = timedelta(seconds= time.time() - var.startTime)
-    timeElapsedStr = str(timeElapsed).split(".")[0] # Remove microseconds for cleaner display
+    timeElapsed_tmp = time.time() - var.startTime
+    timeElapsed = timedelta(seconds=timeElapsed_tmp)
     # state["past_steps"].append((task, agent_response["messages"][-1].content))
     if len(state["past_steps"]) > 0:
         prevTimeStamp = state["past_steps"][-1].timeStamp
@@ -539,6 +549,7 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
         "canvas":CANVAS.canvas,
         "explog_candidates": EXPLOG.relational_frame.candidates.df,
         "explog_processes": EXPLOG.relational_frame.processes.df,
+        "time": timeElapsed_tmp,
     }
     
 def whos_next(state):

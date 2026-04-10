@@ -37,8 +37,8 @@ from gnome_dreams_oer_screening.explog.explog import EXPLOG
 from importlib.metadata import version
 from packaging.version import Version
 
-if Version(version("GNoME_DREAMS_OER_screening")) < Version("0.5.4"):
-    raise RuntimeError("GNoME_DREAMS_OER_screening>=0.5.4 is required")
+# if Version(version("GNoME_DREAMS_OER_screening")) < Version("0.5.4"):
+#     raise RuntimeError("GNoME_DREAMS_OER_screening>=0.5.4 is required")
 # --- End of version check -------------------------------------------------------------------------
 
 if __name__ == "__main__":
@@ -177,6 +177,20 @@ if __name__ == "__main__":
 
     You have a maximum of 4 hours to complete the entire study.
     """
+    
+    revised_message_v3 = """
+    Please conduct an acidic OER screening study to identify the best catalytic candidate for the oxygen evolution
+    reaction (OER) in the Google DeepMind GNoME database. 
+    You have a maximum of 24 hours to complete the entire study and make your final report.
+    """
+    
+    # removed info below (all other info has been integrated into the system prompt):
+    # Consider catalytic activity, cost/availability, and stability under operating conditions when evaluating candidates. -> repetitive in the system prompt
+    # Choose an appropriate Pourbaix decomposition threshold for the filtering. -> it need to choose all filtering parameters appropriately, not just pourbaix decomposition threshold.
+    # To make best use of your computational resources, you should consider your filtering criteria and relevant literature when making a candidate selection. -> I don't really see how this benifits/guide the agent. It already select candidates based on literature result
+    # Use literature searches to inform your candidate selection and hypothesis formation. -> repetitive to requirement point 2
+    # Prioritise O adsorption calculations broadly across many candidates. Use the resulting G(O) values to identify the most promising candidates and sites before submitting OH adsorption calculations. -> I added point 13. maybe we don't need this line anymore.
+
 
     # NOTE NOTE NOTE TODO -- place holder for time: XXXXXX
     revised_message_v2 = """
@@ -235,7 +249,8 @@ if __name__ == "__main__":
     filter the dataset, enter candidates into the experiment log, run bulk relaxation, surface relaxation,
     and at least one O and OH adsorption calculation. Report what you find.
     """
-
+    
+    # revised_message = "wait for 1 minutes. repeat 3 times"
     config = load_config(os.path.join('./config', "default.yaml"))
     # check_config(config)
 
@@ -351,7 +366,7 @@ if __name__ == "__main__":
 
         if overwrite:
             inputs = {
-                "inputs": f"{minimal_test_message}", # TODO <<<---
+                "inputs": f"{revised_message_v3}",
                 "plan": [],
                 "past_steps": [],
                 # NOTE: init boss answers state explicitly...
@@ -360,7 +375,8 @@ if __name__ == "__main__":
                 "response": "",
                 "canvas": CANVAS.canvas,
                 "explog_candidates": EXPLOG.relational_frame.candidates.df,
-                "explog_processes": EXPLOG.relational_frame.processes.df
+                "explog_processes": EXPLOG.relational_frame.processes.df,
+                "time": 0
             }
             llm_config = llm_config
         else:
@@ -384,6 +400,8 @@ if __name__ == "__main__":
             
 
             inputs = None
+            var.startTime = time.time() - snap.values["time"]
+            print(f"Time since the start of the session: {time.time() - var.startTime} seconds")
             llm_config = snap.config
             CANVAS.canvas = snap.values["canvas"]
             CANVAS.print()

@@ -132,7 +132,6 @@ def wait_for_update(
     the wait, along with the time waited and total time elapsed. If the timeout is reached
     with no updates, returns a timeout message prompting further action.
     """
-
     statusList = EXPLOG.relational_frame.processes.df["status"].tolist()
     if 'pending' not in statusList and 'running' not in statusList:
         return "No pending or running jobs found in the EXPLOG. Please check the EXPLOG and see if there is anything you can do to move the study forward, instead of waiting for updates."
@@ -466,9 +465,10 @@ def read_explog(
             
             new_site_info_row = site_info_row.copy()
             rows.append(new_site_info_row)
-                        
-    final_site_info = pd.concat(rows, ignore_index=True)
-    answer += f"\nThe adsorption site information is:\n{final_site_info.to_string}\n"
+    
+    if len(rows) > 0:                    
+        final_site_info = pd.concat(rows, ignore_index=True)
+        answer += f"\nThe adsorption site information is:\n{final_site_info.to_string}\n"
 
     return answer
 
