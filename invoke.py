@@ -37,8 +37,8 @@ from gnome_dreams_oer_screening.explog.explog import EXPLOG
 from importlib.metadata import version
 from packaging.version import Version
 
-# if Version(version("GNoME_DREAMS_OER_screening")) < Version("0.5.4"):
-#     raise RuntimeError("GNoME_DREAMS_OER_screening>=0.5.4 is required")
+if Version(version("GNoME_DREAMS_OER_screening")) < Version("0.5.4"):
+    raise RuntimeError("GNoME_DREAMS_OER_screening>=0.5.4 is required")
 # --- End of version check -------------------------------------------------------------------------
 
 if __name__ == "__main__":
