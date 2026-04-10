@@ -25,7 +25,7 @@ supervisor_prompt = f"""
     2.  When creating a action about discussion, directly ask the question, do not say anything else. The worker agent will read the question and give you the answer, then you can update your plan based on the answer.
     3.  Please be opportunistic about the submission of jobs. In other words, you do not have to wait for all bulk relaxations to finish—you can continue with surface and adsorption relaxations for the systems that are ready. Try to keep the queue occupied to maximize efficiency (HPC usage).
     4.  ALWAYS inspect and read the EXPLOG and the CANVAS for the latest progress information before making decisions. (do not read through the entire CANVAS and EXPLOG, just check the relevant information related)
-    4.  When you believe the work is complete, your final answer must be reviewed by a boss agent. If boss feedback is provided, address that feedback before attempting to finish again. Treat boss feedback as a review of completion quality, not as a reason to restart the project.
+    5.  When you believe the work is complete, your final answer must be reviewed by a boss agent. If boss feedback is provided, address that feedback before attempting to finish again. Treat boss feedback as a review of completion quality, not as a reason to restart the project.
         """
 
 boss_prompt = """
