@@ -11,6 +11,7 @@ from ase import Atoms, Atom
 from langchain.tools import tool
 from langchain_anthropic import ChatAnthropic
 # from langchain_openai import AzureChatOpenAI
+import math
 import os 
 from typing import Annotated, Dict, Literal, Optional, Sequence, Tuple, Any
 import numpy as np
@@ -46,6 +47,116 @@ from src import var
 ##################################################################################################
 ##                                        Common tools                                          ##
 ##################################################################################################
+
+_ALLOWED_FUNCS = {
+    "abs": abs,
+    "round": round,
+    "min": min,
+    "max": max,
+    "sum": sum,
+    "pow": pow,
+    "sqrt": math.sqrt,
+    "exp": math.exp,
+    "log": math.log,
+    "log10": math.log10,
+    "sin": math.sin,
+    "cos": math.cos,
+    "tan": math.tan,
+    "asin": math.asin,
+    "acos": math.acos,
+    "atan": math.atan,
+    "mean": lambda *x: sum(x) / len(x),
+}
+
+
+_ALLOWED_NODES = (
+    ast.Expression,
+    ast.BinOp,
+    ast.UnaryOp,
+    ast.Call,
+    ast.Name,
+    ast.Load,
+    ast.Constant,
+    ast.Add,
+    ast.Sub,
+    ast.Mult,
+    ast.Div,
+    ast.Pow,
+    ast.Mod,
+    ast.FloorDiv,
+    ast.UAdd,
+    ast.USub,
+    ast.Tuple,
+    ast.List,
+)
+
+
+def _safe_eval(expr: str, variables: dict[str, float]) -> float:
+    tree = ast.parse(expr, mode="eval")
+
+    for node in ast.walk(tree):
+        if not isinstance(node, _ALLOWED_NODES):
+            raise ValueError(f"Unsupported syntax: {type(node).__name__}")
+
+        if isinstance(node, ast.Call):
+            if not isinstance(node.func, ast.Name) or node.func.id not in _ALLOWED_FUNCS:
+                raise ValueError(f"Function not allowed: {ast.dump(node.func)}")
+
+        if isinstance(node, ast.Name):
+            if node.id not in variables and node.id not in _ALLOWED_FUNCS:
+                raise ValueError(f"Unknown variable: {node.id}")
+
+    return float(eval(compile(tree, "<expr>", "eval"), {"__builtins__": {}}, {**_ALLOWED_FUNCS, **variables}))
+
+
+@tool
+def math_expression_tool(
+    values: Annotated[
+        List[Tuple[str, float]],
+        "List of (ref_result_id, value) pairs. They will be mapped in order to x0, x1, x2, ... When you use tool to obtain a value, you will be given the ref_result_id."
+    ],
+    expression: Annotated[
+        str,
+        "Math expression using x0, x1, x2, ... Example: '(x0 - x1) / x2' or 'sqrt(x0**2 + x1**2)'"
+    ],
+    reasons: Annotated[str, "intent behind using this math expression and the choice of values. How did you obtained the values. The keys should be: 'values', 'expression'."],
+) -> str:
+    """
+    Evaluate a math expression on arbitrary input floats.
+    Inputs are mapped by order to x0, x1, x2, ...
+    """
+    if not values:
+        return "No values were provided."
+    
+    # verify each value using the corresponding ref_result_id
+    for ref_id, value in values:
+        ok, msg = CANVAS.verify_artifact(value, ref_id)
+        if not ok:
+            return msg
+
+    variables = {f"x{i}": float(value) for i, (_, value) in enumerate(values)}
+    mapping = {f"x{i}": ref_id for i, (ref_id, _) in enumerate(values)}
+
+    try:
+        result = _safe_eval(expression, variables)
+        id = CANVAS.register_tool_output(
+            tool_name="math_expression_tool",
+            args={
+                "values": values,
+                "expression": expression,
+            },
+            value=result,
+            description=f"Result of evaluating expression '{expression}' with mapping {mapping}",
+            reasons=reasons,
+            parent_result_ids=[ref_id for ref_id, _ in values],
+            metadata={
+                "mapping": mapping,
+            },
+        )
+        return f"Result: {result}. Result_ID={id}."
+    except Exception as e:
+        return f"Failed to evaluate expression: {e}"
+
 @tool
 def inspect_my_canvas():
     """Inspect the working canvas to get available keys"""
@@ -134,10 +245,10 @@ def extract_numeric_from_tool_output(
     if record is None:
         return (
             f"EXTRACTION_FAILED: source_tool_call_id='{source_tool_call_id}' "
-            "was not found in the tool output registry. Please check the canvas and try again"
+            "was not found in the tool output registry. Please check the canvas and try again, or regenerate the source result with corresponding tool"
         )
         
-    raw_text = record.raw_output
+    raw_text = record.value
 
     # Search space
     snippet_spans = util_find_all_substring_spans(raw_text, evidence_snippet)
@@ -194,17 +305,18 @@ def extract_numeric_from_tool_output(
 
     result_id = CANVAS.register_tool_output(
         tool_name="extract_numeric_from_tool_output",
-        value=float(value),
-        numerical_result=True,
-        parent_result_ids=[source_tool_call_id],
-        metadata={
+        args={
             "source_tool_call_id": source_tool_call_id,
-            "source_tool_name": record.tool_name,
-            "source_tool_args": record.args,
-            "matched_text": matched_text,
-            "char_span": [chosen["start"], chosen["end"]],
+            "value": value,
             "evidence_snippet": evidence_snippet,
             "description": description,
+        },
+        value=value,
+        description=description,
+        parent_result_ids=[source_tool_call_id],
+        metadata={
+            "matched_text": matched_text,
+            "matched_span": [chosen["start"], chosen["end"]],
         },
     )
 
@@ -331,8 +443,20 @@ def inspect_ase_atoms(
                 _safe_call(atoms.get_magnetic_moments, "magnetic_moments")
             ),
         }
+        
+    result = json.dumps(result, indent=2)
+    id = CANVAS.register_tool_output(
+        tool_name="inspect_ase_atoms",
+        args={
+            "atomsFilename": atomsFilename,
+        },
+        value=result,
+        description=f"Inspection result of ASE Atoms object from {atomsFilename}",
+        parent_result_ids=[],
+        metadata={},
+    )
 
-    return json.dumps(result, indent=2)
+    return f"{result}\n\nThe above result is registered as an entire string with id={id}. Please extract and register specific information you need."
 
 
 @tool
@@ -441,11 +565,26 @@ def get_ase_atoms_property(
         }
 
     value = _safe_call(property_map[key], key)
-    return json.dumps({
+    
+    result = json.dumps({
         "ok": True,
         "property_name": key,
         "value": _to_serializable(value),
     }, indent=2)
+    
+    id = CANVAS.register_tool_output(
+        tool_name="get_ase_atoms_property",
+        args={
+            "atomsFilename": atomsFilename,
+            "property_name": property_name,
+        },
+        value=value,
+        description=f"{key} property extracted from ASE Atoms object from {atomsFilename}",
+        parent_result_ids=[],
+        metadata={},
+    )
+    
+    return f"Extracted result {result}.\nThe above result is registered as an entire string with id={id}. Please extract and register specific information you need."
 
 
 @tool
@@ -453,6 +592,7 @@ def init_structure_data(
     element: Annotated[str, "Element symbol"],
     lattice: Annotated[str, "Lattice type. Must be one of sc, fcc, bcc, tetragonal, bct, hcp, rhombohedral, orthorhombic, mcl, diamond, zincblende, rocksalt, cesiumchloride, fluorite or wurtzite."],
     a: Annotated[float, "Lattice constant"],
+    reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'element', 'lattice', 'a', 'b', 'c'."],
     b: Annotated[float, "Lattice constant. If only a and b is given, b will be interpreted as c instead."] = None,
     c: Annotated[float, "Lattice constant"] = None,
 ) -> Annotated[str, "Path of the saved initial structure data file."]:
@@ -473,15 +613,23 @@ def init_structure_data(
     write(saveDir, atoms)
     result_id = CANVAS.register_tool_output(
         tool_name="init_structure_data",
+        args={
+            "element": element,
+            "lattice": lattice,
+            "a": a,
+            "b": b,
+            "c": c,
+        },
         value=saveDir,
         description="Path of the saved initial structure data file.",
+        reasons=reasons,
         parent_result_ids=[],
         metadata={},
         # include modification check, to ensure validity of the actualy file content
     )
     
     # time.sleep(60)
-    return f"Created atoms saved in '{saveDir}'. ID={result_id}"
+    return f"Created atoms saved in '{saveDir}'. Directory info registered with ID={result_id}"
 
 @tool
 def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"],
@@ -489,18 +637,30 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
                                         # a_dict: Annotated[Dict[str, float], "Dictionary of lattice parameters for the crystal structure: Dict[species, lattice_parameter_a]. i.e. {'Pt': 4.0}"],
                                         facets: Annotated[str, "Facet of the surface. Must be one of 100, 110, 111, 210, 211, 310, 311, 320, 321, 410, 411, 420, 421, 510, 511, 520, 521, 530, 531, 540, 541, 610, 611, 620, 621, 630, 631, 640, 641, 650, 651, 660, 661"],
                                         supercell_dim_xy: Annotated[List[int], "Supercell dimension, how many times do you want to repeat the primitive cell in XY direction: [int, int]"],
-                                        supercell_dim_z:Annotated[int, "typically 6. Supercell dimension, how many times do you want to repeat the primitive cell in Z direction."] = 6,
-                                        supercell_dim_z_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of supercell_dim_z. If not provided, the result will not be registered and you can't use the result to proceed"] = "",
-                                        n_fixed_layers: Annotated[int, "typically 3. Number of fixed layers in the slab"] = 3,
-                                        n_fixed_layers_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of n_fixed_layers. If not provided, the result will not be registered and you can't use the result to proceed"] = "",
-                                        vacuum: Annotated[float, "typically 10.0. Vacuum size in Angstrom"] = 10.0,
-                                        vacuum_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of vacuum size. If not provided, the result will not be registered and you can't use the result to proceed"] = "",
-                                        surfaceFilename: Annotated[str, "Name (not a path) of the surface file to be saved in traj format"] = "surface.traj"
+                                        supercell_dim_z:Annotated[int, "typically 6. Supercell dimension, how many times do you want to repeat the primitive cell in Z direction."],
+                                        n_fixed_layers: Annotated[int, "typically 3. Number of fixed layers in the slab"],
+                                        vacuum: Annotated[float, "typically 10.0. Vacuum size in Angstrom"],
+                                        surfaceFilename: Annotated[str, "Name (not a path) of the surface file to be saved in traj format"],
+                                        reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'supercell_dim_xy', 'supercell_dim_z', 'n_fixed_layers', 'vacuum'."],
+                                        supercell_dim_z_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of supercell_dim_z. If not provided, the result will not be registered and you can't use the result in the final report"] = "",
+                                        n_fixed_layers_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of n_fixed_layers. If not provided, the result will not be registered and you can't use the result in the final report"] = "",
+                                        vacuum_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of vacuum size. If not provided, the result will not be registered and you can't use the result in the final report"] = "",
                                         ):
     """Generate a surface structure and get the available adsorption sites. 
     You can try out different supercell_dim_z, n_fixed_layers and vacuum size to see the effect.
     However, only when you specify the source_result_id reference for these parameters, the result will be registered in the canvas and you can use them in the production run.
     Otherwise, the tool will still execute and return the generated surface structure and available adsorption sites, but they will not be registered and you can't use them in the production run"""
+    
+    # verfiy all *_ref:
+    for value, ref in zip(
+        [supercell_dim_z, n_fixed_layers, vacuum],
+        [supercell_dim_z_ref, n_fixed_layers_ref, vacuum_ref]
+    ):
+        if ref != "":
+            ok, msg = CANVAS.verify_artifact(value, ref)
+            if not ok:
+                return msg
+    
     a_dict = {'Pt': 3.92}
     supercell_dim = [supercell_dim_xy[0], supercell_dim_xy[1], supercell_dim_z]
     surface_dict = generate_surface_structures(
@@ -535,18 +695,28 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
     
     mySites_str = output_capture.getvalue()
     
+    ids = {}
     if supercell_dim_z_ref != "" and n_fixed_layers_ref != "" and vacuum_ref != "":
-        ids = {}
         for k, v in mySites.items():
             ids[k] = CANVAS.register_tool_output(
                 tool_name="generateSurface_and_getPossibleSite",
+                args={
+                    "species": species,
+                    "crystal_structures": crystal_structures,
+                    "facets": facets,
+                    "supercell_dim_xy": supercell_dim_xy,
+                    "supercell_dim_z": supercell_dim_z,
+                    "n_fixed_layers": n_fixed_layers,
+                    "vacuum": vacuum,
+                    "surfaceFilename": surfaceFilename,
+                },
                 value=v,
                 description=f"Adsorption {k} site",
+                reasons=reasons,
                 parent_result_ids=[supercell_dim_z_ref, n_fixed_layers_ref, vacuum_ref],
                 metadata={}
             )
-    
-    
+            mySites[k] = [v, f"ID={ids[k]}"]
     
     CANVAS.write('Possible_CO_site_on_Pt_surface', mySites)
     
@@ -557,14 +727,33 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
     
     os.makedirs(os.path.join(WORKING_DIRECTORY, "surface"), exist_ok=True)
     write(os.path.join(WORKING_DIRECTORY, "surface", surfaceFilename), mySurface)
+    path_id = CANVAS.register_tool_output(
+        tool_name="generateSurface_and_getPossibleSite",
+        args={
+            "species": species,
+            "crystal_structures": crystal_structures,
+            "facets": facets,
+            "supercell_dim_xy": supercell_dim_xy,
+            "supercell_dim_z": supercell_dim_z,
+            "n_fixed_layers": n_fixed_layers,
+            "vacuum": vacuum,
+            "surfaceFilename": surfaceFilename,
+        },
+        value=f"surface{surfaceFilename}",
+        description="Path of the saved surface structure file in traj format.",
+        reasons=reasons,
+        parent_result_ids=[supercell_dim_z_ref, n_fixed_layers_ref, vacuum_ref],
+        metadata={}
+    )
     
-    return f"the surface generated is saved at surface/{surfaceFilename}, available adsorbate sites are: {mySites_str}"
+    return f"the surface generated is saved at surface/{surfaceFilename}, Path_ID={path_id}\navailable adsorbate sites are: {repr(mySites)}"
 
 @tool
 def generate_myAdsorbate(symbols: Annotated[str, "Element symbols of the adsorbate (Do not use any delimiters)"],
                          positions: Annotated[List[List[float]], "Positions of the atoms in the adsorbate, e.g. [[x1, y1, z1], [x2, y2, z2], ...], following the same order as the symbols."],
                          AdsorbateFileName: Annotated[str, "Name (not a path) of the adsorbate file to be saved in traj format"],
-                         vaccum: Annotated[float, "Vacuum size in Angstrom around the adsorbate structure"] = 10.0
+                         vaccum: Annotated[float, "Vacuum size in Angstrom around the adsorbate structure. Typically 10.0 Angstrom should be sufficient"],
+                         reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'symbols', 'positions', 'vaccum'."],
                          ):
     """Generate an adsorbate structure and save it."""
     assert AdsorbateFileName.endswith('.traj'), "AdsorbateFileName should end with .traj"
@@ -576,8 +765,21 @@ def generate_myAdsorbate(symbols: Annotated[str, "Element symbols of the adsorba
     tmpAtoms = Atoms(symbols=symbols, positions=positions)
     tmpAtoms.center(vacuum=vaccum)
     write(os.path.join(WORKING_DIRECTORY, "adsorbates", f"{AdsorbateFileName}"), tmpAtoms)
-    # time.sleep(60)
-    return f"Adsorbate saved under working directory at adsorbates/{AdsorbateFileName}"
+    id = CANVAS.register_tool_output(
+        tool_name="generate_myAdsorbate",
+        args={
+            "symbols": symbols,
+            "positions": positions,
+            "AdsorbateFileName": AdsorbateFileName,
+            "vaccum": vaccum,
+        },
+        value=f"adsorbates/{AdsorbateFileName}",
+        description="Path of the saved adsorbate structure file in traj format.",
+        reasons=reasons,
+        parent_result_ids=[],
+        metadata={}
+    )
+    return f"Adsorbate saved under working directory at adsorbates/{AdsorbateFileName}. Path_ID={id}"
 
 @tool
 def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure"],
@@ -585,8 +787,8 @@ def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure
                     mySites: Annotated[List[List[float]], "List of adsorption sites you want to put adsorbates on, e.g. [[x1, y1], [x2, y2], ...]"],
                     rotations: Annotated[List[Tuple[float, str]], "List of rotations for the ith adsorbates, e.g. [[90.0, 'x'], [180.0, 'y'], ...]"],
                     surfaceWithAdsorbateFileName: Annotated[str, "Name (not a path) of the surface adsorbated with adsorbate to be saved in traj format"],
-                    # why how what effect
-                    mySites_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of adsorption sites. If not provided, the result will not be registered and you can't use the result to proceed"] = "",
+                    reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'mySurfacePath', 'adsorbatePath', 'mySites', 'rotations'."],
+                    mySites_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of adsorption sites. If not provided, the result will not be registered and you can't use the result in final report"] = "",
                     ):
     """
     Add adsorbate to the surface structure and save it.
@@ -607,6 +809,15 @@ def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure
 #     """
     assert surfaceWithAdsorbateFileName.endswith('.traj'), "surfaceWithAdsorbateFileName should end with .traj"
     assert not '/' in surfaceWithAdsorbateFileName, "surfaceWithAdsorbateFileName should not contain '/'"
+    
+    for value, ref in zip(
+        [mySites],
+        [mySites_ref]
+    ):
+        if ref != "":
+            ok, msg = CANVAS.verify_artifact(value, ref)
+            if not ok:
+                return msg
     
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     
@@ -651,31 +862,27 @@ def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure
     write(absPath, mySurface)
     
     relaPath = absPath.split(f'{DirOfInterests}/')[-1]
-    # time.sleep(60)
-    return f"Surface with adsorbate saved at {relaPath}"
-
-@tool
-def write_script(
-    content: Annotated[str, "Text content to be written into the document."],
-    file_name: Annotated[str, "Name of the file to be saved."],
-) -> Annotated[str, "Path of the saved document file."]:
-    """Save the quantum espresso input script to the specified file path"""
-    ## Error when '/' in the content, manually delete
-    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
-
-    os.makedirs(WORKING_DIRECTORY, exist_ok=True)
-    path = os.path.join(WORKING_DIRECTORY, f'{file_name}')
-
-    ## If content ends with '/' then remove it
-    if content.endswith('/'):
-        content = content[:-1]
     
-    with open(path,"w",encoding="ascii") as file:
-        file.write(content)
+    outStr = f"Surface with adsorbate saved at {relaPath}."
+    if mySites_ref != "":
+        id = CANVAS.register_tool_output(
+            tool_name="add_myAdsorbate",
+            args={
+                "mySurfacePath": mySurfacePath,
+                "adsorbatePath": adsorbatePath,
+                "mySites": mySites,
+                "rotations": rotations,
+                "surfaceWithAdsorbateFileName": surfaceWithAdsorbateFileName,
+            },
+            value=relaPath,
+            description="Path of the saved surface with adsorbate structure file in traj format.",
+            reasons=reasons,
+            parent_result_ids=[mySites_ref],
+            metadata={}
+        )
+        outStr += f" Path_ID={id}"
     
-    os.environ['INITIAL_FILE'] = file_name
-    # time.sleep(60)
-    return f"Initial file is created named {file_name}"
+    return outStr
 
 
 @tool
@@ -701,8 +908,11 @@ def write_QE_script_w_ASE(
     electron_maxstep: Annotated[int, "Maximum number of SCF iterations"],
     kspacing: Annotated[float, "K-point spacing (in Angstrom^-1)"],
     input_dft: Annotated[Literal['LDA', 'PBE', 'BEEF-vdW'], "DFT functional. You'll be told which functional to use"],
+    reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'calculation', 'restart_mode', 'prefix', 'disk_io', 'ibrav', 'nat', 'ntyp', 'ecutwfc', 'ecutrho', 'occupations', 'smearing', 'degauss', 'conv_thr', 'electron_maxstep', 'kspacing', 'input_dft', 'ready_to_run_job', 'additional_input'."],
     ready_to_run_job: Annotated[bool, "True if the job is intended to be run directly without further modification, False if this file is intended to be used to generate other files"] = False,
     additional_input: Annotated[Dict[str, Any], "Additional input parameters to be added to the input script. Should be in the format of a flat dict, {'input_parameter_1': parameter_1, 'input_parameter_2': parameter_2, ...}, parameter_x remain in their native type, str, float, bool, etc. Do not use unless you know what you are doing."] = {},
+    ecutwfc_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of ecutwfc. If not provided, the result will not be registered and you can't use the result in final report"] = "",
+    kspacing_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of kspacing. If not provided, the result will not be registered and you can't use the result in final report"] = "",
 ):
     """Write a Quantum Espresso input script using ASE. Bool value have no quote around them. For smearing start with methfessel-paxton. For ecutwfc choose between 30-100 Ry. When asked to run ensemble calculation, set calculation to 'ensemble'. When generating template for convergence test, use scf calculation and set ready_to_run_job to False."""
 
@@ -717,7 +927,15 @@ def write_QE_script_w_ASE(
     
     disk_io = 'none'
     
-    
+    # verify refs
+    for value, ref in zip(
+        [ecutwfc, kspacing],
+        [ecutwfc_ref, kspacing_ref]
+    ):
+        if ref != "":
+            ok, msg = CANVAS.verify_artifact(value, ref)
+            if not ok:
+                return msg
     
     # assemble the pseudopotentials dict from the list of elements and pseudopotentials
     pseudopotentials = {}
@@ -798,49 +1016,45 @@ def write_QE_script_w_ASE(
     job_list = [filename]
     old_job_list = CANVAS.get(destiJobList, []).copy()
     job_list = list(set(old_job_list + job_list))
-    CANVAS.write(destiJobList,job_list, overwrite=True)
+    CANVAS.write(destiJobList, job_list, overwrite=True)
+    
+    outStr = f"Quantum Espresso input script is written to {filename}"
+
+    if ecutwfc_ref != "" and kspacing_ref != "":
+        id = CANVAS.register_tool_output(
+            tool_name="write_QE_script_w_ASE",
+            args={
+                "listofElements": listofElements,
+                "ppfiles": ppfiles,
+                "filename": filename,
+                "inputAtomsDir": tmpinputAtomsDir,
+                "ensembleCalculation": ensembleCalculation,
+                "calculation": calculation,
+                "restart_mode": restart_mode,
+                "prefix": prefix,
+                "disk_io": disk_io,
+                "ibrav": ibrav,
+                "nat": nat,
+                "ntyp": ntyp,
+                "ecutwfc": ecutwfc,
+                "ecutrho": ecutrho,
+                "occupations": occupations,
+                "smearing": smearing,
+                "degauss": degauss,
+                "conv_thr": conv_thr,
+                "electron_maxstep": electron_maxstep,
+                "input_dft": input_dft,
+            },
+            value=filename,
+            description="Path of the saved Quantum Espresso input script.",
+            reasons=reasons,
+            parent_result_ids=[ecutwfc_ref, kspacing_ref],
+            metadata={}
+        )
+        outStr += f" Filename_ID={id}"
     
     # time.sleep(60)
-    return f"Quantum Espresso input script is written to {filename}"
-
-@tool
-def write_LAMMPS_script(
-    content: Annotated[str, "Text content to be written into the document."],
-    file_name: Annotated[str, "Name of the file to be saved."],
-) -> Annotated[str, "Path of the saved document file."]:
-    """Save the LAMMPS input script to the specified file path"""
-    ## Error when '/' in the content, manually delete
-    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
-    
-    os.makedirs(WORKING_DIRECTORY, exist_ok=True)
-    path = os.path.join(WORKING_DIRECTORY, f'{file_name}')
-    
-    job_list_dict = {}
-    job_list = []
-
-    ## If content ends with '/' then remove it
-    if content.endswith('/'):
-        content = content[:-1]
-    
-    with open(path,"w",encoding="ascii") as file:
-        file.write(content)
-    
-    os.environ['INITIAL_FILE'] = file_name
-    
-    job_list.append(file_name)
-    
-    old_job_list = CANVAS.get('ready_to_run_job_list', []).copy()
-    job_list = list(set(old_job_list + job_list))
-    CANVAS.write('ready_to_run_job_list',job_list, overwrite=True)
-        
-    # time.sleep(60)
-    return f"Initial file is created named {file_name}"
-
-@tool
-def find_classical_potential(element: str) -> str:
-    """Return classical potential file path for given element symbol."""
-    # time.sleep(60)
-    return f'The classcial potential file for {element} is located at /nfs/turbo/coe-venkvis/ziqiw-turbo/mint-PD/PD/EAM/Li_v2.eam.fs'
+    return outStr
 
 @tool
 def find_pseudopotential(element: str) -> str:
@@ -860,8 +1074,23 @@ def find_pseudopotential(element: str) -> str:
     if len(spList) > 0:
         ans = f'The pseudopotential file for {element} is:\n'
         for sp in spList:
-            ans += f'{sp}\n'
+            
+            id = CANVAS.register_tool_output(
+                tool_name="find_pseudopotential",
+                args={
+                    "element": element,
+                },
+                value=sp,
+                description=f"Pseudopotential file for {element}",
+                parent_result_ids=[],
+                metadata={}
+            )
+            
+            ans += f'{sp}  ID={id}\n'
         ans += f'under {pseudo_dir}'
+        
+        
+        
         # time.sleep(60)
         return ans
     else:
@@ -872,6 +1101,7 @@ def find_pseudopotential(element: str) -> str:
 def generate_convergence_test(input_file_name: Annotated[str, "Name of the template quantum espresso input file"],
                               kspacing:Annotated[list[float], "List of kspacing to be tested. Typically between 0.1-0.4"],
                               ecutwfc:Annotated[list[int], "List of ecutwfc to be tested. Typically between 40-100"],
+                              reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'input_file_name', 'kspacing', 'ecutwfc'."],
                               ):
     '''
     Generate the convergence test input scripts for quantum espresso calculation using another quantum espresso input file as a template and save the job list. 
@@ -976,20 +1206,46 @@ def generate_convergence_test(input_file_name: Annotated[str, "Name of the templ
     job_list = list(set(old_job_list + job_list))
     CANVAS.write('ready_to_run_job_list',job_list, overwrite=True)
     CANVAS.write('jobs_K_and_ecut',job_list_dict)
-    # time.sleep(60)
-    return f"Job list is saved scucessfully. Please tell the supervisor in your response that convergence job has generated sucessfully, please continue to submit the jobs"
+    
+    id = CANVAS.register_tool_output(
+        tool_name="generate_convergence_test",
+        args={
+            "input_file_name": input_file_name,
+            "kspacing": kspacing,
+            "ecutwfc": ecutwfc,
+        },
+        value=job_list_dict,
+        description="A dict containing the generated convergence test job list with their corresponding kspacing and ecutwfc values.",
+        reasons=reasons,
+        parent_result_ids=[],
+        metadata={}
+    )
+    
+    return f"Job list is saved scucessfully. ID={id}. Please tell the supervisor in your response that convergence job has generated sucessfully, please continue to submit the jobs"
 
 @tool
-def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int, stepSize:float=0.025):
+def generate_eos_test(
+    input_file_name: Annotated[str, "Name of the template quantum espresso input file"],
+    kspacing: Annotated[float, "K-point spacing (in Angstrom^-1) for the equation of state test."],
+    ecutwfc: Annotated[int, "Kinetic energy cutoff (Ry) for wavefunctions for the equation of state test."],
+    stepSize: Annotated[float, "Step size for scaling the cell size. The cell will be scaled from (1-2*stepSize) to (1+2*stepSize). Typically 0.025 should be good."],
+    reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'input_file_name', 'kspacing', 'ecutwfc', 'stepSize'."],
+    kspacing_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of kspacing. If not provided, the result will not be registered and you can't use the result in final report"] = "",
+    ecutwfc_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of ecutwfc. If not provided, the result will not be registered and you can't use the result in final report"] = "",
+    ):
     '''
     Generate the equation of state test input scripts for quantum espresso calculation and save the job list.
-    
-    Input:  input_file_name: str, the name of the input file
-            kspacing: float, the kspacing to be tested
-            ecutwfc: int, the ecutwfc to be tested
-            stepSize: float, the step size for the scale factor, default is 0.025, which will scale the cell size from 0.95 to 1.05
     '''
     assert stepSize > 0.01 and stepSize < 0.1, "stepSize should be between 0.01 and 0.1"
+    
+    for value, ref in zip(
+        [kspacing, ecutwfc],
+        [kspacing_ref, ecutwfc_ref]
+    ):
+        if ref != "":
+            ok, msg = CANVAS.verify_artifact(value, ref)
+            if not ok:
+                return msg
     
     # CANVAS.write('job_list', [], overwrite=True)
     CANVAS['jobs_K_and_ecut'] = {}
@@ -1055,8 +1311,27 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int, stepSize:
     job_list = list(set(old_job_list + job_list))
     CANVAS.write('ready_to_run_job_list',job_list, overwrite=True)
     
+    outStr = f"Job list is saved scucessfully, continue to submit the jobs. Files of interest are {job_list}."
+    
+    if kspacing_ref != "" and ecutwfc_ref != "":
+        id = CANVAS.register_tool_output(
+            tool_name="generate_eos_test",
+            args={
+                "input_file_name": input_file_name,
+                "kspacing": kspacing,
+                "ecutwfc": ecutwfc,
+                "stepSize": stepSize,
+            },
+            value=job_list,
+            description="The generated EOS test job list.",
+            reasons=reasons,
+            parent_result_ids=[kspacing_ref, ecutwfc_ref],
+            metadata={}
+        )
+        outStr += f" Filename_ID={id}"
+    
     # time.sleep(60)
-    return f"Job list is saved scucessfully, continue to submit the jobs. Files of interest are {job_list}"
+    return outStr
 
 ###################################### DFT POST-PROCESSING TOOLS ######################################
 
@@ -1088,7 +1363,6 @@ def get_convergence_suggestions(
     "Get suggestions on how to resolve issues for a certain job, i.e. converge or not accurate enough. If the output file is too long, you can call this tool multiple times for the same file with the same question but different start_block index to get suggestions based on different part of the output."
     outFile = filename + ".pwo"
     errFile = filename + ".err"
-    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     block_size_tokens = 150000
     # WORKING_DIRECTORY = "/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/out"
     
@@ -1128,6 +1402,7 @@ def get_convergence_suggestions(
                 system_msg = """
     You are a DFT expert who's good at giving concise suggestions on how to resolve issues in DFT calculations. Do not modify nosym and pesudopotentials. Never make any adjustment to make the calculation less accurate.
     Please use the format: parameterX: suggestionX, reasonX; parameterY: suggestionY, reasonY; ...
+    You must include target values for the parameters you suggest to change, e.g. if you suggest to increase the ecutwfc, you should give a specific value for the new ecutwfc, not just say "increase ecutwfc".
     """
                 
                 invokingMsg = [
@@ -1180,31 +1455,89 @@ def get_convergence_suggestions(
     if fileTrimed:
         finalSuggestion += f"Note: The suggestions are based on {start_block}th part of the output file, if you want to get more comprehensive suggestions, please call this tool multiple times with different start_block index to cover different part of the output file.\n"
     # time.sleep(60)
-    return finalSuggestion
-
-# @tool
-# def readEnergyFromPWO(filenameList: Annotated[List[str], "A list of file names you want to read the energy from, ending in pwi"],
-#                           ):
-#     """Read the energy from the pwo file generated by quantum espresso calculation. Return a dictionary of file name and energy."""
-#     working_directory = var.my_WORKING_DIRECTORY
     
-#     energy_dict = {}
-#     for filename in filenameList:
-#         tmpFile = os.path.join(working_directory, filename)
-#         if filename.endswith('.pwi'):
-#             tmpFile += '.pwo'
-#         try:
-#             energy = read(tmpFile).get_potential_energy()
-#             energy_dict[filename] = energy
-#         except:
-#             energy_dict[filename] = None
+    id = CANVAS.register_tool_output(
+        tool_name="get_convergence_suggestions",
+        args={
+            "filename": filename,
+            "question": question,
+            "start_block": start_block,
+        },
+        value=finalSuggestion,
+        description=f"Suggestions for the question: {question} based on the output of {filename}",
+        parent_result_ids=[],
+        metadata={}
+    )
+    
+    return f"{finalSuggestion}\nSuggestion_ID={id}. Please extract the numerical values if you need to use them for adjusting the input parameters for the next calculation."
 
-#     return repr(energy_dict)
+@tool
+def find_furthest_acceptable_parameter(
+    sweeping_parameter: Annotated[str, "Name of the sweeping parameter, e.g. 'ecutwfc', 'kspacing', and etc."],
+    Filename_n_parameters: Annotated[List[Tuple[str, float]], "List of (filename, parameter_value) pairs."],
+    reference_file: Annotated[str, "Among the list of files, the filename corresponding to the most expensive / most accurate reference calculation."],
+    threshold: Annotated[float, "Maximum allowed absolute energy difference from the reference energy."],
+    reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'threshold'."],
+) -> Dict[str, Any]:
+    """
+    Find the most optimal parameter value for production run.
+    """
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+    
+    # add .pwo to all file names if haven't been added
+    for i in range(len(Filename_n_parameters)):
+        filename, param_value = Filename_n_parameters[i]
+        if not filename.endswith('.pwo'):
+            Filename_n_parameters[i] = (filename + '.pwo', param_value)
+    if not reference_file.endswith('.pwo'):
+        reference_file += '.pwo'
+    
+    file_to_param = dict(Filename_n_parameters)
+
+    if reference_file not in file_to_param:
+        raise ValueError(
+            f"reference_file '{reference_file}' is not present in Filename_n_parameters."
+        )
+
+    # os.path.join(WORKING_DIRECTORY, myfile)
+    reference_param = file_to_param[reference_file]
+    reference_energy = read(os.path.join(WORKING_DIRECTORY, reference_file)).get_potential_energy()
+
+    acceptable = []
+
+    for filename, param_value in Filename_n_parameters:
+        energy = read(os.path.join(WORKING_DIRECTORY, filename)).get_potential_energy()
+        if abs(energy - reference_energy) <= threshold:
+            acceptable.append((filename, param_value))
+
+    if len(acceptable) == 1:
+        return "Only the reference file is within threshold. No acceptable cheaper setting found. Please consider increasing the calculation settings to increase the accuracy of the calculation."
+
+    chosen = max(acceptable, key=lambda x: abs(x[1] - reference_param))
+    
+    id = CANVAS.register_tool_output(
+        tool_name="find_furthest_acceptable_parameter",
+        args={
+            "sweeping_parameter": sweeping_parameter,
+            "Filename_n_parameters": Filename_n_parameters,
+            "reference_file": reference_file,
+            "threshold": threshold,
+        },
+        value=chosen[1],
+        description=f"The most optimal parameter value for production run based on the reference file {reference_file} and the threshold {threshold}. The chosen parameter value is {chosen[1]} with file name {chosen[0]}",
+        reasons=reasons,
+        parent_result_ids=[],
+        metadata={}
+    )
+        
+    
+    return f"Please choose {sweeping_parameter}={chosen[1]}. result_ID={id}."
 
 @tool
 def calculate_formation_E(slabFilePath: Annotated[str, "the slab calculation file name, ending in pwi"],
                           adsorbateFilePath: Annotated[str, "the adsorbate calculation file name, ending in pwi"],
                           systemFilePath: Annotated[str, "the slab with adsorbate calculation file name, ending in pwi"],
+                          reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'slabFilePath', 'adsorbateFilePath', 'systemFilePath'."],
                           ):
     """using the energies of the slab, adsorbate, and slab with adsorbate, calculate the formation energy of the adsorbate on the slab. """
     working_directory = var.my_WORKING_DIRECTORY
@@ -1228,11 +1561,27 @@ def calculate_formation_E(slabFilePath: Annotated[str, "the slab calculation fil
     
     formationEnergy = systemEnergy - slabEnergy * NslabInSystem - adsorbateEnergy
     
+    id = CANVAS.register_tool_output(
+        tool_name="calculate_formation_E",
+        args={
+            "slabFilePath": slabFilePath,
+            "adsorbateFilePath": adsorbateFilePath,
+            "systemFilePath": systemFilePath,
+        },
+        value=formationEnergy,
+        description=f"The formation energy of the adsorbate on the slab calculated using {slabFilePath}, {adsorbateFilePath}, and {systemFilePath}",
+        reasons=reasons,
+        parent_result_ids=[],
+        metadata={}
+    )
+    
     # time.sleep(60)
-    return f"The formation energy of the adsorbate on the slab is {formationEnergy} eV"
+    return f"The formation energy of the adsorbate on the slab is {formationEnergy} eV. Energy_ID={id}."
 
 @tool
-def calculate_lc(jobFileIdx: Annotated[List[int], "indexs of files in the finished job list of files of interest, which will be used to calculate the lattice constant"]
+def calculate_lc(
+    jobFileIdx: Annotated[List[int], "indexs of files in the finished job list of files of interest, which will be used to calculate the lattice constant"],
+    reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'jobFileIdx' (why do you choose those job)."],
     ) -> str:
     """Read the output file and calculate the lattice constant"""
     
@@ -1289,192 +1638,253 @@ def calculate_lc(jobFileIdx: Annotated[List[int], "indexs of files in the finish
     # Save the updated dictionary back to the json file
     with open(json_file, "w") as file:
         json.dump(lc_dict, file)
-
-    # time.sleep(60)
-    return f'The lattice constant is {lc}'
-
-@tool
-def get_bulk_modulus(
-    working_directory: str,
-    pseudo_dir: str,
-    input_file: str,
-) -> float:
-    '''Calculate the bulk modulus of the given quantum espresso input file, pseudopotential directory and working directory'''
-    atoms = read(os.path.join(working_directory,input_file))
-    with open(os.path.join(working_directory,input_file),'r') as file:
-        content = file.read()
-    input_data = parse_qe_input_string(content)
-    pseudopotentials = filter_potential(input_data)
-
-    profile = EspressoProfile(command='mpiexec -n 8 pw.x', pseudo_dir=pseudo_dir)
-
-    atoms.calc = Espresso(
-    profile=profile,
-    pseudopotentials=pseudopotentials,
-    input_data=input_data
-)
-
-    # run variable cell relax first to make sure we have optimum scaling factor
-    # ecf = ExpCellFilter(atoms)
-    # dyn = FIRE(ecf)
-    # traj = Trajectory(os.path.join(working_directory,'relax.traj'), 'w', atoms)
-    # dyn.attach(traj)
-    # dyn.run(fmax=1.5)
-
-    # now we calculate eos
-    eos = calculate_eos(atoms)
-    v, e, B = eos.fit()
-    bulk_modulus = B / kJ * 1.0e24
-
-    # time.sleep(60)
-    return bulk_modulus
-
-
-@tool
-def get_lattice_constant(
-    working_directory: str,
-    pseudo_dir: str,
-    input_file: str,
-) -> float:
-    '''Calculate the lattice constant of the given quantum espresso input file, pseudopotential directory and working directory'''
-    atoms = read(os.path.join(working_directory,input_file))
-    with open(os.path.join(working_directory,input_file),'r') as file:
-        content = file.read()
-    input_data = parse_qe_input_string(content)
-    pseudopotentials = filter_potential(input_data)
-
-    profile = EspressoProfile(command='mpiexec -n 2 pw.x', pseudo_dir=pseudo_dir)
-
-    atoms.calc = Espresso(
-    profile=profile,
-    pseudopotentials=pseudopotentials,
-    input_data=input_data
-)
-
-    eos = calculate_eos(atoms)
-    v, e, B = eos.fit()
-    lc = (v)**(1/3)
-    print(f'{input_file} lattice constant is {lc}')
-    with open(os.path.join(working_directory,input_file.split('.')[0]+'.out'),'w') as file:
-        file.write(f'\n# {input_file} Lattice constant is {lc}')
-    # time.sleep(60)
-    return lc
-
-@tool
-def get_kspacing_ecutwfc(jobFileIdx: Annotated[List[int], "indexs of files in the finished job list of files of interest, which will be used to determine the kspacing and ecutwfc"],
-                         threshold: Annotated[float, "the threshold mev/atom to determine the convergence"] = 1.0) -> str:
-    '''Read the convergen test result and determine the kspacing and ecutwfc used in the production
-    Input:
-        jobFileIdx: list, the indexs of files in the finished job list, which will be used to determine the kspacing and ecutwfc
-        threshold: float , the threshold mev/atom to determine the convergence
-    output: str, the kspacing and ecutwfc used in the production
-    '''
-    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
-    
-    assert isinstance(jobFileIdx, list), "jobFileIdx should be a list"
-    for i in jobFileIdx:
-        assert isinstance(i, int), "jobFileIdx should be a list of index of files of interest"
-    
-    job_dict = CANVAS.get('jobs_K_and_ecut', {})
-    job_list = CANVAS.get('finished_job_list', []).copy()
-    job_list = np.array(job_list, dtype=str)[jobFileIdx]
-    print(f"actual job list: {job_list}")
-    assert len(job_list) > 0, "job list 0"
-    
-    print(f"successfully read {len(job_list)} jobs, and {len(job_dict)} job_dict")
-
-    ### Find the kpoints and ecutwfc from the output file
-    kspacing = []
-    ecutwfc = []
-    energy_list = []
-    goodJob = []
-    Natom = None
-    for job in job_list:
-        ## Read the output file
-        print(f'reading {job}')
-        try:
-            atom = read(os.path.join(WORKING_DIRECTORY, job+'.pwo'))
-        except:
-            print(f"Job {job} is not finished or failed.")
-            continue
-        energy = atom.get_potential_energy()
-        energy_list.append(energy)
-        Natom = atom.get_number_of_atoms()
         
-        kspacing.append(job_dict[job]['k'])
-        ecutwfc.append(job_dict[job]['ecutwfc'])
-        goodJob.append(job)
-    
-    convergence_df = pd.DataFrame({'job':goodJob,'kspacing':kspacing, 'ecutwfc':ecutwfc, 'energy':energy_list})
-    
-    min_kspacing = convergence_df['kspacing'].min()
-    max_ecutwfc = convergence_df['ecutwfc'].max()
-    df_kspacing = convergence_df.loc[convergence_df['kspacing'] == min_kspacing].sort_values(by='ecutwfc',ascending=True)
-    df_ecutwfc = convergence_df.loc[convergence_df['ecutwfc'] == max_ecutwfc].sort_values(by='kspacing',ascending=False)
-    
-    print(f"successfully read {len(df_kspacing)} kspacing and {len(df_ecutwfc)} ecutwfc")
-    
-    if len(df_kspacing) == 1 and len(df_ecutwfc) > 1:
-        # time.sleep(60)
-        return f"Only one kspacing is found, the rest of the jobs seems unfinished or not converged. DO NOT infer optimal parameters from converged jobs. Please regenerate the convergence test with finer kspacing. Also, adjust some other settings may help (regenerating template script is then needed). Remember, you NEED TO REDO the convergence test (tell the supervisor in your response that new convergence test need to be done and you've already generated the script)."
-    if len(df_ecutwfc) == 1 and len(df_kspacing) > 1:
-        # time.sleep(60)
-        return f"Only one ecutwfc is found, the rest of the jobs seems unfinished or not converged. DO NOT infer optimal parameters from converged jobs. Please regenerate the convergence test with finer ecutwfc. Also, adjust some other settings may help (regenerating template script is then needed). Remember, you NEED TO REDO the convergence test (tell the supervisor in your response that new convergence test need to be done and you've already generated the script)."
-    if len(df_kspacing) == 1 and len(df_ecutwfc) == 1:
-        # time.sleep(60)
-        return f"Only one job for either kspacing or ecutwfc is good, the rest of the jobs seems unfinished or not converged. DO NOT infer optimal parameters from converged jobs. Please regenerate the convergence test with finer kspacing and ecutwfc. Also, adjust some other settings may help (regenerating template script is then needed). Remember, you NEED TO REDO the convergence test (tell the supervisor in your response that new convergence test need to be done and you've already generated the script)."
-        
-    ## Save the convergence test result if file exist then append to it
-    if os.path.exists(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv')):
-        convergence_df.to_csv(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv'), mode='a', header=False)
-    else:
-        convergence_df.to_csv(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv'))
-    
-    ## Determine the kpoints and ecutwfc based on the threshold
-    k_chosen, ecutwfc_chosen,finnerEcut,df_kspacing, df_ecutwfc,finnerKspacing = select_k_ecut(convergence_df, threshold, Natom)
-    
-    print(f"Chosen kspacing: {k_chosen}, Chosen ecutwfc: {ecutwfc_chosen}")
-    
-    ## Save the chosen kspacing and ecutwfc
-    if os.path.exists(os.path.join(WORKING_DIRECTORY, 'df_k.csv')):
-        df_kspacing.to_csv(os.path.join(WORKING_DIRECTORY, 'df_k.csv'), mode='a', header=False)
-    else:
-        df_kspacing.to_csv(os.path.join(WORKING_DIRECTORY, 'df_k.csv'))
-    
-    if os.path.exists(os.path.join(WORKING_DIRECTORY, 'df_e.csv')):
-        df_ecutwfc.to_csv(os.path.join(WORKING_DIRECTORY, 'df_e.csv'), mode='a', header=False)
-    else:
-        df_ecutwfc.to_csv(os.path.join(WORKING_DIRECTORY, 'df_e.csv'))  
-        
-    print("saved the chosen kspacing and ecutwfc")
-    
-    
-    if finnerEcut and ecutwfc_chosen < 120 and finnerKspacing and k_chosen > 0.1:
-        ans = "Only the calculation with the finest settings is finished. Please regenerate the convergence test with finner ecutwfc and finner kspacing. Do not infer converged settings yourself!"
-        # ans += f"\nHowever, the calculation is not converged, please consider redo the convergence test and using a finner ecutwfc and finner kspacing"
-    elif finnerEcut and ecutwfc_chosen < 120:
-        ans = "Only calculations with the finest ecutwfc is finished. Please regenerate the convergence test with finner ecutwfc. Do not infer converged settings yourself!"
-    elif finnerKspacing and k_chosen > 0.1:
-        ans = "Only the calculation with the finest kspacing is finished. Please regenerate the convergence test with finner kspacing. Do not infer converged settings yourself!"
-    else:
-        ans = f"Please use kspacing {k_chosen} and ecutwfc {ecutwfc_chosen} for the production calculation"
+    id = CANVAS.register_tool_output(
+        tool_name="calculate_lc",
+        args={
+            "jobFileIdx": jobFileIdx,
+        },
+        value=lc,
+        description=f"The lattice constant calculated using the job list with index {jobFileIdx}",
+        reasons=reasons,
+        parent_result_ids=[],
+        metadata={}
+    )
+
     # time.sleep(60)
-    return ans
+    return f'The lattice constant is {lc}. LC_ID={id}'
+
+
+
+# @tool
+# def get_kspacing_ecutwfc(jobFileIdx: Annotated[List[int], "indexs of files in the finished job list of files of interest, which will be used to determine the kspacing and ecutwfc"],
+#                          threshold: Annotated[float, "the threshold mev/atom to determine the convergence"] = 1.0) -> str:
+#     '''Read the convergen test result and determine the kspacing and ecutwfc used in the production
+#     Input:
+#         jobFileIdx: list, the indexs of files in the finished job list, which will be used to determine the kspacing and ecutwfc
+#         threshold: float , the threshold mev/atom to determine the convergence
+#     output: str, the kspacing and ecutwfc used in the production
+#     '''
+#     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+    
+#     assert isinstance(jobFileIdx, list), "jobFileIdx should be a list"
+#     for i in jobFileIdx:
+#         assert isinstance(i, int), "jobFileIdx should be a list of index of files of interest"
+    
+#     job_dict = CANVAS.get('jobs_K_and_ecut', {})
+#     job_list = CANVAS.get('finished_job_list', []).copy()
+#     job_list = np.array(job_list, dtype=str)[jobFileIdx]
+#     print(f"actual job list: {job_list}")
+#     assert len(job_list) > 0, "job list 0"
+    
+#     print(f"successfully read {len(job_list)} jobs, and {len(job_dict)} job_dict")
+
+#     ### Find the kpoints and ecutwfc from the output file
+#     kspacing = []
+#     ecutwfc = []
+#     energy_list = []
+#     goodJob = []
+#     Natom = None
+#     for job in job_list:
+#         ## Read the output file
+#         print(f'reading {job}')
+#         try:
+#             atom = read(os.path.join(WORKING_DIRECTORY, job+'.pwo'))
+#         except:
+#             print(f"Job {job} is not finished or failed.")
+#             continue
+#         energy = atom.get_potential_energy()
+#         energy_list.append(energy)
+#         Natom = atom.get_number_of_atoms()
+        
+#         kspacing.append(job_dict[job]['k'])
+#         ecutwfc.append(job_dict[job]['ecutwfc'])
+#         goodJob.append(job)
+    
+#     convergence_df = pd.DataFrame({'job':goodJob,'kspacing':kspacing, 'ecutwfc':ecutwfc, 'energy':energy_list})
+    
+#     min_kspacing = convergence_df['kspacing'].min()
+#     max_ecutwfc = convergence_df['ecutwfc'].max()
+#     df_kspacing = convergence_df.loc[convergence_df['kspacing'] == min_kspacing].sort_values(by='ecutwfc',ascending=True)
+#     df_ecutwfc = convergence_df.loc[convergence_df['ecutwfc'] == max_ecutwfc].sort_values(by='kspacing',ascending=False)
+    
+#     print(f"successfully read {len(df_kspacing)} kspacing and {len(df_ecutwfc)} ecutwfc")
+    
+#     if len(df_kspacing) == 1 and len(df_ecutwfc) > 1:
+#         # time.sleep(60)
+#         return f"Only one kspacing is found, the rest of the jobs seems unfinished or not converged. DO NOT infer optimal parameters from converged jobs. Please regenerate the convergence test with finer kspacing. Also, adjust some other settings may help (regenerating template script is then needed). Remember, you NEED TO REDO the convergence test (tell the supervisor in your response that new convergence test need to be done and you've already generated the script)."
+#     if len(df_ecutwfc) == 1 and len(df_kspacing) > 1:
+#         # time.sleep(60)
+#         return f"Only one ecutwfc is found, the rest of the jobs seems unfinished or not converged. DO NOT infer optimal parameters from converged jobs. Please regenerate the convergence test with finer ecutwfc. Also, adjust some other settings may help (regenerating template script is then needed). Remember, you NEED TO REDO the convergence test (tell the supervisor in your response that new convergence test need to be done and you've already generated the script)."
+#     if len(df_kspacing) == 1 and len(df_ecutwfc) == 1:
+#         # time.sleep(60)
+#         return f"Only one job for either kspacing or ecutwfc is good, the rest of the jobs seems unfinished or not converged. DO NOT infer optimal parameters from converged jobs. Please regenerate the convergence test with finer kspacing and ecutwfc. Also, adjust some other settings may help (regenerating template script is then needed). Remember, you NEED TO REDO the convergence test (tell the supervisor in your response that new convergence test need to be done and you've already generated the script)."
+        
+#     ## Save the convergence test result if file exist then append to it
+#     if os.path.exists(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv')):
+#         convergence_df.to_csv(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv'), mode='a', header=False)
+#     else:
+#         convergence_df.to_csv(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv'))
+    
+#     ## Determine the kpoints and ecutwfc based on the threshold
+#     k_chosen, ecutwfc_chosen,finnerEcut,df_kspacing, df_ecutwfc,finnerKspacing = select_k_ecut(convergence_df, threshold, Natom)
+    
+#     print(f"Chosen kspacing: {k_chosen}, Chosen ecutwfc: {ecutwfc_chosen}")
+    
+#     ## Save the chosen kspacing and ecutwfc
+#     if os.path.exists(os.path.join(WORKING_DIRECTORY, 'df_k.csv')):
+#         df_kspacing.to_csv(os.path.join(WORKING_DIRECTORY, 'df_k.csv'), mode='a', header=False)
+#     else:
+#         df_kspacing.to_csv(os.path.join(WORKING_DIRECTORY, 'df_k.csv'))
+    
+#     if os.path.exists(os.path.join(WORKING_DIRECTORY, 'df_e.csv')):
+#         df_ecutwfc.to_csv(os.path.join(WORKING_DIRECTORY, 'df_e.csv'), mode='a', header=False)
+#     else:
+#         df_ecutwfc.to_csv(os.path.join(WORKING_DIRECTORY, 'df_e.csv'))  
+        
+#     print("saved the chosen kspacing and ecutwfc")
+    
+    
+#     if finnerEcut and ecutwfc_chosen < 120 and finnerKspacing and k_chosen > 0.1:
+#         ans = "Only the calculation with the finest settings is finished. Please regenerate the convergence test with finner ecutwfc and finner kspacing. Do not infer converged settings yourself!"
+#         # ans += f"\nHowever, the calculation is not converged, please consider redo the convergence test and using a finner ecutwfc and finner kspacing"
+#     elif finnerEcut and ecutwfc_chosen < 120:
+#         ans = "Only calculations with the finest ecutwfc is finished. Please regenerate the convergence test with finner ecutwfc. Do not infer converged settings yourself!"
+#     elif finnerKspacing and k_chosen > 0.1:
+#         ans = "Only the calculation with the finest kspacing is finished. Please regenerate the convergence test with finner kspacing. Do not infer converged settings yourself!"
+#     else:
+#         ans = f"Please use kspacing {k_chosen} and ecutwfc {ecutwfc_chosen} for the production calculation"
+#     # time.sleep(60)
+#     return ans
+
+# @tool
+# def analyze_BEEF_result(
+#     slabFilePath: Annotated[str, "the slab calculation file"],
+#     adsorbateFilePath: Annotated[str, "the adsorbate calculation file"],
+#     ontopFilePath: Annotated[str, "the slab with ontop adsorbate calculation file"],
+#     fccFilePath: Annotated[str, "the slab with fcc adsorbate calculation file"],
+# ) -> str:
+#     '''Read the BEEF output, calculate the abrosption energy and analyze the BEEF result'''
+    
+#     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+    
+#     DirOfInterests = WORKING_DIRECTORY.split('/')[-1]
+    
+#     PathList = [slabFilePath, adsorbateFilePath, ontopFilePath, fccFilePath]
+    
+#     for i in range(len(PathList)):
+#         tmp = PathList[i]
+#         try:
+#             if not PathList[i].startswith(DirOfInterests) and not PathList[i].startswith(f'./{DirOfInterests}') and not PathList[i].startswith('/nfs'):
+#                 PathList[i] = os.path.join(WORKING_DIRECTORY, PathList[i]) + '.pwo'
+#             _ = read(PathList[i])
+#         except:
+#             if os.path.exists(PathList[i]):
+#                 return f"{tmp} did not finish successfully."
+#             return f"Invalid input atoms directory: {tmp}. make sure to supply either absolute path, or relative path starting with './{DirOfInterests}'. Please check the path in canvas and try again."
+
+    
+#     ## Read energy
+#     slab_e = read_BEEF_output(PathList[0])
+#     if slab_e == "WrongCalc":
+#         return f"Please run slab ensemble calculation using BEEF-vdW with relaxed slab structure! Do not proceed any further!"
+#     adsorbate_e = read_BEEF_output(PathList[1])
+#     if adsorbate_e == "WrongCalc":
+#         return f"Please run adsorbate ensemble calculation using BEEF-vdW with relaxed adsorbate structure! Do not proceed any further!"
+#     ontop_e = read_BEEF_output(PathList[2])
+#     if ontop_e == "WrongCalc":
+#         return f"Please run ontop ensemble calculation using BEEF-vdW with relaxed slab and adsorbate structure! Do not proceed any further!"
+#     fcc_e = read_BEEF_output(PathList[3])
+#     if fcc_e == "WrongCalc":
+#         return f"Please run fcc ensemble calculation using BEEF-vdW with relaxed slab and adsorbate structure! Do not proceed any further!"
+    
+#     ## Plot
+#     try:
+#         energy_dict = {}
+#         energy_dict['clean'] = slab_e
+#         energy_dict['CO'] = adsorbate_e
+#         energy_dict['ontop_down'] = ontop_e
+#         energy_dict['fcc_down'] = fcc_e
+        
+#         fontsize=15
+#         plot_settings = {
+#             # "font.family": "times new roman",
+#             "axes.labelsize": fontsize,
+#             "axes.labelweight": "bold",
+#             "xtick.labelsize": fontsize,
+#             "ytick.labelsize": fontsize,
+#             "xtick.major.size": 7,
+#             "ytick.major.size": 7,
+#             "xtick.major.width": 2.0,
+#             "ytick.major.width": 2.0,
+#             "xtick.direction": "in",
+#             "ytick.direction": "in",
+#             "font.size": fontsize,
+#             "axes.linewidth": 2.0,
+#             "lines.dashed_pattern": [5, 2.5],
+#             "lines.markersize": 10,
+#             "lines.linewidth": 2,
+#             "lines.markeredgewidth": 1,
+#             # "lines.markeredgecolor": "k",
+#             "legend.fontsize": fontsize,
+#             "legend.frameon": False,
+#             'figure.figsize': [6, 6],
+#         }
+
+#         # Update rcParams with settings from JSON file
+#         rcParams.update(plot_settings)
+        
+#         df = pd.DataFrame(energy_dict)
+#         df.to_csv('energies.csv', index=False)
+#         ads_fcc = df['fcc_down'] - df['clean'] - df['CO']
+#         ads_ontop = df['ontop_down'] - df['clean'] - df['CO']
+#         # plot energy distribution
+#         fig = plt.figure(figsize=(6, 5))
+#         ax = fig.add_axes([0,0,1,1])
+#         ax.hist(ads_fcc, bins=50, color='blue', alpha=0.7, label='FCC')
+#         ax.axvline(ads_fcc.mean(), color='k', linestyle=':', linewidth=2, label='FCC mean')
+#         ax.hist(ads_ontop, bins=50, color='red', alpha=0.7, label='Ontop')
+#         ax.axvline(ads_ontop.mean(), color='k', linestyle='-.', linewidth=2, label='Ontop mean')
+#         plt.legend()
+#         plt.xlabel('Adsorption Energy (eV)')
+#         plt.ylabel('Frequency')
+#         plt.savefig('energy_distribution.png',dpi=300,bbox_inches='tight')
+#     except:
+#         print("Failed to plot the energy distribution.")
+
+#     ## Formation
+#     ontop_formation = ontop_e - slab_e - adsorbate_e
+#     fcc_formation = fcc_e - slab_e - adsorbate_e
+
+#     print(f"ontop formation energy: {ontop_formation.mean()} eV")
+#     print(f"fcc formation energy: {fcc_formation.mean()} eV")
+#     ## Formation Energy Difference
+#     formation_energy_diff = ontop_formation - fcc_formation
+
+#     ## Distribution of Formation energy differernce 
+#     if formation_energy_diff.all() > 0:
+#         result = f"fcc is more stable than ontop by average {formation_energy_diff.mean()} eV"
+#     elif formation_energy_diff.all() < 0:
+#         result = f"ontop is more stable than fcc by average {abs(formation_energy_diff.mean())} eV"
+#     else:
+#         result = f" {sum(formation_energy_diff>0)} xc functionals prefer fcc, {sum(formation_energy_diff<0)} xc functionals prefer ontop"
+#     return result
+
 
 @tool
 def analyze_BEEF_result(
     slabFilePath: Annotated[str, "the slab calculation file"],
     adsorbateFilePath: Annotated[str, "the adsorbate calculation file"],
-    ontopFilePath: Annotated[str, "the slab with ontop adsorbate calculation file"],
-    fccFilePath: Annotated[str, "the slab with fcc adsorbate calculation file"],
+    systemFilePath: Annotated[str, "the slab with ontop adsorbate calculation file"],
+    reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'slabFilePath', 'adsorbateFilePath', 'systemFilePath'. (why do you choose those three files)"],
 ) -> str:
-    '''Read the BEEF output, calculate the abrosption energy and analyze the BEEF result'''
+    '''Read, extract, and analyze BEEF calculation results for slab, adsorbate, and surface with adsorbate. Return the mean and standard deviation of the adsorption energy.'''
     
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     
     DirOfInterests = WORKING_DIRECTORY.split('/')[-1]
     
-    PathList = [slabFilePath, adsorbateFilePath, ontopFilePath, fccFilePath]
+    PathList = [slabFilePath, adsorbateFilePath, systemFilePath]
     
     for i in range(len(PathList)):
         tmp = PathList[i]
@@ -1495,20 +1905,16 @@ def analyze_BEEF_result(
     adsorbate_e = read_BEEF_output(PathList[1])
     if adsorbate_e == "WrongCalc":
         return f"Please run adsorbate ensemble calculation using BEEF-vdW with relaxed adsorbate structure! Do not proceed any further!"
-    ontop_e = read_BEEF_output(PathList[2])
-    if ontop_e == "WrongCalc":
-        return f"Please run ontop ensemble calculation using BEEF-vdW with relaxed slab and adsorbate structure! Do not proceed any further!"
-    fcc_e = read_BEEF_output(PathList[3])
-    if fcc_e == "WrongCalc":
-        return f"Please run fcc ensemble calculation using BEEF-vdW with relaxed slab and adsorbate structure! Do not proceed any further!"
+    system_e = read_BEEF_output(PathList[2])
+    if system_e == "WrongCalc":
+        return f"Please run surface with adsorbate ensemble calculation using BEEF-vdW with relaxed slab and adsorbate structure! Do not proceed any further!"
     
     ## Plot
     try:
         energy_dict = {}
         energy_dict['clean'] = slab_e
         energy_dict['CO'] = adsorbate_e
-        energy_dict['ontop_down'] = ontop_e
-        energy_dict['fcc_down'] = fcc_e
+        energy_dict['system'] = system_e
         
         fontsize=15
         plot_settings = {
@@ -1540,16 +1946,15 @@ def analyze_BEEF_result(
         
         df = pd.DataFrame(energy_dict)
         df.to_csv('energies.csv', index=False)
-        ads_fcc = df['fcc_down'] - df['clean'] - df['CO']
-        ads_ontop = df['ontop_down'] - df['clean'] - df['CO']
+        ads_E = df['system'] - df['clean'] - df['CO']
         # plot energy distribution
         fig = plt.figure(figsize=(6, 5))
         ax = fig.add_axes([0,0,1,1])
-        ax.hist(ads_fcc, bins=50, color='blue', alpha=0.7, label='FCC')
-        ax.axvline(ads_fcc.mean(), color='k', linestyle=':', linewidth=2, label='FCC mean')
-        ax.hist(ads_ontop, bins=50, color='red', alpha=0.7, label='Ontop')
-        ax.axvline(ads_ontop.mean(), color='k', linestyle='-.', linewidth=2, label='Ontop mean')
-        plt.legend()
+        ax.hist(ads_E, bins=50, color='blue', alpha=0.7, label='E distribution')
+        ax.axvline(ads_E.mean(), color='k', linestyle=':', linewidth=2, label='E mean')
+        # ax.hist(ads_ontop, bins=50, color='red', alpha=0.7, label='Ontop')
+        # ax.axvline(ads_ontop.mean(), color='k', linestyle='-.', linewidth=2, label='Ontop mean')
+        # plt.legend()
         plt.xlabel('Adsorption Energy (eV)')
         plt.ylabel('Frequency')
         plt.savefig('energy_distribution.png',dpi=300,bbox_inches='tight')
@@ -1557,49 +1962,45 @@ def analyze_BEEF_result(
         print("Failed to plot the energy distribution.")
 
     ## Formation
-    ontop_formation = ontop_e - slab_e - adsorbate_e
-    fcc_formation = fcc_e - slab_e - adsorbate_e
+    E_formation = system_e - slab_e - adsorbate_e
+    
+    E_formation_mean = E_formation.mean()
+    E_formation_std = E_formation.std()
+    
+    mean_id = CANVAS.register_tool_output(
+        tool_name="analyze_BEEF_result",
+        args={
+            "slabFilePath": slabFilePath,
+            "adsorbateFilePath": adsorbateFilePath,
+            "systemFilePath": systemFilePath,
+        },
+        value=E_formation_mean,
+        description=f"The mean adsorption energy calculated using {slabFilePath}, {adsorbateFilePath}, and {systemFilePath}",
+        reasons=reasons,
+        parent_result_ids=[],
+        metadata={}
+    )
+    
+    std_id = CANVAS.register_tool_output(
+        tool_name="analyze_BEEF_result",
+        args={
+            "slabFilePath": slabFilePath,
+            "adsorbateFilePath": adsorbateFilePath,
+            "systemFilePath": systemFilePath,
+        },
+        value=E_formation_std,
+        description=f"The standard deviation of adsorption energy calculated using {slabFilePath}, {adsorbateFilePath}, and {systemFilePath}",
+        reasons=reasons,
+        parent_result_ids=[],
+        metadata={}
+    )
 
-    print(f"ontop formation energy: {ontop_formation.mean()} eV")
-    print(f"fcc formation energy: {fcc_formation.mean()} eV")
-    ## Formation Energy Difference
-    formation_energy_diff = ontop_formation - fcc_formation
-
-    ## Distribution of Formation energy differernce 
-    if formation_energy_diff.all() > 0:
-        result = f"fcc is more stable than ontop by average {formation_energy_diff.mean()} eV"
-    elif formation_energy_diff.all() < 0:
-        result = f"ontop is more stable than fcc by average {abs(formation_energy_diff.mean())} eV"
-    else:
-        result = f" {sum(formation_energy_diff>0)} xc functionals prefer fcc, {sum(formation_energy_diff<0)} xc functionals prefer ontop"
-    return result
+    return f"The mean adsorption energy is {E_formation_mean} eV, and the standard deviation is {E_formation_std} eV. Mean_ID={mean_id}, Std_ID={std_id}."
 
 ##################################################################################################
 ##                                          HPC tools                                           ##
 ##################################################################################################
 
-@tool
-def find_job_list() -> str:
-    """Return the list of job files to be submitted."""
-
-    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
-    job_list = CANVAS.get('ready_to_run_job_list', []).copy()
-    
-    # time.sleep(60)
-    return f'The files need to be submitted are {job_list}. Please continue to submit the job.'
-
-@tool
-def read_file(
-    input_file: Annotated[str, "The file to be read."]
-) -> Annotated[str, "read content"]:
-    """read file content from the specified file path"""
-    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
-    ## Error when '/' in the content, manually delete
-    path = os.path.join(WORKING_DIRECTORY, input_file)
-    with open(path,"r") as file:
-        content = file.read()
-    # time.sleep(60)
-    return content
 
 @tool
 def add_resource_suggestion(
@@ -2114,3 +2515,158 @@ def read_single_output(
         return f"Invalid output file {output_file} or calculation failed, please submit the {input_file} again."
     # time.sleep(60)
     return f"Energy read from job {input_file} is {atoms.get_potential_energy()}"
+
+
+# @tool
+# def write_script(
+#     content: Annotated[str, "Text content to be written into the document."],
+#     file_name: Annotated[str, "Name of the file to be saved."],
+# ) -> Annotated[str, "Path of the saved document file."]:
+#     """Save the quantum espresso input script to the specified file path"""
+#     ## Error when '/' in the content, manually delete
+#     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+
+#     os.makedirs(WORKING_DIRECTORY, exist_ok=True)
+#     path = os.path.join(WORKING_DIRECTORY, f'{file_name}')
+
+#     ## If content ends with '/' then remove it
+#     if content.endswith('/'):
+#         content = content[:-1]
+    
+#     with open(path,"w",encoding="ascii") as file:
+#         file.write(content)
+    
+#     os.environ['INITIAL_FILE'] = file_name
+#     # time.sleep(60)
+#     return f"Initial file is created named {file_name}"
+
+
+# @tool
+# def write_LAMMPS_script(
+#     content: Annotated[str, "Text content to be written into the document."],
+#     file_name: Annotated[str, "Name of the file to be saved."],
+# ) -> Annotated[str, "Path of the saved document file."]:
+#     """Save the LAMMPS input script to the specified file path"""
+#     ## Error when '/' in the content, manually delete
+#     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+    
+#     os.makedirs(WORKING_DIRECTORY, exist_ok=True)
+#     path = os.path.join(WORKING_DIRECTORY, f'{file_name}')
+    
+#     job_list_dict = {}
+#     job_list = []
+
+#     ## If content ends with '/' then remove it
+#     if content.endswith('/'):
+#         content = content[:-1]
+    
+#     with open(path,"w",encoding="ascii") as file:
+#         file.write(content)
+    
+#     os.environ['INITIAL_FILE'] = file_name
+    
+#     job_list.append(file_name)
+    
+#     old_job_list = CANVAS.get('ready_to_run_job_list', []).copy()
+#     job_list = list(set(old_job_list + job_list))
+#     CANVAS.write('ready_to_run_job_list',job_list, overwrite=True)
+        
+#     # time.sleep(60)
+#     return f"Initial file is created named {file_name}"
+
+# @tool
+# def find_classical_potential(element: str) -> str:
+#     """Return classical potential file path for given element symbol."""
+#     # time.sleep(60)
+#     return f'The classcial potential file for {element} is located at /nfs/turbo/coe-venkvis/ziqiw-turbo/mint-PD/PD/EAM/Li_v2.eam.fs'
+
+
+# @tool
+# def get_bulk_modulus(
+#     working_directory: str,
+#     pseudo_dir: str,
+#     input_file: str,
+# ) -> float:
+#     '''Calculate the bulk modulus of the given quantum espresso input file, pseudopotential directory and working directory'''
+#     atoms = read(os.path.join(working_directory,input_file))
+#     with open(os.path.join(working_directory,input_file),'r') as file:
+#         content = file.read()
+#     input_data = parse_qe_input_string(content)
+#     pseudopotentials = filter_potential(input_data)
+
+#     profile = EspressoProfile(command='mpiexec -n 8 pw.x', pseudo_dir=pseudo_dir)
+
+#     atoms.calc = Espresso(
+#     profile=profile,
+#     pseudopotentials=pseudopotentials,
+#     input_data=input_data
+# )
+
+#     # run variable cell relax first to make sure we have optimum scaling factor
+#     # ecf = ExpCellFilter(atoms)
+#     # dyn = FIRE(ecf)
+#     # traj = Trajectory(os.path.join(working_directory,'relax.traj'), 'w', atoms)
+#     # dyn.attach(traj)
+#     # dyn.run(fmax=1.5)
+
+#     # now we calculate eos
+#     eos = calculate_eos(atoms)
+#     v, e, B = eos.fit()
+#     bulk_modulus = B / kJ * 1.0e24
+
+#     # time.sleep(60)
+#     return bulk_modulus
+
+
+# @tool
+# def get_lattice_constant(
+#     working_directory: str,
+#     pseudo_dir: str,
+#     input_file: str,
+# ) -> float:
+#     '''Calculate the lattice constant of the given quantum espresso input file, pseudopotential directory and working directory'''
+#     atoms = read(os.path.join(working_directory,input_file))
+#     with open(os.path.join(working_directory,input_file),'r') as file:
+#         content = file.read()
+#     input_data = parse_qe_input_string(content)
+#     pseudopotentials = filter_potential(input_data)
+
+#     profile = EspressoProfile(command='mpiexec -n 2 pw.x', pseudo_dir=pseudo_dir)
+
+#     atoms.calc = Espresso(
+#     profile=profile,
+#     pseudopotentials=pseudopotentials,
+#     input_data=input_data
+# )
+
+#     eos = calculate_eos(atoms)
+#     v, e, B = eos.fit()
+#     lc = (v)**(1/3)
+#     print(f'{input_file} lattice constant is {lc}')
+#     with open(os.path.join(working_directory,input_file.split('.')[0]+'.out'),'w') as file:
+#         file.write(f'\n# {input_file} Lattice constant is {lc}')
+#     # time.sleep(60)
+#     return lc
+
+# @tool
+# def find_job_list() -> str:
+#     """Return the list of job files to be submitted."""
+
+#     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+#     job_list = CANVAS.get('ready_to_run_job_list', []).copy()
+    
+#     # time.sleep(60)
+#     return f'The files need to be submitted are {job_list}. Please continue to submit the job.'
+
+# @tool
+# def read_file(
+#     input_file: Annotated[str, "The file to be read."]
+# ) -> Annotated[str, "read content"]:
+#     """read file content from the specified file path"""
+#     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+#     ## Error when '/' in the content, manually delete
+#     path = os.path.join(WORKING_DIRECTORY, input_file)
+#     with open(path,"r") as file:
+#         content = file.read()
+#     # time.sleep(60)
+#     return content
