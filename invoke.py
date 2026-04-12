@@ -196,7 +196,7 @@ if __name__ == "__main__":
     reaction (OER) in the Google DeepMind GNoME database. Please do a iterative multi-round screening, learning from each round and applying insights to new candidates, 
     surfaces/terminations, or active sites if and when possible.Please use literature searches to inform your per-round candidate selection and hypothesis formation, and note them down clearly.
     Prioritise O adsorption calculations broadly across many candidates. Use the resulting G(O) values to identify the most promising candidates and sites before proceeding with OH adsorption calculations.
-    You have a maximum of 24 hours to complete the entire study and make your final report.
+    You have a maximum of 6 hours to complete the entire study and make your final report.
     
     The AQ-GNoME database is available, which enables filtering based on aqueous stability across pH and
     electrochemical potential (V vs. SHE). You need to make use of literature when choosing filtering criteria and making candidate selections.
@@ -219,7 +219,6 @@ if __name__ == "__main__":
     - Any recommendations for future studies or next steps based on the findings and limitations of the current study.
     """
 
-    # NOTE NOTE NOTE TODO -- place holder for time: XXXXXX
     revised_message_v2 = """
     Please conduct an acidic OER screening study to identify the best catalytic candidate for the oxygen evolution
     reaction (OER) in the Google DeepMind GNoME database. 
@@ -356,7 +355,7 @@ if __name__ == "__main__":
             initialize_database(db_file)
 
     EXPLOG.init(Path(WORKING_DIRECTORY)/"TEMP_vasp_calcs",
-                "test", # TODO <<<--- SET MODE...
+                "MLIP-test",
                 reject_if_failed_exists = True,
                 require_relaxed_o_for_oh = True
                 )
@@ -393,7 +392,7 @@ if __name__ == "__main__":
 
         if overwrite:
             inputs = {
-                "inputs": f"{revised_message_v3}",
+                "inputs": f"{revised_message_v4}",
                 "plan": [],
                 "past_steps": [],
                 # NOTE: init boss answers state explicitly...
