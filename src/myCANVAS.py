@@ -1,8 +1,16 @@
-import pickle
-from ase.io import read
+import math
 import os
+import pickle
+import time
+import uuid
+from typing import Any, Annotated, Callable, Dict, List, Literal, Optional, TypedDict
+import string
+import random
 import copy
+from src.dag_visualizer import build_dag, generate_html, save_html
 
+from pydantic import BaseModel, Field
+from langchain_core.tools import tool
 
 def myDictPP(myDict, indent=4, nindent=0, toDisk=False, filename=None):
     # remove canvas.txt if it exists
@@ -37,6 +45,39 @@ def _myDictPP(myDict, indent=4, nindent=0, toDisk=False, filename=None):
         with open(filename, 'a') as f:
             f.write(" " * indent * nindent + "}\n")
 
+def _new_id(prefix: str) -> str:
+    alphabet = string.ascii_lowercase + string.digits
+    return ''.join(random.choices(alphabet, k=8))
+
+
+class NumericArtifact(BaseModel):
+    result_id: str
+    tool_name: str
+    value: float
+    args: Dict[str, Any]
+    description: str
+    reasons: Dict[str, str]
+    parent_result_ids: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    
+class OtherArtifact(BaseModel):
+    result_id: str
+    tool_name: str
+    value: Any
+    args: Dict[str, Any]
+    description: str
+    reasons: Dict[str, str]
+    parent_result_ids: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+# class CanvasEntry(BaseModel):
+#     entry_type: Literal["note", "numerical_result", "special"]
+#     value: Any
+#     trusted: bool = False
+#     source_result_id: Optional[str] = None
+#     metadata: Dict[str, Any] = Field(default_factory=dict)
+
 class myCANVAS():
         
     def __init__(self, working_directory = os.getcwd()):
@@ -45,6 +86,12 @@ class myCANVAS():
         self.canvas_checkpoints = []
         self.working_directory = working_directory
         self.tmpCkpIdx = 0
+        # authoritative provenance registry for numeric tool outputs
+        self.result_registry = {}
+        self.curr_round_result_ids: List[str] = []
+
+        # optional tool-specific validators
+        self.tool_validators: Dict[str, Callable[[NumericArtifact, "myCANVAS"], tuple[bool, str]]] = {}
     
     def set_working_directory(self, working_directory, ckp=0):
         self.working_directory = working_directory
@@ -125,27 +172,125 @@ class myCANVAS():
         ckpDir = os.path.join(self.working_directory, 'canvas_checkpoints.pickle')
         with open(ckpDir, 'wb') as f:
                 pickle.dump(self.canvas_checkpoints, f)   
+                
+    def register_tool_validator(
+        self,
+        tool_name: str,
+        validator_fn: Callable[[NumericArtifact, "myCANVAS"], tuple[bool, str]],
+    ):
+        self.tool_validators[tool_name] = validator_fn
+
+    def register_tool_output(
+        self,
+        tool_name: str,
+        args: Dict[str, Any],
+        value: Any,
+        description: str,
+        reasons: Dict[str, str] = {},
+        parent_result_ids: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        All tools should regiester their outputs through this method to ensure proper provenance tracking and verification.
+        This is the only authoritative source for numeric provenance. if numerical_result == True, type(value) must be int or float
+        """
+        
+        result_id = _new_id("")
+        
+        try:
+            value = float(value)
+            artifact = NumericArtifact(
+                result_id=result_id,
+                tool_name=tool_name,
+                args=args,
+                value=value,
+                description=description,
+                reasons=reasons,
+                parent_result_ids=parent_result_ids or [],
+                metadata=metadata or {},
+            )
+            # add duplication check
+            self.result_registry[result_id] = artifact
+            self.curr_round_result_ids.append(result_id)
+            return result_id
+        except:
+            artifact = OtherArtifact(
+                result_id=result_id,
+                tool_name=tool_name,
+                args=args,
+                value=value,
+                description=description,
+                reasons=reasons,
+                parent_result_ids=parent_result_ids or [],
+                metadata=metadata or {},
+            )
+            self.result_registry[result_id] = artifact
+            self.curr_round_result_ids.append(result_id)
+            return result_id
+        
+    def get_artifact(self, result_id: str):
+        return self.result_registry.get(result_id, None)
+    
+    def verify_artifact(
+        self,
+        expected_value: Any,
+        source_result_id,
+        tol: float = 1e-10,
+    ) -> tuple[bool, str, Optional[NumericArtifact]]:
+
+        artifact = self.result_registry.get(source_result_id)
+        if artifact is None:
+            return False, f"ID {source_result_id} does not exist."
+
+        if isinstance(artifact.value, (int, float)):
+            try:
+                expected_value = float(expected_value)
+                if not math.isclose(float(expected_value), artifact.value, rel_tol=0.0, abs_tol=tol):
+                    return False, f"ID {source_result_id} verification failed. \nExpected value: {repr(expected_value)} does not match registered tool output {repr(artifact.value)}."
+            except ValueError:
+                return False, f"ID {source_result_id} verification failed. \nExpected value: {repr(expected_value)} does not match registered tool output {repr(artifact.value)}."
+        else:
+            if expected_value != artifact.value:
+                return False, f"ID {source_result_id} verification failed. \nExpected value: {repr(expected_value)} does not match registered tool output {repr(artifact.value)}."
+            
+        return True, f"{source_result_id} Verification success."
+    
+    def rest_curr_round_result_ids(self):
+        self.curr_round_result_ids = []
+        
+    def check_required_tool_use(self, required_tools: List[str]):
+        missing_tools = set(required_tools) - set([self.get_artifact(result_id).tool_name for result_id in self.curr_round_result_ids])
+        if missing_tools:
+            return False, f"{', '.join(missing_tools)}"
+        else:
+            return True, "All required tools have been used in this round."
+        
+    def gen_DAG(self, filename, title):
+        my_artifact_nodes = [self.get_artifact(result_id) for result_id in self.result_registry]
+        dag  = build_dag(my_artifact_nodes)
+        html = generate_html(dag, title=title)
+        save_html(html, filename)
         
     
 CANVAS = myCANVAS()
 
-if __name__ == "__main__":
-    print(CANVAS.inspect())
-    print(CANVAS.write('test', 'test value3'))
-    print(CANVAS.write('test2', 'test2 value3', overwrite=True))
-    tmp = read("/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/Rb-BCC-plan/Rb_bcc_k_0.5_ecutwfc_70.in.pwo")
-    print(CANVAS.write('Rb_bcc_k_0.5_ecutwfc_70', tmp))
-    dd = {'a': 1, 'b': 2}
-    ddd = {'c': 3, 'd': 4, 'dd': dd}
-    ll = [1, 2, 3, 4, dd, ddd]
-    print(CANVAS.write('dict', dd))
-    print(CANVAS.write('dict2', ddd))
-    print(CANVAS.write('list', ll))
-    print(CANVAS.inspect())
+# if __name__ == "__main__":
+#     print(CANVAS.inspect())
+#     print(CANVAS.write('test', 'test value3'))
+#     print(CANVAS.write('test2', 'test2 value3', overwrite=True))
+#     tmp = read("/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/Rb-BCC-plan/Rb_bcc_k_0.5_ecutwfc_70.in.pwo")
+#     print(CANVAS.write('Rb_bcc_k_0.5_ecutwfc_70', tmp))
+#     dd = {'a': 1, 'b': 2}
+#     ddd = {'c': 3, 'd': 4, 'dd': dd}
+#     ll = [1, 2, 3, 4, dd, ddd]
+#     print(CANVAS.write('dict', dd))
+#     print(CANVAS.write('dict2', ddd))
+#     print(CANVAS.write('list', ll))
+#     print(CANVAS.inspect())
 
-    loaded = pickle.load(open('canvas.pickle', 'rb'))
-    myDictPP(pickle.load(open('canvas.pickle', 'rb')))
-    print(loaded == CANVAS.canvas)
+#     loaded = pickle.load(open('canvas.pickle', 'rb'))
+#     myDictPP(pickle.load(open('canvas.pickle', 'rb')))
+#     print(loaded == CANVAS.canvas)
     
     
 

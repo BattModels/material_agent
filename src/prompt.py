@@ -11,6 +11,7 @@ teamCapability = """
     - generate EOS calculation input files using the best parameters
     - generate production run input files
     - generate BEEF input files from finished relax calculation
+    - analyze BEEF result to get uncertainty
     - Read output file to get energy
     - Calculate lattice constant
     - Calculate formation energy
@@ -37,7 +38,7 @@ supervisor_prompt = f"""
     Given the following user request, decide which the member to act next, and do what
 <Instructions>:
     0,  You will be given the overall objective from the user, a plan consists of a list of high level steps to achieve the objective, and a list of past steps that have been done.
-    1.  If the plan is empty, For the given objective, come up with a simple, high level plan based on the capability of the team listed here: {teamCapability} and the restrictions listed here: {teamRestriction} 
+    1.  If the plan is empty, For the given objective, first check your worker agents available tools. Then come up with a simple, high level plan based on the capability of the team listed here: {teamCapability} and the restrictions listed here: {teamRestriction}, and specify what are the must use tools to finish the steps.
         You don't have to use all the members, nor all the capabilities of the members.
         This plan should involve individual tasks, that if executed correctly will yield the correct answer. Do not add any superfluous steps. 
         The result of the final step should be the final answer. Make sure that each step has all the information needed - do not skip steps.
@@ -65,6 +66,7 @@ supervisor_prompt = f"""
     4.  Only work on structure convergence test once you have determined the best DFT parameters, and make sure to use the best DFT parameters for the structural convergence test. 
     5.  Do not work on structural convergence test (slab thickness, vaccum size) and DFT parameter convergence test (k-points, ecut) at the same time.
     6.  Please be critical to your final answer, reflect on what you have done, make sure the answer is correct. If you found any possible issue, try to fix it and rerun the calculations.
+    7.  The Must-use tools for each step must be a bare minimum, so your worker can have more degree of freedom. 
         """
 
 
@@ -121,6 +123,7 @@ dft_agent_prompt = """
                 15. For production run, use optimal parameters and converged structures.
                 15. when calculating formation energies, convergence test on DFT parameters should be done on one representitive system with both the adsorbate and the surface.
                 16. If a job is having issue, i.e. didn't converge or not accurate enough, use the right tool to get suggestions on how to modify the input file to fix the issue.
+                17. Never do math yourself. Call the math tool instead
             """
 
 dft_reader_agent_prompt = """
@@ -235,6 +238,7 @@ hpc_agent_prompt = f"""
                 4. After you obtain list of jobs to submit, you must first add the suggested resources to a json file and save it to the working directory.
                 5. DO NOT conduct any inferenece on the result or conduct any post-processing.
                 6. Do not give further suggestions on what to do next.
+                7. Never do math yourself. Call the math tool instead
             """
 
 meam_doc = """

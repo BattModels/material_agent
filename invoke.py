@@ -88,7 +88,7 @@ if __name__ == "__main__":
     Sn (dia)	6.474
     '''
     
-    userMessage_6 = "You are going to calculate the lattice constant for FCC Sr through DFT."
+    userMessage_6 = "You are going to calculate the lattice constant for BCC Li through DFT."
     userMessage_7 = "You are going to generat a Pt surface structure with 2x2x4 supercell, then do a convergence test, use maximum ecutwfc = 160. Get the optimal kspacing and ecutwfc."
     userMessage_8 = """Please generate intial structures required to calculate CO adsorbtion on Pt(111) surface with 1/4 coverage (2x2x4 supercell), and calculate the adsorbtion energy."""
     userMessage_9 = """
@@ -180,10 +180,10 @@ if __name__ == "__main__":
             initialize_database(db_file)
 
     CANVAS.set_working_directory(WORKING_DIRECTORY)
-
-
-    
-    
+    Worker_available_tools = {}
+    with open(os.path.join('./config', "worker_available_tools.yaml"), "r") as f:
+        Worker_available_tools = yaml.safe_load(f)
+    CANVAS.write("Worker_available_tools", Worker_available_tools)
 
     rawGraph = create_graph(config)
     # graph = create_graph(config)
@@ -204,7 +204,7 @@ if __name__ == "__main__":
         
         if overwrite:
             inputs = {
-                "inputs": f"{userMessage_12}",
+                "inputs": f"{userMessage_6}",
                 "plan": [],
                 "past_steps": [],
                 "canvas": CANVAS.canvas

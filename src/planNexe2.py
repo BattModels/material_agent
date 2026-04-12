@@ -51,6 +51,7 @@ class myStep(BaseModel):
     agent: str = Field(
         description=f"Agent to perform the step. Should be one of {members}."
     )
+    required_tools: List[str] = Field(f"must-use tools for this step, should be a subset of the tools available to the agent.")
 
 class Plan(BaseModel):
     """Plan to follow in future"""
@@ -89,6 +90,10 @@ class wokerResponse(BaseModel):
     
     summary: str = Field(
         description="""what have you done + what did you note down? i.e. I did xxx, and got xxx. I did xxx, and found xxx ..... In the end, I answered xxx/finished xxx/failed xxx/... I have noted down xxx, xxx, and xxx on CANVAS"""
+    )
+    
+    success: bool = Field(
+        description="whether the task is successfully finished. True or False."
     )
 
 class PlanExecute(TypedDict):
@@ -210,21 +215,66 @@ the current plan is:
 this is what has been done:
 {old_tasks_string}
 
-Please update the plan accordingly.
+Please inspect and extract related information from CANVAS, then only update the plan accordingly if needed.
     """
-        
-    for agent_response in agent.stream(
-        {"messages": [("user", supervisorMessage)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
-    ):
-        # set agent_response to be the value of the first key of the dictionary
-        agent_response = next(iter(agent_response.values()))
-        print_stream(agent_response)
+    old_supervisorMessage = supervisorMessage
+    sup_good = False
+    sup_good_patient = 3
+    while not sup_good and sup_good_patient > 0:
+        sup_good_patient -= 1
+        for agent_response in agent.stream(
+            {"messages": [("user", supervisorMessage)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
+        ):
+            # set agent_response to be the value of the first key of the dictionary
+            agent_response = next(iter(agent_response.values()))
+            print_stream(agent_response)
 
-    # output = agent.invoke(
-    #     {"messages": [("user", supervisorMessage)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
-    #     )
-    # CANVAS.snap_save()
-    agent_response = agent_response['structured_response']
+        # output = agent.invoke(
+        #     {"messages": [("user", supervisorMessage)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
+        #     )
+        # CANVAS.snap_save()
+        agent_response = agent_response['structured_response']
+        sup_good = True
+        if not isinstance(agent_response.action, Response):
+            for step in agent_response.action.steps:
+                ToolList = [
+                    "inspect_my_canvas",
+                    "write_my_canvas",
+                    "read_my_canvas",
+                    "calculate_formation_E",
+                    "generateSurface_and_getPossibleSite",
+                    "generate_myAdsorbate",
+                    "add_myAdsorbate",
+                    "init_structure_data",
+                    "find_pseudopotential",
+                    "write_QE_script_w_ASE",
+                    "calculate_lc",
+                    "generate_convergence_test",
+                    "find_optimal_parameter",
+                    "generate_eos_test",
+                    "read_energy_from_output",
+                    "get_convergence_suggestions",
+                    "analyze_BEEF_result",
+                    "extract_numeric_from_tool_output",
+                    "math_expression_tool",
+                    "submit_and_monitor_job",
+                    "add_resource_suggestion"
+                ]
+                wrongTools = set(step.required_tools) - set(ToolList)
+                print(f"wrongTools: {wrongTools}")
+                if len(wrongTools) > 0:
+                    supervisorMessage = old_supervisorMessage + f"\n\nWARNING: In step '{step.step}', you required the following tools that are not in the tool list: {', '.join(wrongTools)}. Please check the CANVAS and try again!"
+                    sup_good = False
+                    break
+            
+        else:
+            sup_good = True
+    
+    if not sup_good:
+        print("Supervisor failed")
+        exit(0)
+        
+        
     if isinstance(agent_response.action, Response):
         return {"response": agent_response.action.response, "next": "FINISH", "canvas":CANVAS.canvas}
     # elif isinstance(output.action, Response):
@@ -267,7 +317,7 @@ def worker_agent_node(state, agent, name):
     task = plan[0]
 #     task_formatted = f"""For the following plan:
 # {plan_str}\n\nYou are tasked with executing step {1}, {task}."""
-    old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step}" for i, step in enumerate(state["past_steps"]))
+    old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step}." for i, step in enumerate(state["past_steps"]))
     task_formatted = f"""
 Here are what has been done so far:
 {old_tasks_string}
@@ -275,7 +325,7 @@ Here are what has been done so far:
 Here is the overall objective:
 {state["inputs"]}
 
-Now, you are tasked with: {task}. Please only do this task! Do not do anything else! Please note down important information on CANVAS before you end.
+Now, you are tasked with: {task}. Please only do this task! Do not do anything else! Please note down important information on CANVAS together with their reference id before you end.
 """
     
     print(task_formatted)
@@ -287,20 +337,48 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
     if var.my_SAVE_DIALOGUE:
         with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
             f.write(f"Agent {name} is processing!!!!!\n")
+    old_task_formatted = task_formatted
+    CANVAS.rest_curr_round_result_ids()
+    workerGood = False
+    workerGood_patient = 2
+    while not workerGood and workerGood_patient > 0:
+        workerGood_patient -= 1
+        for agent_response in agent.stream(
+            {"messages": [("user", task_formatted)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
+        ):
+            # set agent_response to be the value of the first key of the dictionary
+            agent_response = next(iter(agent_response.values()))
+            print_stream(agent_response)
+        
+        # agent_response = agent.invoke(
+        #     {"messages": [("user", task_formatted)]},  {"configurable": {"thread_id": "1"}}
+        # )
+        structured_response = agent_response['structured_response']
+        if not structured_response.success:
+            print(f"worker {name} didn't finish")
+            workerGood = True # if the worker agent fails, we want the supervisor to know and make a new plan.
+        else:
+            print(f"worker {name} finished the task successfully, now checking tool use...")
+            # check if the worker used all required tools
+            tool_use_passed, tool_use_msg = CANVAS.check_required_tool_use(task.required_tools)
+            print(tool_use_msg)
+            if tool_use_passed:
+                # LLM sanity check
+                # if LLM_check_passed:
+                #     workerGood = True
+                DAG_title = f"step_{len(state['past_steps'])+1}_DAG"
+                CANVAS.gen_DAG(
+                    filename=f"{var.my_WORKING_DIRECTORY}/{DAG_title}.html",
+                    title=DAG_title,
+                )
+                workerGood = True
+            else:
+                task_formatted = old_task_formatted
+                task_formatted += f"\n\nWARNING: You didn't use the following required tools: {tool_use_msg}. Retry again!"
     
-    
-    for agent_response in agent.stream(
-        {"messages": [("user", task_formatted)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
-    ):
-        # set agent_response to be the value of the first key of the dictionary
-        agent_response = next(iter(agent_response.values()))
-        print_stream(agent_response)
-    
-    # agent_response = agent.invoke(
-    #     {"messages": [("user", task_formatted)]},  {"configurable": {"thread_id": "1"}}
-    # )
-    structured_response = agent_response['structured_response']
-    
+    if not workerGood:
+        print(f"Worker Agent {name} failed")
+        exit(0)
     
     # state["past_steps"].append((task, agent_response["messages"][-1].content))
     state["past_steps"].append(myStep(step=structured_response.summary, agent=name))
@@ -377,11 +455,13 @@ def create_planning_graph(config: dict) -> StateGraph:
         write_QE_script_w_ASE,
         calculate_lc,
         generate_convergence_test,
-        get_kspacing_ecutwfc,
+        find_optimal_parameter,
         generate_eos_test,
         read_energy_from_output,
         get_convergence_suggestions,
         analyze_BEEF_result,
+        extract_numeric_from_tool_output,
+        math_expression_tool
         # get_ase_atoms_property,
         # inspect_ase_atoms,
         ]

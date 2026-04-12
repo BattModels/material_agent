@@ -13,6 +13,7 @@ from langchain_anthropic import ChatAnthropic
 # from langchain_openai import AzureChatOpenAI
 import math
 import os 
+import copy
 from typing import Annotated, Dict, Literal, Optional, Sequence, Tuple, Any
 import numpy as np
 from ase.lattice.cubic import FaceCenteredCubic
@@ -241,7 +242,7 @@ def extract_numeric_from_tool_output(
         str: A message indicating the result of the extraction and verification process.
     """
     abs_tol = 1e-8,
-    record = CANVAS.get_artifact(source_tool_call_id)
+    record = CANVAS.canvas.get_artifact(source_tool_call_id)
     if record is None:
         return (
             f"EXTRACTION_FAILED: source_tool_call_id='{source_tool_call_id}' "
@@ -692,31 +693,37 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
     output_capture = io.StringIO()
     with contextlib.redirect_stdout(output_capture):
         print(mySites)
+        
+    mySites_copy = copy.deepcopy(mySites)
     
     mySites_str = output_capture.getvalue()
     
-    ids = {}
     if supercell_dim_z_ref != "" and n_fixed_layers_ref != "" and vacuum_ref != "":
-        for k, v in mySites.items():
-            ids[k] = CANVAS.register_tool_output(
-                tool_name="generateSurface_and_getPossibleSite",
-                args={
-                    "species": species,
-                    "crystal_structures": crystal_structures,
-                    "facets": facets,
-                    "supercell_dim_xy": supercell_dim_xy,
-                    "supercell_dim_z": supercell_dim_z,
-                    "n_fixed_layers": n_fixed_layers,
-                    "vacuum": vacuum,
-                    "surfaceFilename": surfaceFilename,
-                },
-                value=v,
-                description=f"Adsorption {k} site",
-                reasons=reasons,
-                parent_result_ids=[supercell_dim_z_ref, n_fixed_layers_ref, vacuum_ref],
-                metadata={}
-            )
-            mySites[k] = [v, f"ID={ids[k]}"]
+        parent_result_ids = [supercell_dim_z_ref, n_fixed_layers_ref, vacuum_ref]
+    else:
+        parent_result_ids = []
+    
+    ids = {}
+    for k, v in mySites.items():
+        ids[k] = CANVAS.register_tool_output(
+            tool_name="generateSurface_and_getPossibleSite",
+            args={
+                "species": species,
+                "crystal_structures": crystal_structures,
+                "facets": facets,
+                "supercell_dim_xy": supercell_dim_xy,
+                "supercell_dim_z": supercell_dim_z,
+                "n_fixed_layers": n_fixed_layers,
+                "vacuum": vacuum,
+                "surfaceFilename": surfaceFilename,
+            },
+            value=v,
+            description=f"Adsorption {k} site",
+            reasons=reasons,
+            parent_result_ids=parent_result_ids,
+            metadata={}
+        )
+        mySites[k] = [v, f"ID={ids[k]}"]
     
     CANVAS.write('Possible_CO_site_on_Pt_surface', mySites)
     
@@ -742,11 +749,13 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
         value=f"surface{surfaceFilename}",
         description="Path of the saved surface structure file in traj format.",
         reasons=reasons,
-        parent_result_ids=[supercell_dim_z_ref, n_fixed_layers_ref, vacuum_ref],
+        parent_result_ids=parent_result_ids,
         metadata={}
     )
+    if supercell_dim_z_ref != "" and n_fixed_layers_ref != "" and vacuum_ref != "":
+        return f"the surface generated is saved at surface/{surfaceFilename}, Path_ID={path_id}\navailable adsorbate sites are: {repr(mySites)}"
     
-    return f"the surface generated is saved at surface/{surfaceFilename}, Path_ID={path_id}\navailable adsorbate sites are: {repr(mySites)}"
+    return f"the surface generated is saved at surface/{surfaceFilename}\navailable adsorbate sites are: {repr(mySites_copy)}"
 
 @tool
 def generate_myAdsorbate(symbols: Annotated[str, "Element symbols of the adsorbate (Do not use any delimiters)"],
@@ -810,6 +819,8 @@ def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure
     assert surfaceWithAdsorbateFileName.endswith('.traj'), "surfaceWithAdsorbateFileName should end with .traj"
     assert not '/' in surfaceWithAdsorbateFileName, "surfaceWithAdsorbateFileName should not contain '/'"
     
+    
+    
     for value, ref in zip(
         [mySites],
         [mySites_ref]
@@ -863,27 +874,33 @@ def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure
     
     relaPath = absPath.split(f'{DirOfInterests}/')[-1]
     
-    outStr = f"Surface with adsorbate saved at {relaPath}."
     if mySites_ref != "":
-        id = CANVAS.register_tool_output(
-            tool_name="add_myAdsorbate",
-            args={
-                "mySurfacePath": mySurfacePath,
-                "adsorbatePath": adsorbatePath,
-                "mySites": mySites,
-                "rotations": rotations,
-                "surfaceWithAdsorbateFileName": surfaceWithAdsorbateFileName,
-            },
-            value=relaPath,
-            description="Path of the saved surface with adsorbate structure file in traj format.",
-            reasons=reasons,
-            parent_result_ids=[mySites_ref],
-            metadata={}
-        )
+        parent_result_ids = [mySites_ref]
+    else:
+        parent_result_ids = []
+    
+    outStr = f"Surface with adsorbate saved at {relaPath}."
+    id = CANVAS.register_tool_output(
+        tool_name="add_myAdsorbate",
+        args={
+            "mySurfacePath": mySurfacePath,
+            "adsorbatePath": adsorbatePath,
+            "mySites": mySites,
+            "rotations": rotations,
+            "surfaceWithAdsorbateFileName": surfaceWithAdsorbateFileName,
+        },
+        value=relaPath,
+        description="Path of the saved surface with adsorbate structure file in traj format.",
+        reasons=reasons,
+        parent_result_ids=parent_result_ids,
+        metadata={}
+    )
+    if mySites_ref != "":
         outStr += f" Path_ID={id}"
     
     return outStr
 
+# register regardless. only return ID when refs are provided
 
 @tool
 def write_QE_script_w_ASE(
@@ -1014,43 +1031,47 @@ def write_QE_script_w_ASE(
         destiJobList = 'ready_to_run_job_list'
     
     job_list = [filename]
-    old_job_list = CANVAS.get(destiJobList, []).copy()
+    old_job_list = CANVAS.canvas.get(destiJobList, []).copy()
     job_list = list(set(old_job_list + job_list))
     CANVAS.write(destiJobList, job_list, overwrite=True)
     
     outStr = f"Quantum Espresso input script is written to {filename}"
 
     if ecutwfc_ref != "" and kspacing_ref != "":
-        id = CANVAS.register_tool_output(
-            tool_name="write_QE_script_w_ASE",
-            args={
-                "listofElements": listofElements,
-                "ppfiles": ppfiles,
-                "filename": filename,
-                "inputAtomsDir": tmpinputAtomsDir,
-                "ensembleCalculation": ensembleCalculation,
-                "calculation": calculation,
-                "restart_mode": restart_mode,
-                "prefix": prefix,
-                "disk_io": disk_io,
-                "ibrav": ibrav,
-                "nat": nat,
-                "ntyp": ntyp,
-                "ecutwfc": ecutwfc,
-                "ecutrho": ecutrho,
-                "occupations": occupations,
-                "smearing": smearing,
-                "degauss": degauss,
-                "conv_thr": conv_thr,
-                "electron_maxstep": electron_maxstep,
-                "input_dft": input_dft,
-            },
-            value=filename,
-            description="Path of the saved Quantum Espresso input script.",
-            reasons=reasons,
-            parent_result_ids=[ecutwfc_ref, kspacing_ref],
-            metadata={}
-        )
+        parent_result_ids = [ecutwfc_ref, kspacing_ref]
+    else:   
+        parent_result_ids = []
+    id = CANVAS.register_tool_output(
+        tool_name="write_QE_script_w_ASE",
+        args={
+            "listofElements": listofElements,
+            "ppfiles": ppfiles,
+            "filename": filename,
+            "inputAtomsDir": tmpinputAtomsDir,
+            "ensembleCalculation": ensembleCalculation,
+            "calculation": calculation,
+            "restart_mode": restart_mode,
+            "prefix": prefix,
+            "disk_io": disk_io,
+            "ibrav": ibrav,
+            "nat": nat,
+            "ntyp": ntyp,
+            "ecutwfc": ecutwfc,
+            "ecutrho": ecutrho,
+            "occupations": occupations,
+            "smearing": smearing,
+            "degauss": degauss,
+            "conv_thr": conv_thr,
+            "electron_maxstep": electron_maxstep,
+            "input_dft": input_dft,
+        },
+        value=filename,
+        description="Path of the saved Quantum Espresso input script.",
+        reasons=reasons,
+        parent_result_ids=parent_result_ids,
+        metadata={}
+    )
+    if ecutwfc_ref != "" and kspacing_ref != "":
         outStr += f" Filename_ID={id}"
     
     # time.sleep(60)
@@ -1121,7 +1142,7 @@ def generate_convergence_test(input_file_name: Annotated[str, "Name of the templ
     cell = atom.cell
     ecutwfc_max = max(ecutwfc)
     kspacing_min = min(kspacing)
-    job_list_dict = CANVAS.get('jobs_K_and_ecut', {})
+    job_list_dict = CANVAS.canvas.get('jobs_K_and_ecut', {})
     job_list = []
     # Generate the input script for highest ecutwfc different kspacing
     for k in kspacing:
@@ -1202,7 +1223,7 @@ def generate_convergence_test(input_file_name: Annotated[str, "Name of the templ
     ## Remove duplicate files
     job_list = list(set(job_list))
     ## Save the job list
-    old_job_list = CANVAS.get('ready_to_run_job_list', []).copy()
+    old_job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
     job_list = list(set(old_job_list + job_list))
     CANVAS.write('ready_to_run_job_list',job_list, overwrite=True)
     CANVAS.write('jobs_K_and_ecut',job_list_dict)
@@ -1248,7 +1269,7 @@ def generate_eos_test(
                 return msg
     
     # CANVAS.write('job_list', [], overwrite=True)
-    CANVAS['jobs_K_and_ecut'] = {}
+    CANVAS.canvas['jobs_K_and_ecut'] = {}
     
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     input_file = os.path.join(WORKING_DIRECTORY, input_file_name)
@@ -1307,27 +1328,32 @@ def generate_eos_test(
     job_list = list(set(job_list))
     print(job_list)
     ## Save the job list as json file
-    old_job_list = CANVAS.get('ready_to_run_job_list', []).copy()
+    old_job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
     job_list = list(set(old_job_list + job_list))
     CANVAS.write('ready_to_run_job_list',job_list, overwrite=True)
     
     outStr = f"Job list is saved scucessfully, continue to submit the jobs. Files of interest are {job_list}."
     
     if kspacing_ref != "" and ecutwfc_ref != "":
-        id = CANVAS.register_tool_output(
-            tool_name="generate_eos_test",
-            args={
-                "input_file_name": input_file_name,
-                "kspacing": kspacing,
-                "ecutwfc": ecutwfc,
-                "stepSize": stepSize,
-            },
-            value=job_list,
-            description="The generated EOS test job list.",
-            reasons=reasons,
-            parent_result_ids=[kspacing_ref, ecutwfc_ref],
-            metadata={}
-        )
+        parent_result_ids = [kspacing_ref, ecutwfc_ref]
+    else:
+        parent_result_ids = []
+        
+    id = CANVAS.register_tool_output(
+        tool_name="generate_eos_test",
+        args={
+            "input_file_name": input_file_name,
+            "kspacing": kspacing,
+            "ecutwfc": ecutwfc,
+            "stepSize": stepSize,
+        },
+        value=job_list,
+        description="The generated EOS test job list.",
+        reasons=reasons,
+        parent_result_ids=parent_result_ids,
+        metadata={}
+    )
+    if kspacing_ref != "" and ecutwfc_ref != "":
         outStr += f" Filename_ID={id}"
     
     # time.sleep(60)
@@ -1365,6 +1391,7 @@ def get_convergence_suggestions(
     errFile = filename + ".err"
     block_size_tokens = 150000
     # WORKING_DIRECTORY = "/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/out"
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     
     # config = load_config(os.path.join('./config', "default.yaml"))
     config = var.OTHER_GLOBAL_VARIABLES
@@ -1472,7 +1499,7 @@ def get_convergence_suggestions(
     return f"{finalSuggestion}\nSuggestion_ID={id}. Please extract the numerical values if you need to use them for adjusting the input parameters for the next calculation."
 
 @tool
-def find_furthest_acceptable_parameter(
+def find_optimal_parameter(
     sweeping_parameter: Annotated[str, "Name of the sweeping parameter, e.g. 'ecutwfc', 'kspacing', and etc."],
     Filename_n_parameters: Annotated[List[Tuple[str, float]], "List of (filename, parameter_value) pairs."],
     reference_file: Annotated[str, "Among the list of files, the filename corresponding to the most expensive / most accurate reference calculation."],
@@ -1516,7 +1543,7 @@ def find_furthest_acceptable_parameter(
     chosen = max(acceptable, key=lambda x: abs(x[1] - reference_param))
     
     id = CANVAS.register_tool_output(
-        tool_name="find_furthest_acceptable_parameter",
+        tool_name="find_optimal_parameter",
         args={
             "sweeping_parameter": sweeping_parameter,
             "Filename_n_parameters": Filename_n_parameters,
@@ -1590,7 +1617,7 @@ def calculate_lc(
         assert isinstance(i, int), "jobFileIdx should be a list of index of files of interest"
     
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
-    job_list = CANVAS.get('finished_job_list', []).copy()
+    job_list = CANVAS.canvas.get('finished_job_list', []).copy()
     job_list = np.array(job_list, dtype=str)[jobFileIdx]
     print(f"actual job list: {job_list}")
 
@@ -1671,8 +1698,8 @@ def calculate_lc(
 #     for i in jobFileIdx:
 #         assert isinstance(i, int), "jobFileIdx should be a list of index of files of interest"
     
-#     job_dict = CANVAS.get('jobs_K_and_ecut', {})
-#     job_list = CANVAS.get('finished_job_list', []).copy()
+#     job_dict = CANVAS.canvas.get('jobs_K_and_ecut', {})
+#     job_list = CANVAS.canvas.get('finished_job_list', []).copy()
 #     job_list = np.array(job_list, dtype=str)[jobFileIdx]
 #     print(f"actual job list: {job_list}")
 #     assert len(job_list) > 0, "job list 0"
@@ -2039,13 +2066,13 @@ echo "Job Ended at `date`"\n \
         # time.sleep(60)
         return "Invalid input, please check the input format"
     
-    assert qeInputFileName in CANVAS.get('ready_to_run_job_list', []), f"{qeInputFileName} is not in the ready_to_run_job_list, please check the job list and make sure the file name is correct"
+    assert qeInputFileName in CANVAS.canvas.get('ready_to_run_job_list', []), f"{qeInputFileName} is not in the ready_to_run_job_list, please check the job list and make sure the file name is correct"
     
     # craete the json file if it does not exist, otherwise load it
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
 
-    new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 48, "runtime": 2800, "submissionScript": submissionScript, "outputFilename": outputFilename}}
-    # new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 4, "runtime": 30, "submissionScript": submissionScript, "outputFilename": outputFilename}}
+    # new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 48, "runtime": 2800, "submissionScript": submissionScript, "outputFilename": outputFilename}}
+    new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 4, "runtime": 30, "submissionScript": submissionScript, "outputFilename": outputFilename}}
 
     # check if resource_suggestions.db exist in the working directory
     db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
@@ -2053,6 +2080,24 @@ echo "Job Ended at `date`"\n \
         initialize_database(db_file)
     
     add_to_database(new_resource_dict, db_file)
+    
+    id = CANVAS.register_tool_output(
+        tool_name="add_resource_suggestion",
+        args={
+            "qeInputFileName": qeInputFileName,
+            "partition": partition,
+            "nnodes": nnodes,
+            "ntasks": ntasks,
+            "span": span,
+            "submissionScript": submissionScript,
+            "outputFilename": outputFilename,
+        },
+        value=new_resource_dict,
+        description=f"Resource suggestion for {qeInputFileName} with partition {partition}, nnodes {nnodes}, ntasks {ntasks}, runtime {span}, submission script {submissionScript}, and output filename {outputFilename}",
+        reasons={},
+        parent_result_ids=[],
+        metadata={}
+    )
     
     # time.sleep(60)
     return f"Resource suggestion for {qeInputFileName} saved scucessfully"
@@ -2073,7 +2118,7 @@ def submit_and_monitor_job(
         # time.sleep(60)
         return "Resource suggestion file not found, please use the add_resource_suggestion tool to add the resource suggestion"
         
-    # job_list = CANVAS.get('ready_to_run_job_list', []).copy()
+    # job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
     job_list = []
     
     # load reousrce suggestions
@@ -2105,7 +2150,7 @@ def submit_and_monitor_job(
     conn.close()
     print(f"loaded resource suggestions: {json.dumps(resource_dict, indent=4)}")
     
-    CANVAS['ready_to_run_job_list'] = job_list.copy()
+    CANVAS.canvas['ready_to_run_job_list'] = job_list.copy()
     wasJobList = deepcopy(job_list)
     
     ## Check resource key is valid
@@ -2260,7 +2305,7 @@ def submit_and_monitor_job(
         #     #         print(f"Job {inputFile} failed, will resubmit the job")
         #     if len(job_list) == 0:
         #         # load jobs frm job_list.json
-        #         job_list = CANVAS.get('ready_to_run_job_list', []).copy()
+        #         job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
                 
         #         # read all energies into a dict
         #         energies = {}
@@ -2304,15 +2349,27 @@ def submit_and_monitor_job(
         #             break
     
     # reset resource_suggestions.db and job lists
-    finishedJobs = CANVAS.get('finished_job_list', [])
+    finishedJobs = CANVAS.canvas.get('finished_job_list', [])
     finishedJobs += wasJobList
-    CANVAS['finished_job_list'] = finishedJobs
+    CANVAS.canvas['finished_job_list'] = finishedJobs
     CANVAS.write('ready_to_run_job_list', [], overwrite=True)
     db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
     os.remove(db_file)
     time.sleep(1)
     initialize_database(db_file)
     time.sleep(1)
+    
+    id = CANVAS.register_tool_output(
+        tool_name="submit_and_monitor_job",
+        args={
+            "jobType": jobType,
+        },
+        value="places_holder",
+        description=f"HPC places_holder",
+        reasons={},
+        parent_result_ids=[],
+        metadata={}
+    )
     
     notConvergedListString = ""
     
@@ -2446,7 +2503,7 @@ def read_energy_from_output(jobFileIdx: Annotated[List[int], "indexs of files in
     
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     # load job_list.jason
-    job_list = CANVAS.get('finished_job_list', []).copy()
+    job_list = CANVAS.canvas.get('finished_job_list', []).copy()
     job_list = np.array(job_list, dtype=str)[jobFileIdx]
     print(f"actual job list: {job_list}")
     
@@ -2567,7 +2624,7 @@ def read_single_output(
     
 #     job_list.append(file_name)
     
-#     old_job_list = CANVAS.get('ready_to_run_job_list', []).copy()
+#     old_job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
 #     job_list = list(set(old_job_list + job_list))
 #     CANVAS.write('ready_to_run_job_list',job_list, overwrite=True)
         
@@ -2653,7 +2710,7 @@ def read_single_output(
 #     """Return the list of job files to be submitted."""
 
 #     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
-#     job_list = CANVAS.get('ready_to_run_job_list', []).copy()
+#     job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
     
 #     # time.sleep(60)
 #     return f'The files need to be submitted are {job_list}. Please continue to submit the job.'
