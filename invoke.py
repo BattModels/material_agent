@@ -191,6 +191,33 @@ if __name__ == "__main__":
     # Use literature searches to inform your candidate selection and hypothesis formation. -> repetitive to requirement point 2
     # Prioritise O adsorption calculations broadly across many candidates. Use the resulting G(O) values to identify the most promising candidates and sites before submitting OH adsorption calculations. -> I added point 13. maybe we don't need this line anymore.
 
+    revised_message_v4 = """
+    Please conduct an acidic OER screening study to identify the best catalytic candidate for the oxygen evolution
+    reaction (OER) in the Google DeepMind GNoME database. Please do a iterative multi-round screening, learning from each round and applying insights to new candidates, 
+    surfaces/terminations, or active sites if and when possible.Please use literature searches to inform your per-round candidate selection and hypothesis formation, and note them down clearly.
+    Prioritise O adsorption calculations broadly across many candidates. Use the resulting G(O) values to identify the most promising candidates and sites before proceeding with OH adsorption calculations.
+    You have a maximum of 24 hours to complete the entire study and make your final report.
+    
+    The AQ-GNoME database is available, which enables filtering based on aqueous stability across pH and
+    electrochemical potential (V vs. SHE). You need to make use of literature when choosing filtering criteria and making candidate selections.
+    You should also consider catalytic activity, cost/availability, and stability under operating conditions when evaluating candidates.
+    Toxicity of the constituent elements should also be considered where possible, though note that no toxicity data is
+    available in the dataset, hence this assessment will be limited to qualitative reasoning based on literature.
+    
+    Final report:
+    At the end of the study, produce an extensive report structured as a mini scientific paper. Every conclusion and
+    claim must be directly supported by concrete results from the study — cite specific candidates, sites, terminations,
+    G(O), G(OH), and overpotential values explicitly. Be critical of your conclusions and assumptions: acknowledge
+    limitations, uncertainties, and cases where the data is inconclusive. Do not make claims that are not backed by
+    data. The report should include:
+    - A summary of the screening strategy and how it evolved.
+    - The best candidates identified, with their G(O), G(OH), ideal overpotential, and scaling-relation overpotential.
+    - A comparison of the best candidates with available literature.
+    - What was learned, what worked, and what did not.
+    - Which hypotheses were confirmed or rejected, with explicit reference to the supporting data.
+    - Any trends worth noting across the dataset, even if these trends do not lead to competitive candidates.
+    - Any recommendations for future studies or next steps based on the findings and limitations of the current study.
+    """
 
     # NOTE NOTE NOTE TODO -- place holder for time: XXXXXX
     revised_message_v2 = """
