@@ -231,6 +231,7 @@ if __name__ == "__main__":
 #                 }
 #             )
             CANVAS.canvas = snap.values["canvas"]
+            CANVAS.result_registry = snap.values["artifacts"]
             CANVAS.print()
             print(CANVAS)
             

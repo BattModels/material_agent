@@ -3,7 +3,7 @@ import os
 import pickle
 import time
 import uuid
-from typing import Any, Annotated, Callable, Dict, List, Literal, Optional, TypedDict
+from typing import Any, Annotated, Callable, Dict, List, Literal, Optional, TypedDict, Union
 import string
 import random
 import copy
@@ -64,6 +64,16 @@ class OtherArtifact(BaseModel):
     result_id: str
     tool_name: str
     value: Any
+    args: Dict[str, Any]
+    description: str
+    reasons: Dict[str, str]
+    parent_result_ids: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    
+class ListedArtifact(BaseModel):
+    result_id: str
+    tool_name: str
+    value: List[Union[NumericArtifact, OtherArtifact]]
     args: Dict[str, Any]
     description: str
     reasons: Dict[str, str]
@@ -186,6 +196,7 @@ class myCANVAS():
         args: Dict[str, Any],
         value: Any,
         description: str,
+        listed_value: bool = False,
         reasons: Dict[str, str] = {},
         parent_result_ids: Optional[List[str]] = None,
         metadata: Optional[Dict[str, Any]] = None,
@@ -214,19 +225,60 @@ class myCANVAS():
             self.curr_round_result_ids.append(result_id)
             return result_id
         except:
-            artifact = OtherArtifact(
-                result_id=result_id,
-                tool_name=tool_name,
-                args=args,
-                value=value,
-                description=description,
-                reasons=reasons,
-                parent_result_ids=parent_result_ids or [],
-                metadata=metadata or {},
-            )
-            self.result_registry[result_id] = artifact
-            self.curr_round_result_ids.append(result_id)
-            return result_id
+            if listed_value:
+                artifactList = []
+                for i, v in enumerate(value):
+                    try:
+                        v = float(v)
+                        artifactList.append(NumericArtifact(
+                            result_id=result_id,
+                            tool_name=tool_name,
+                            args=args,
+                            value=v,
+                            description=description,
+                            reasons=reasons,
+                            parent_result_ids=parent_result_ids or [],
+                            metadata=metadata or {},
+                        ))
+                    except:
+                        artifactList.append(OtherArtifact(
+                            result_id=result_id,
+                            tool_name=tool_name,
+                            args=args,
+                            value=v,
+                            description=description,
+                            reasons=reasons,
+                            parent_result_ids=parent_result_ids or [],
+                            metadata=metadata or {},
+                        ))
+                        
+                artifact = ListedArtifact(
+                    result_id=result_id,
+                    tool_name=tool_name,
+                    args=args,
+                    value=artifactList,
+                    description=description,
+                    reasons=reasons,
+                    parent_result_ids=parent_result_ids or [],
+                    metadata=metadata or {},
+                )
+                self.result_registry[result_id] = artifact
+                self.curr_round_result_ids.append(result_id)
+                return result_id
+            else:
+                artifact = OtherArtifact(
+                    result_id=result_id,
+                    tool_name=tool_name,
+                    args=args,
+                    value=value,
+                    description=description,
+                    reasons=reasons,
+                    parent_result_ids=parent_result_ids or [],
+                    metadata=metadata or {},
+                )
+                self.result_registry[result_id] = artifact
+                self.curr_round_result_ids.append(result_id)
+                return result_id
         
     def get_artifact(self, result_id: str):
         return self.result_registry.get(result_id, None)
@@ -242,24 +294,42 @@ class myCANVAS():
         if artifact is None:
             return False, f"ID {source_result_id} does not exist."
 
-        if isinstance(artifact.value, (int, float)):
-            try:
-                expected_value = float(expected_value)
-                if not math.isclose(float(expected_value), artifact.value, rel_tol=0.0, abs_tol=tol):
-                    return False, f"ID {source_result_id} verification failed. \nExpected value: {repr(expected_value)} does not match registered tool output {repr(artifact.value)}."
-            except ValueError:
-                return False, f"ID {source_result_id} verification failed. \nExpected value: {repr(expected_value)} does not match registered tool output {repr(artifact.value)}."
+        if isinstance(artifact, ListedArtifact):
+            # as long as one of the artifacts in the list matches the expected value, we consider it a success
+            for sub_artifact in artifact.value:
+                if isinstance(sub_artifact.value, (int, float)):
+                    try:
+                        expected_value = float(expected_value)
+                        if math.isclose(float(expected_value), sub_artifact.value, rel_tol=0.0, abs_tol=tol):
+                            return True, f"{source_result_id} Verification success."
+                    except ValueError:
+                        continue
+                else:
+                    if expected_value == sub_artifact.value:
+                        return True, f"{source_result_id} Verification success."
+            return False, f"ID {source_result_id} verification failed. \nExpected value: {repr(expected_value)} does not match any of the registered tool outputs {[repr(sub_artifact.value) for sub_artifact in artifact.value]}."
         else:
-            if expected_value != artifact.value:
-                return False, f"ID {source_result_id} verification failed. \nExpected value: {repr(expected_value)} does not match registered tool output {repr(artifact.value)}."
-            
-        return True, f"{source_result_id} Verification success."
-    
+            if isinstance(artifact.value, (int, float)):
+                try:
+                    expected_value = float(expected_value)
+                    if not math.isclose(float(expected_value), artifact.value, rel_tol=0.0, abs_tol=tol):
+                        return False, f"ID {source_result_id} verification failed. \nExpected value: {repr(expected_value)} does not match registered tool output {repr(artifact.value)}."
+                except ValueError:
+                    return False, f"ID {source_result_id} verification failed. \nExpected value: {repr(expected_value)} does not match registered tool output {repr(artifact.value)}."
+            else:
+                if expected_value != artifact.value:
+                    return False, f"ID {source_result_id} verification failed. \nExpected value: {repr(expected_value)} does not match registered tool output {repr(artifact.value)}."
+                
+            return True, f"{source_result_id} Verification success."
+
+        
     def rest_curr_round_result_ids(self):
         self.curr_round_result_ids = []
         
     def check_required_tool_use(self, required_tools: List[str]):
         missing_tools = set(required_tools) - set([self.get_artifact(result_id).tool_name for result_id in self.curr_round_result_ids])
+        # remove "" from missing tools if it exists
+        missing_tools = [tool for tool in missing_tools if tool != ""]
         if missing_tools:
             return False, f"{', '.join(missing_tools)}"
         else:

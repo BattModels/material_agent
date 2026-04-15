@@ -51,10 +51,33 @@ class myStep(BaseModel):
     agent: str = Field(
         description=f"Agent to perform the step. Should be one of {members}."
     )
-    required_tools: List[str] = Field(f"must-use tools for this step, should be a subset of the tools available to the agent.")
+    required_tools: List[Literal[
+                    # "inspect_my_canvas",
+                    # "write_my_canvas",
+                    # "read_my_canvas",
+                    "calculate_formation_E",
+                    "generateSurface_and_getPossibleSite",
+                    "generate_myAdsorbate",
+                    "add_myAdsorbate",
+                    "init_structure_data",
+                    "find_pseudopotential",
+                    "write_QE_script_w_ASE",
+                    "calculate_lc",
+                    "generate_convergence_test",
+                    "find_optimal_parameter",
+                    "generate_eos_test",
+                    "read_energy_from_output",
+                    "get_convergence_suggestions",
+                    "analyze_BEEF_result",
+                    "extract_numeric_from_tool_output",
+                    "math_expression_tool",
+                    "submit_and_monitor_job",
+                    "add_resource_suggestion",
+                    ""
+                ]] = Field(f"must-use tools for this step, should be a subset of the tools available to the agent. read the CANVAS with key Worker_available_tools to see more details about each tools.")
 
 class Plan(BaseModel):
-    """Plan to follow in future"""
+    """Need to add/modify current plan, which is going to be followed by your worker agents in future"""
 
     steps: List[myStep] = Field(
         description=f"""
@@ -71,13 +94,19 @@ class Response(BaseModel):
 
     response: str
 
+# the class supervisor will choose if the plan doesn't need to be changed
+class NoChange(BaseModel):
+    """No change to the plan, just continue to execute the original plan."""
+    comment: str = Field(description="any comment from the supervisor if needed, otherwise just put 'No change to the plan, continue to execute the original plan.'")
+
 
 class Act(BaseModel):
     """Action to perform."""
 
-    action: Union[Plan, Response] = Field(
-        description="Action to perform. If you need to further use tools to get the answer, use Plan."
-        "If you want to end the conversation, use Response."
+    action: Union[Plan, NoChange, Response] = Field(
+        description="""Action to perform. If the team need to further use tools to get the answer, and if you need to add more steps or adjust the steps, use Plan.
+        If the team can continue to execute the original plan without any change, use NoChange.
+        If you want to end the conversation, use Response."""
         # "DO NOT use response unless absolutly necessary."
     )
 
@@ -102,6 +131,7 @@ class PlanExecute(TypedDict):
     past_steps: List[myStep]
     response: str
     canvas: dict
+    artifacts: dict
     next: str
 
 class DisableParallelToolCallsMiddleware(AgentMiddleware):
@@ -201,22 +231,34 @@ def supervisor_chain_node(state, agent, name):
             f.write("\n")
             
     plan = state["plan"]
-    plan_str = "\n".join(f"{i+1}. {step.step}" for i, step in enumerate(plan))
+    plan_str = "\n".join(f"{i+1}. {step.step}" for i, step in enumerate(plan[1:]))
     # task_formatted = f"""For the following plan:
     # {plan_str}\n\nYou are tasked with executing step {1}, {task}."""
     old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step}" for i, step in enumerate(state["past_steps"]))
-    
-    supervisorMessage =  f"""
+    supervisorMessage = ""
+    if len(plan) == 0:
+        supervisorMessage =  f"""
+The overall goal is: {state['inputs']}.
+
+Nothing has been done yet and there is no plan yet. 
+
+Please inspect and extract related information from CANVAS, then only update the plan accordingly if needed.
+        """
+    else:
+        supervisorMessage =  f"""
 The overall goal is: {state['inputs']}. 
 
-the current plan is:
-{plan_str}
+previous task of {plan[0].agent} was:
+{plan[0].step}.
 
 this is what has been done:
 {old_tasks_string}
 
+the current plan is:
+{plan_str}
+
 Please inspect and extract related information from CANVAS, then only update the plan accordingly if needed.
-    """
+        """
     old_supervisorMessage = supervisorMessage
     sup_good = False
     sup_good_patient = 3
@@ -235,7 +277,7 @@ Please inspect and extract related information from CANVAS, then only update the
         # CANVAS.snap_save()
         agent_response = agent_response['structured_response']
         sup_good = True
-        if not isinstance(agent_response.action, Response):
+        if isinstance(agent_response.action, Plan):
             for step in agent_response.action.steps:
                 ToolList = [
                     "inspect_my_canvas",
@@ -258,7 +300,8 @@ Please inspect and extract related information from CANVAS, then only update the
                     "extract_numeric_from_tool_output",
                     "math_expression_tool",
                     "submit_and_monitor_job",
-                    "add_resource_suggestion"
+                    "add_resource_suggestion",
+                    "",
                 ]
                 wrongTools = set(step.required_tools) - set(ToolList)
                 print(f"wrongTools: {wrongTools}")
@@ -266,6 +309,7 @@ Please inspect and extract related information from CANVAS, then only update the
                     supervisorMessage = old_supervisorMessage + f"\n\nWARNING: In step '{step.step}', you required the following tools that are not in the tool list: {', '.join(wrongTools)}. Please check the CANVAS and try again!"
                     sup_good = False
                     break
+            
             
         else:
             sup_good = True
@@ -279,8 +323,22 @@ Please inspect and extract related information from CANVAS, then only update the
         return {"response": agent_response.action.response, "next": "FINISH", "canvas":CANVAS.canvas}
     # elif isinstance(output.action, Response):
     #     return {"response": "Plan is not finished! Do not use response!", "next": "Supervisor"}
+    elif isinstance(agent_response.action, NoChange):
+        plan_str = "\n".join(f"{i+1}. {step.step}, agent={step.agent}, required_tools: {step.required_tools}" for i, step in enumerate(plan[1:]))
+        print("No change to the plan, continue to execute the original plan.")
+        print(plan_str)
+        if var.my_SAVE_DIALOGUE:
+            with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+                f.write("No change to the plan, continue to execute the original plan.\n")
+                f.write(plan_str)
+                f.write("\n")
+        return {
+            "plan": plan[1:],
+            "next": plan[1].agent,
+            "canvas":CANVAS.canvas
+            }
     else:
-        plan_str = "\n".join(f"{i+1}. {step.step}" for i, step in enumerate(agent_response.action.steps))
+        plan_str = "\n".join(f"{i+1}. {step.step}, agent={step.agent}, required_tools: {step.required_tools}" for i, step in enumerate(agent_response.action.steps))
         print(plan_str)
         if var.my_SAVE_DIALOGUE:
             with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
@@ -386,7 +444,9 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
     print_stream(structured_response.summary)
     # CANVAS.snap_save()
     return {
-        "past_steps": state["past_steps"], "canvas":CANVAS.canvas
+        "past_steps": state["past_steps"], 
+        "canvas":CANVAS.canvas,
+        "artifacts": CANVAS.result_registry
     }
     
 def recusive_agent_node(state, agent, name):
