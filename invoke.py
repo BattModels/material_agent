@@ -355,7 +355,7 @@ if __name__ == "__main__":
             initialize_database(db_file)
 
     EXPLOG.init(Path(WORKING_DIRECTORY)/"TEMP_vasp_calcs",
-                "MLIP-test",
+                "test",
                 reject_if_failed_exists = True,
                 require_relaxed_o_for_oh = True
                 )

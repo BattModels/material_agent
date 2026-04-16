@@ -88,7 +88,7 @@ async def _arXiv_search(arxiv_search_query, context):  # Your async operation
     config = var.OTHER_GLOBAL_VARIABLES
     ursaWorkspace = Path(os.path.join(var.my_WORKING_DIRECTORY, "ursa_workspace"))
     llm = ChatAnthropic(model="claude-haiku-4-5-20251001", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-    agent = ArxivAgent(llm=llm, process_images=False, max_results=5, workspace=ursaWorkspace)
+    agent = ArxivAgent(llm=llm, process_images=False, max_results=1, workspace=ursaWorkspace)
     result = await agent.ainvoke(
         arxiv_search_query=arxiv_search_query, 
         context=context
@@ -669,7 +669,7 @@ def get_terminations_ranking(
         # recalculated on subsequent calls.
 
     # max_miller now fixed to 2
-    max_miller = 2
+    max_miller = 1
     
     # Arguments left fixed for now:
     method = 'all'      # What coordination to consider
