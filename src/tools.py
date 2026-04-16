@@ -84,21 +84,31 @@ except ImportError:
 ##################################################################################################
 import asyncio  # If needed for defining async_func
 
+# async def _arXiv_search(arxiv_search_query, context):  # Your async operation
+#     config = var.OTHER_GLOBAL_VARIABLES
+#     ursaWorkspace = Path(os.path.join(var.my_WORKING_DIRECTORY, "ursa_workspace"))
+#     llm = ChatAnthropic(model="claude-haiku-4-5-20251001", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+#     agent = ArxivAgent(llm=llm, process_images=False, max_results=1, workspace=ursaWorkspace)
+#     result = await agent.ainvoke(
+#         arxiv_search_query=arxiv_search_query, 
+#         context=context
+#     )
+#     os.makedirs(ursaWorkspace/"arxiv_papers_used", exist_ok=True)
+#     # move all files under ursaWorkspace / "arxiv_papers" into ursaWorkspace/"arxiv_papers_used"
+#     for file in os.listdir(ursaWorkspace/"arxiv_papers"):
+#         os.rename(ursaWorkspace/"arxiv_papers"/file, ursaWorkspace/"arxiv_papers_used"/file)
+    
+#     return result["final_summary"]
+
+# FOR DEMO 
 async def _arXiv_search(arxiv_search_query, context):  # Your async operation
     config = var.OTHER_GLOBAL_VARIABLES
-    ursaWorkspace = Path(os.path.join(var.my_WORKING_DIRECTORY, "ursa_workspace"))
     llm = ChatAnthropic(model="claude-haiku-4-5-20251001", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-    agent = ArxivAgent(llm=llm, process_images=False, max_results=1, workspace=ursaWorkspace)
-    result = await agent.ainvoke(
-        arxiv_search_query=arxiv_search_query, 
-        context=context
+    result = await llm.ainvoke(
+        [("user", f"Please answer the question: {arxiv_search_query} with context: {context}.")]
     )
-    os.makedirs(ursaWorkspace/"arxiv_papers_used", exist_ok=True)
-    # move all files under ursaWorkspace / "arxiv_papers" into ursaWorkspace/"arxiv_papers_used"
-    for file in os.listdir(ursaWorkspace/"arxiv_papers"):
-        os.rename(ursaWorkspace/"arxiv_papers"/file, ursaWorkspace/"arxiv_papers_used"/file)
     
-    return result["final_summary"]
+    return result.content
 
 
 @tool
@@ -108,13 +118,28 @@ def arXiv_search(
     ) -> str:
     """
     Perform an arXiv search for papers with a given arxiv_search_query and context and provide a summary.
-    Only 5 papers will be considered in the search. If you want to consider more papers, you will need to refine
-    your search arguments.
     """
+    # Only 5 papers will be considered in the search. If you want to consider more papers, you will need to refine
+    # your search arguments.
 
     result = asyncio.run(_arXiv_search(arxiv_search_query, context))
-
-    return result
+    
+    id = CANVAS.register_tool_output(
+        tool_name="arXiv_search",
+        args={
+            "arxiv_search_query": arxiv_search_query,
+            "context": context,
+        },
+        value=result,
+        description="Summary of arXiv search results for the query: {arxiv_search_query} with context: {context}",
+        parent_result_ids=[],
+        metadata={
+            "arxiv_search_query": arxiv_search_query,
+            "context": context,
+        }
+    )
+    
+    return f"{result}\nLiterature_result_ID={id}. Please extract the numerical values if you need to use numerical values from the result to make decisions or conclusions."
 
 
 @tool
@@ -183,9 +208,39 @@ def wait_for_update(
             outText = f"Total time elapsed since project start {timeElapsed}, time waited: {hWaited}hours and {mWaited} minutes.\n Here are the updates while you are waiting: "
             for key, value in tmpUpdate.items():
                 outText += f"\nprocess_id {key} status is now {value}."
-            return outText
+            
+            id = CANVAS.register_tool_output(
+                tool_name="wait_for_update",
+                args={
+                    "patience": patience,
+                },
+                value=outText,
+                description=f"Updates on job statuses after waiting for updates with patience {patience} minutes.",
+                parent_result_ids=[],
+                metadata={
+                    "patience": patience,
+                }
+            )    
+            
+            return f"{outText}\nMessage_ID={id}. Please refer to this ID for the updates while waiting."
         elif time.time() - var.startTime > patience*60:
-            return f"Total time elapsed since project start {timeElapsed}, you have been waiting for {patience} minutes with no update in the EXPLOG. You may want to check the EXPLOG and see if there is anything you can do to move the study forward."
+            
+            id = CANVAS.register_tool_output(
+                tool_name="wait_for_update",
+                args={
+                    "patience": patience,
+                },
+                value=f"Timeout reached after waiting for {patience} minutes with no updates in job statuses.",
+                description=f"Message indicating timeout after waiting for updates with patience {patience} minutes.",
+                parent_result_ids=[],
+                metadata={
+                    "patience": patience,
+                }
+            )
+            
+            return f"Total time elapsed since project start {timeElapsed}, you have been waiting for {patience} minutes with no update in the EXPLOG. You may want to check the EXPLOG and see if there is anything you can do to move the study forward.\nMessage_ID={id}. Please refer to this ID for the timeout message."
+        
+        
                        
 @tool
 def inspect_explog():
@@ -285,7 +340,16 @@ def inspect_explog():
         #                             # unrecoverable
         #                             outString += f'                candidate {cant_id} has a promising O adsorption at termination {termi_idx} and site {site_idx} with delta_G_O {tmp_delta_GO}, but OH adsorption job status is unrecoverable\n'
     
-    return outString
+    id = CANVAS.register_tool_output(
+        tool_name="inspect_explog",
+        args={},
+        value=outString,
+        description=f"High level summary of the candidates study progress based on the latest EXPLOG update.",
+        parent_result_ids=[],
+        metadata={}
+    )
+    
+    return f"{outString}\nMessage_ID: {id}. Please refer to this ID for the summary of the candidates study progress."
             
 
 @tool
@@ -357,6 +421,7 @@ def old_inspect_explog(only_get_updates: Annotated[bool, "Whether to only get up
 @tool
 def query_explog(
     table_name: Annotated[str, "Table to query: 'candidates' (one row per candidate, with best available OER metrics) or 'processes' (one row per DFT job, with per-site adsorption energies and overpotentials)."],
+    reason: Annotated[str, "reason behind the query. Why are you using such filters and sort? What are you looking for?"],
     filters: List[Filter] = [],
     sort: List[SortSpec] = [],
 ) -> str:
@@ -406,15 +471,34 @@ def query_explog(
         return "table_name must be either 'candidates' or 'processes'"
 
     filteredDF = df_query(df, filters, sort)
+    
+    result = filteredDF.to_string(index=True)
+    
+    id = CANVAS.register_tool_output(
+        tool_name="query_explog",
+        args={
+            "table_name": table_name,
+            "reason": reason,
+        },
+        value=result,
+        description=f"Result of querying the EXPLOG {table_name} table with reason: {reason}, filters: {filters}, and sort: {sort}.",
+        reasons={'reason': reason},
+        parent_result_ids=[],
+        metadata={
+            "table_name": table_name,
+            "reason": reason,
+        }
+    )
 
-    print(filteredDF)
-    return filteredDF.to_string(index=True)
+    print(result)
+    return f"{result}\nQuery_result_ID={id}. Please refer to this ID if you want to use the query result for further analysis or decision making."
     
     
 
 @tool
 def read_explog(
     candidate_id: Annotated[str, "MaterialId of the candidate to read the experiment log for."],
+    reasons: Annotated[str, "Why are you interested in this candidate? What do you want to find out from the experiment log?"],
     ) -> str:
     """
     Get a summary of the experiment log for a specific candidate, including all related job information and details
@@ -469,28 +553,57 @@ def read_explog(
     if len(rows) > 0:                    
         final_site_info = pd.concat(rows, ignore_index=True)
         answer += f"\nThe adsorption site information is:\n{final_site_info.to_string}\n"
+        
+    id = CANVAS.register_tool_output(
+        tool_name="read_explog",
+        args={
+            "candidate_id": candidate_id,
+        },
+        value=answer,
+        description=f"Summary of the experiment log for candidate {candidate_id} with reason: {reasons}.",
+        reasons={'reasons': reasons},
+        parent_result_ids=[],
+        metadata={
+            "candidate_id": candidate_id,
+            "reasons": reasons,
+        }
+    )
 
-    return answer
+    return f"{answer}\nQuery_result_ID={id}. Please refer to this ID if you want to use this query result for further analysis or decision making."
 
-@tool
-def get_top_k_candidates(
-    k: Annotated[int, "Number of top candidates to retrieve based on ideal overpotential."],
-    ) -> str:
-    """Get the top k candidates with the lowest ideal overpotential from the experiment log."""
-    _ = EXPLOG.update_log() # get the latest updates from the job handler and update the relational frame accordingly
-    # save EXPLOG into a pickle file under WORKING_DIRECTORY for record and future reference
-    # with open(os.path.join(var.my_WORKING_DIRECTORY, "EXPLOG.pkl"), "wb") as f:
-    #     pickle.dump(EXPLOG, f)
-    candidates_df = EXPLOG.relational_frame.candidates.df.copy()
-    candidates_df = candidates_df[candidates_df['idealOverPotential'].notna()]
-    if len(candidates_df) == 0:
-        return "No candidates has ideal overpotential information."
-    candidates_df["idealOverPotential"] = candidates_df["idealOverPotential"].apply(lambda x: float(x))
-    N_finished = len(candidates_df)
-    top_k_candidates = candidates_df.nsmallest(k, 'idealOverPotential')
-    top_k_candidates = top_k_candidates.copy().drop(columns=["study_obj"])
-    answer = f"Top {k} out of {N_finished} candidates with the lowest ideal overpotential:\n{top_k_candidates.to_string(index=False)}\n\nYou may run more calculations on those candidates at different terminations and sites, or you can also run more calculations on other candidates to expand the pool and find more promising candidates."
-    return answer
+# @tool
+# def get_top_k_candidates(
+#     k: Annotated[int, "Number of top candidates to retrieve based on ideal overpotential."],
+#     ) -> str:
+#     """Get the top k candidates with the lowest ideal overpotential from the experiment log."""
+#     _ = EXPLOG.update_log() # get the latest updates from the job handler and update the relational frame accordingly
+#     # save EXPLOG into a pickle file under WORKING_DIRECTORY for record and future reference
+#     # with open(os.path.join(var.my_WORKING_DIRECTORY, "EXPLOG.pkl"), "wb") as f:
+#     #     pickle.dump(EXPLOG, f)
+#     candidates_df = EXPLOG.relational_frame.candidates.df.copy()
+#     candidates_df = candidates_df[candidates_df['idealOverPotential'].notna()]
+#     if len(candidates_df) == 0:
+#         return "No candidates has ideal overpotential information."
+#     candidates_df["idealOverPotential"] = candidates_df["idealOverPotential"].apply(lambda x: float(x))
+#     N_finished = len(candidates_df)
+#     top_k_candidates = candidates_df.nsmallest(k, 'idealOverPotential')
+#     top_k_candidates = top_k_candidates.copy().drop(columns=["study_obj"])
+#     answer = f"Top {k} out of {N_finished} candidates with the lowest ideal overpotential:\n{top_k_candidates.to_string(index=False)}\n\nYou may run more calculations on those candidates at different terminations and sites, or you can also run more calculations on other candidates to expand the pool and find more promising candidates."
+    
+#     id = CANVAS.register_tool_output(
+#         tool_name="get_top_k_candidates",
+#         args={
+#             "k": k,
+#         },
+#         value=answer,
+#         description=f"Top {k} candidates with the lowest ideal overpotential from the EXPLOG.",
+#         parent_result_ids=[],
+#         metadata={
+#             "k": k,
+#         }
+#     )
+    
+#     return f"{answer}/nQuery_result_ID={id}. Please refer to this ID if you want to use the query result for further analysis or decision making."
 
 # @tool
 # def get_explog_updates()
@@ -499,7 +612,9 @@ def get_top_k_candidates(
 def enter_candidate_in_log(
     reason_or_hypothesis: Annotated[str, "Detailed Reason and hypothesis for selecting this candidate. To be used later for analysis and summarization."],
     df_name: Annotated[str, "Key of the dataframe in CANVAS containing the candidate entry."],
+    df_name_ref: Annotated[str, "Reference ID for the dataframe name, used for traceability."],
     MaterialId: Annotated[str, "MaterialId of the candidate in the dataframe."],
+    MaterialId_ref: Annotated[str, "Reference ID of the result where you find the MaterialId of interests."],
     note: Annotated[str | None, "Any notes you want to add."] = None,
     ) -> str:
     """
@@ -509,6 +624,11 @@ def enter_candidate_in_log(
     Reads the candidate's structure from the dataframe stored in CANVAS under
     `df_name`, initialises an OER catalyst study object.
     """
+    for ref in [df_name_ref, MaterialId_ref]:
+        if ref:
+            art = CANVAS.get_artifact(ref)
+            if art is None:
+                return f"Error: Reference ID {ref} not found in CANVAS."
 
     afdb = CANVAS.canvas.get('afdb', None)
     if afdb is None:
@@ -539,16 +659,41 @@ def enter_candidate_in_log(
     message = f"Material {MaterialId} added to the experiment log with \
     reason: {reason_or_hypothesis} and note: {note}. Candidate can now \
     be studied further applying DFT"
+    
+    id = CANVAS.register_tool_output(
+        tool_name="enter_candidate_in_log",
+        args={
+            "reason_or_hypothesis": reason_or_hypothesis,
+            "df_name": df_name,
+            "MaterialId": MaterialId,
+            "note": note,
+        },
+        value=message,
+        description=f"Entry of candidate {MaterialId} into the experiment log with reason: {reason_or_hypothesis} and note: {note}.",
+        reasons={'reason_or_hypothesis': reason_or_hypothesis},
+        parent_result_ids=[df_name_ref, MaterialId_ref],
+        metadata={
+            "reason_or_hypothesis": reason_or_hypothesis,
+            "df_name": df_name,
+            "df_name_ref": df_name_ref,
+            "MaterialId": MaterialId,
+            "MaterialId_ref": MaterialId_ref,
+            "note": note,
+        }
+    )
 
-    return message
+    return f"{message}\nMessage_ID={id}. Refer to this ID if you need to refer back to this message later"
 
 @tool
 def submit_dft_job(
     MaterialId: Annotated[str, "MaterialId of the candidate for which to submit a DFT job."],
+    MaterialId_ref: Annotated[str, "Reference ID of the result where you find the MaterialId of interests."],
     calculation_type: Annotated[Literal['bulk_relaxation', 'surface_relaxation', 'OH_adsorption', 'O_adsorption'], "Type of DFT calculation to submit. O_adsorption yields G(O); OH_adsorption yields G(OH) — both are required to compute overpotentials. OH_adsorption submits three jobs with slightly different initial adsorbate positions to increase the likelihood of finding the global minimum."],
     note: Annotated[str, "Short note for the calculation; state the reason for submitting the job, including why the selected termination and adsorption site are relevant."],
     termination_index: Annotated[int | None, "Termination index. Only required for surface and adsorption calculations."] = None,
+    termination_index_ref: Annotated[str, "Reference ID of the result or output message where you determind to submit a dft job for this termination index."] = "",
     ad_site_index: Annotated[int | None, "Index of the site onto which O or OH is adsorbed. Only required for adsorption calculations."] = None,
+    ad_site_index_ref: Annotated[str, "Reference ID of the result or output message where you determind to submit a dft job for this adsorption site index."] = "",
     partition: Annotated[Literal['xeon56', 'xeon40el8', 'xeon24el8', 'auto'], "HPC partition to submit the job to. Use 'auto' to let the system select the partition automatically."] = "auto",
 ) -> str:
     """
@@ -565,6 +710,12 @@ def submit_dft_job(
 
     Returns a confirmation message including the submitted process ID(s).
     """
+    
+    for ref in [MaterialId_ref, termination_index_ref, ad_site_index_ref]:
+        if ref:
+            art = CANVAS.get_artifact(ref)
+            if art is None:
+                return f"Error: Reference ID {ref} not found in CANVAS."
 
     # Does candidate exist in EXPLOG:
     try:
@@ -636,12 +787,39 @@ def submit_dft_job(
     # with open(os.path.join(var.my_WORKING_DIRECTORY, "EXPLOG.pkl"), "wb") as f:
     #     pickle.dump(EXPLOG, f)
     
-    return f"Submitted {calculation_type} for candidate {MaterialId}. Process ID(s): {id_list}."
+    outStr = f"Submitted {calculation_type} for candidate {MaterialId}. Process ID(s): {id_list}."
+    
+    id = CANVAS.register_tool_output(
+        tool_name="submit_dft_job",
+        args={
+            "MaterialId": MaterialId,
+            "calculation_type": calculation_type,
+            "termination_index": termination_index,
+            "ad_site_index": ad_site_index,
+            "note": note,
+        },
+        value=id_list,
+        listed_value=True,
+        description=f"Submission of {calculation_type} for candidate {MaterialId} with termination index {termination_index} and adsorption site index {ad_site_index}. Note: {note}",
+        reasons={'note': note},
+        parent_result_ids=[id for id in [MaterialId_ref, termination_index_ref, ad_site_index_ref] if id],
+        metadata={
+            "MaterialId": MaterialId,
+            "calculation_type": calculation_type,
+            "termination_index": termination_index,
+            "ad_site_index": ad_site_index,
+            "note": note,
+        }
+    )
+    
+    return f"{outStr}\nReference ID for the Process ID(s) is {id}. Please refer to this reference ID if the corresponding process id is needed."
 
 
 @tool
 def get_terminations_ranking(
     candidate_id: Annotated[str, "MaterialId of the candidate for which to get termination rankings."],
+    candidate_id_ref: Annotated[str, "Reference ID of the result where you find the MaterialId of interests."],
+    reasons: Annotated[str, "Why are you interested to know the termination ranking for this candidate? What do you want to find out from the termination ranking?"],
     #max_miller: Annotated[int, "Maximum Miller index to consider for surface generation."] = 1,
 ) -> str:
     """
@@ -661,6 +839,11 @@ def get_terminations_ranking(
     'list_adsorption_sites' to inspect the available adsorption sites before
     committing to a termination.
     """
+    for ref in [candidate_id_ref]:
+        if ref:
+            art = CANVAS.get_artifact(ref)
+            if art is None:
+                return f"Error: Reference ID {ref} not found in CANVAS."
 
     # Old part of docksrting:
         # This function must be run before any surface relaxation or adsorption
@@ -747,8 +930,24 @@ def get_terminations_ranking(
         out_string += "\n\nNo valid surface terminations could be determined for this candidate. "\
                       "No further surface or adsorption calculations can be performed for this " \
                       "candidate, and the candidate is marked as unrecoverable."
+                      
+    id = CANVAS.register_tool_output(
+        tool_name="get_terminations_ranking",
+        args={
+            "candidate_id": candidate_id,
+            "reasons": reasons,
+        },
+        value=out_string,
+        description=f"Termination ranking for candidate {candidate_id} with reason: {reasons}.",
+        reasons={'reasons': reasons},
+        parent_result_ids=[candidate_id_ref],
+        metadata={
+            "candidate_id": candidate_id,
+            "reasons": reasons,
+        }
+    )
 
-    return out_string
+    return f"{out_string}\nMessage_ID: {id}. Please refer to this ID if you want to refer back to this message later or use the termination ranking for further analysis or decision making."
 
 
 def _list_adsorption_sites(
@@ -808,7 +1007,10 @@ def _list_adsorption_sites(
 @tool
 def list_adsorption_sites(
     candidate_id: Annotated[str, "MaterialId of the candidate to list adsorption sites for."],
+    candidate_id_ref: Annotated[str, "Reference ID of the result where you find the MaterialId of interests."],
     termination_index: Annotated[int, "Termination index of the surface to list adsorption sites for."],
+    termination_index_ref: Annotated[str, "Reference ID of the result where you determine the termination index for which to list adsorption sites."],
+    reasons: Annotated[str, "Why are you interested to know the adsorption sites for this candidate at this termination? What do you want to find out from the adsorption sites information?"],
     # only_reduced_coord_O_sites = True, DISABLED FOR NOW...
 ):
     """
@@ -825,6 +1027,12 @@ def list_adsorption_sites(
     decreased coordination of 1.). Since this function can be called repeatedly, there is no need to write the result
     to the canvas.
     """
+    for ref in [candidate_id_ref, termination_index_ref]:
+        if ref:
+            art = CANVAS.get_artifact(ref)
+            if art is None:
+                return f"Error: Reference ID {ref} not found in CANVAS."
+    
     only_reduced_coord_O_sites = True # <<<--- FIXED FOR NOW...
     out_string = ''
     df = None
@@ -875,8 +1083,24 @@ def list_adsorption_sites(
     if True:
         out_string += '\n\n Original reason or hypothesis for selecting this candidate:\n'
         out_string += EXPLOG.relational_frame.candidates[candidate_id].reason_or_hypothesis
+        
+    id = CANVAS.register_tool_output(
+        tool_name="list_adsorption_sites",
+        args={
+            "candidate_id": candidate_id,
+            "termination_index": termination_index,
+        },
+        value=out_string,
+        description=f"List of adsorption sites for candidate {candidate_id} on termination index {termination_index}.",
+        reasons={'reasons':reasons},
+        parent_result_ids=[candidate_id_ref, termination_index_ref],
+        metadata={
+            "candidate_id": candidate_id,
+            "termination_index": termination_index,
+        }
+    )
 
-    return out_string
+    return f"{out_string}\nMessage_ID: {id}. Please refer to this ID if you want to refer back to this message later or use the adsorption sites information for further analysis or decision making."
 
 
 @tool
@@ -887,10 +1111,13 @@ def OER_data_analasis_v2(
     solid_filter: Annotated[bool, "Whether to apply solid filter: which excludes compounds from the Pourbaix-stability calculations which are not located on the solid-phase convex hull."],
     gga_only: Annotated[bool, "Whether to use only GGA calculations (True), or include r2SCAN data via the MP-mixing scheme (False). GGA data will be applied when no r2SCAN data is available regardless."],
     save_name: Annotated[str, "Key under which the resulting dataframe is saved in CANVAS. Use a descriptive name to distinguish between runs with different criteria."],
+    reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'pHs', 'Us', 'decomposition_threshold', 'solid_filter', 'gga_only', 'save_name', 'filters', 'sort'"],
     overwrite: Annotated[bool, "If True, overwrite an existing dataframe stored under the same key in CANVAS. If False (default), the tool will abort if a dataframe with that key already exists."] = False,
     # dir_of_data: Annotated[Optional[str], "Path to data directory. If None, use default data directory."] = None,
     # elements_to_exclude: Annotated[List[str], "List of element symbols to exclude from the analysis."] = [], 
     # elements_whic_must_be_included: Annotated[List[str], "List of element symbols that must be included in the analysis."] = [],
+    ref_pHs: Annotated[Union[List[str], str], "List or a single value of reference_ID where you determined the value of pH(s) from"] = "",
+    ref_Us: Annotated[Union[List[str], str], "List or a single value of reference_ID where you determined the value of potential(s) from"] = "",
     filters: List[Filter] = [],
     sort: List[SortSpec] = [],
     ) -> str:
@@ -913,6 +1140,17 @@ def OER_data_analasis_v2(
     The optional `filters` and `sort` parameters can be used to further refine
     or order the results based on the output dataframe columns.
     """
+    
+    # verify refs
+    
+    for refs in [ref_pHs, ref_Us]:
+        refs = refs if isinstance(refs, list) else [refs]
+        for ref in refs:
+            if ref:
+                art = CANVAS.get_artifact(ref)
+                if art is None:
+                    return f"Error: Reference ID {ref} not found in CANVAS."
+            
 
     dh = Data_Handler(
     # Whether to apply solid filter:
@@ -968,45 +1206,93 @@ def OER_data_analasis_v2(
     canvas_result = CANVAS.write(save_name, df, overwrite=overwrite)
     if "already exists" in canvas_result:
         return f"Aborted: {canvas_result} Use overwrite=True to overwrite."
-
-    # If dataframe is too long:
+    
+    tmp_ref_pHs = ref_pHs if isinstance(ref_pHs, list) else [ref_pHs]
+    tmp_ref_Us = ref_Us if isinstance(ref_Us, list) else [ref_Us]
+    
+    parent_result_ids = [ref for ref in [*tmp_ref_pHs, *tmp_ref_Us] if ref] # only include non-empty refs
+    print("from tool OER_data_analasis_v2, parent_result_ids determined to be:")
+    print(parent_result_ids)
+    
+    df_id = CANVAS.register_tool_output(
+        tool_name="OER_data_analasis_v2",
+        args={
+            "pHs": pHs,
+            "Us": Us,
+            "decomposition_threshold": decomposition_threshold,
+            "solid_filter": solid_filter,
+            "gga_only": gga_only,
+            "save_name": save_name,
+            "overwrite": overwrite,
+        },
+        value=save_name,
+        description=f"key name of the saved dataframe",
+        reasons=reasons,
+        parent_result_ids=parent_result_ids,
+        metadata={},
+    )
+    
+    outStr = ""
     if len(df) > 20:
-        return f"Stable entries data analysis completed, yielding {len(df)} entries. The dataframe has {len(df)} entries, too long to display here. Please check the dataframe in canvas with key '{save_name}' using browse_df tool."
+        outStr += f"Stable entries data analysis completed, yielding {len(df)} entries. The dataframe has {len(df)} entries, too long to display here. Please check the dataframe in canvas with key '{save_name}' using browse_df tool. dataframe_ID={df_id}. Only use this ID as the reference ID when asked, still load the dataframe from canvas using the key name '{save_name}'."
     else:
-        return f"Stable entries data analysis completed, yielding {len(df)} entries. Below shows the dataframe with row index: \n{df.to_string(index=True)}. The same dataframe is also saved in canvas with key '{save_name}' and can be accessed using browse_df tool."
+        outStr += f"Stable entries data analysis completed, yielding {len(df)} entries. Below shows the dataframe with row index: \n{df.to_string(index=True)}. The same dataframe is also saved in canvas with key '{save_name}' and can be accessed using browse_df tool. dataframe_ID={df_id}. Only use this ID as the reference ID when asked, still load the dataframe from canvas using the key name '{save_name}'."
+    
+    result_id = CANVAS.register_tool_output(
+        tool_name="OER_data_analasis_v2",
+        args={
+            "pHs": pHs,
+            "Us": Us,
+            "decomposition_threshold": decomposition_threshold,
+            "solid_filter": solid_filter,
+            "gga_only": gga_only,
+            "save_name": save_name,
+            "overwrite": overwrite,
+        },
+        value=outStr,
+        description=f"Out string of the tool",
+        reasons=reasons,
+        parent_result_ids=parent_result_ids,
+        metadata={},
+    )
+    
+    outStr += "\nIf you want to reference any other information of the tool result, please refer to the result ID {result_id} if you need to use them to make decisions or conclusions."
+    
+    return outStr
 
-
-@tool
-def extract_df(
-    df_name: Annotated[str, "Name of the dataframe in canvas to extract."],
-    filters: List[Filter] = [],
-    sort: List[SortSpec] = []
-    ):
-    """read the dataframe with a given filter and sort. This is useful to exam the filtered dataframe without altering its data"""
-    df = CANVAS.read(df_name)
-    df = df_query(df, filters, sort)
-    if len(df) > 50:
-        return f"Too many entries pass the filter. Please apply more filters to narrow down the results or check with material_IDs to find the specific entries you want to look at. showing the first 50 entries:\n {df.head(50).to_string(index=True)}"
-    return df.to_string(index=True)
+# @tool
+# def extract_df(
+#     df_name: Annotated[str, "Name of the dataframe in canvas to extract."],
+#     filters: List[Filter] = [],
+#     sort: List[SortSpec] = []
+#     ):
+#     """read the dataframe with a given filter and sort. This is useful to exam the filtered dataframe without altering its data"""
+#     df = CANVAS.read(df_name)
+#     df = df_query(df, filters, sort)
+#     if len(df) > 50:
+#         return f"Too many entries pass the filter. Please apply more filters to narrow down the results or check with material_IDs to find the specific entries you want to look at. showing the first 50 entries:\n {df.head(50).to_string(index=True)}"
+#     return df.to_string(index=True)
 
     
-@tool
-def read_df(
-    df_name: Annotated[str, "Name of the dataframe in canvas to read."],
-    startIdx: Annotated[int, "Starting index of the dataframe to read."] = 0,
-    endIdx: Annotated[int, "Ending index of the dataframe to read."] = 10,
-    ) -> str:
-    """Read a portion of a dataframe (from row i to row j) from canvas and return it as a string with row index."""
-    if endIdx - startIdx > 50:
-        return "Read no more than 50 rows at a time."
-    df = CANVAS.read(df_name)
-    print(df)
-    return df.iloc[startIdx:endIdx].to_string(index=True)
+# @tool
+# def read_df(
+#     df_name: Annotated[str, "Name of the dataframe in canvas to read."],
+#     startIdx: Annotated[int, "Starting index of the dataframe to read."] = 0,
+#     endIdx: Annotated[int, "Ending index of the dataframe to read."] = 10,
+#     ) -> str:
+#     """Read a portion of a dataframe (from row i to row j) from canvas and return it as a string with row index."""
+#     if endIdx - startIdx > 50:
+#         return "Read no more than 50 rows at a time."
+#     df = CANVAS.read(df_name)
+#     print(df)
+#     return df.iloc[startIdx:endIdx].to_string(index=True)
 
 
 @tool
 def browse_df(
     df_name: Annotated[str, "Name of the dataframe in canvas to extract."],
+    df_name_ref: Annotated[str, "Reference ID for the dataframe name"],
+    reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'df_name', 'startIdx', 'endIdx', 'filters', 'sort'"],
     startIdx: Annotated[int, "Row index to start reading from (inclusive). Use 0 to start from the beginning."] = 0,
     endIdx: Annotated[int, "Row index to stop reading at (exclusive). Maximum window is 50 rows (endIdx - startIdx <= 50)."] = 50,
     filters: List[Filter] = [],
@@ -1029,6 +1315,11 @@ def browse_df(
     Returns the selected rows as a string with row index. The row index refers to
     the position in the filtered/sorted dataframe, not the original stored dataframe.
     """
+    for ref in [df_name_ref]:
+        if ref:
+            art = CANVAS.get_artifact(ref)
+            if art is None:
+                return f"Error: Reference ID {ref} not found in CANVAS."
 
     # Ensure that the provided start/end indices to not exceed 50 (as speficied in the docstring/annotations):
     if endIdx - startIdx > 50:
@@ -1046,9 +1337,26 @@ def browse_df(
     footer = f"\nShowing rows {startIdx}–{min(endIdx, total)-1} of {total} total."
     if total > endIdx:
         footer += f" Call again with startIdx={endIdx} to see more rows."
+        
+    outStr = result + footer
+    
+    id = CANVAS.register_tool_output(
+        tool_name="browse_df",
+        args={
+            "df_name": df_name,
+            "startIdx": startIdx,
+            "endIdx": endIdx,
+            "filters": filters,
+            "sort": sort,
+        },
+        value=outStr,
+        description=f"Output string of the requested portion of the dataframe after applying filters and sort, with a footer indicating the range of rows shown and total rows.",
+        reasons=reasons,
+        parent_result_ids=[df_name_ref],
+        metadata={},
+    )
 
-    return result + footer
-
+    return f"{outStr}\nMessage_ID: {id}. Please refer to this ID if you want to refer back to this message later or use the displayed information for further analysis or decision making."
 
 # def get_facets(
 #     df_name: Annotated[str, "Name of the dataframe in canvas to read."],
@@ -1432,12 +1740,32 @@ def inspect_my_canvas():
     """Inspect the working canvas to get available keys"""
     # get all keys in myCANVAS and return them as a list [key1, key2, ...]
     # print(CANVAS)
+    _ = CANVAS.register_tool_output(
+        tool_name="inspect_my_canvas",
+        args={},
+        value="",
+        description=f"Inspecting the working canvas to get available keys.",
+        parent_result_ids=[],
+        metadata={},
+    )
+    
     return CANVAS.inspect()
 
 @tool
 def read_my_canvas(key: Annotated[str, "key"]):
     """Read a value from the working canvas"""
     # read a value from myCANVAS given a key
+    _ = CANVAS.register_tool_output(
+        tool_name="read_my_canvas",
+        args={
+            "key": key,
+        },
+        value="",
+        description=f"Reading value from canvas with key '{key}'",
+        parent_result_ids=[],
+        metadata={},
+    )
+    
     return CANVAS.read(key)
 
 @tool
@@ -1446,6 +1774,20 @@ def write_my_canvas(key: Annotated[str, "key"],
                     overwrite: Annotated[bool, "True to overwrite if key already exist. only set to True if you are certain you want to overwrite the existing value"] = False):
     """Write a value to the working canvas. If the key already exists, it will not overwrite unless specified."""
     # write a value to myCANVAS given a key and a value
+    
+    _ = CANVAS.register_tool_output(
+        tool_name="write_my_canvas",
+        args={
+            "key": key,
+            "value": value,
+            "overwrite": overwrite,
+        },
+        value=value,
+        description=f"Writing value to canvas with key '{key}'",
+        parent_result_ids=[],
+        metadata={},
+    )
+    
     return CANVAS.write(key, value, overwrite)
 
 # @tool
@@ -1486,10 +1828,139 @@ def write_my_canvas(key: Annotated[str, "key"],
 #     )
     
 #     return f"value: {value} is registered with result_id: {result_id}."
-    
-    
+
+
 @tool
 def extract_numeric_from_tool_output(
+    source_tool_call_id: Annotated[str, "The ID of the text result from a prior tool call that you want to extract the numeric value from."],
+    value: Annotated[float, "The numeric value you want to verify and extract from the tool output."],
+    evidence_snippet: Annotated[str, "An substring from the tool output that contains the number. To avoid ambiguate when the same number may appear multiple times." ],
+    description: Annotated[str, "A brief description of what this number represents. You must clarify the unit of the number in this description, e.g. 'the adsorption energy in eV', 'the length of the cell in Angstrom', etc."],
+):
+    """
+    Verify that a numeric value was explicitly present in the raw output of a prior tool call,
+    then register it as a trusted numeric artifact and return a result_id.
+
+    Args:
+        source_tool_call_id: The tool_call_id of the previously executed text-returning tool.
+        value: The numeric value the agent wants to extract.
+        evidence_snippet: An substring from the tool output that contains the number. 
+                          To avoid ambiguate when the same number may appear multiple times.
+        description: A brief description of what this number represents. You must clarify the unit of the number in this description. 
+                     e.g. 'the adsorption energy in eV', 'the length of the cell in Angstrom', etc.
+
+    Returns:
+        str: A message indicating the result of the extraction and verification process.
+    """
+    abs_tol = 1e-8,
+    record = CANVAS.get_artifact(source_tool_call_id)
+    if record is None:
+        return (
+            f"EXTRACTION_FAILED: source_tool_call_id='{source_tool_call_id}' "
+            "was not found in the tool output registry. Please check the canvas and try again, or regenerate the source result with corresponding tool"
+        )
+        
+    raw_text = record.value
+    
+    # For demo only
+    if str(value) not in raw_text:
+        return (
+            "EXTRACTION_FAILED: evidence_snippet was not found in the recorded tool output. "
+            f"tool_call_id='{source_tool_call_id}'"
+        )
+    
+    result_id = CANVAS.register_tool_output(
+        tool_name="extract_numeric_from_tool_output",
+        args={
+            "source_tool_call_id": source_tool_call_id,
+            "value": value,
+            "evidence_snippet": evidence_snippet,
+            "description": description,
+        },
+        value=value,
+        description=description,
+        parent_result_ids=[source_tool_call_id],
+        metadata={}
+    )
+
+    return f"value: {value} is now registered with id {result_id} and can be used for further calculations."
+    
+
+    # Search space
+    snippet_spans = util_find_all_substring_spans(raw_text, evidence_snippet)
+    if not snippet_spans:
+        return (
+            "EXTRACTION_FAILED: evidence_snippet was not found in the recorded tool output. "
+            f"tool_call_id='{source_tool_call_id}'"
+        )
+
+    candidate_matches = []
+    for s0, s1 in snippet_spans:
+        candidate_matches.extend(
+            util_numeric_matches_in_region(
+                text=raw_text,
+                region_start=s0,
+                region_end=s1,
+                target_value=float(value),
+                abs_tol=abs_tol,
+            )
+        )
+
+
+    if not candidate_matches:
+        return (
+            "EXTRACTION_FAILED: The claimed numeric value was not found in the recorded tool output "
+            f"for tool_call_id='{source_tool_call_id}'."
+        )
+
+    # Disambiguation
+    # if occurrence_index is not None:
+    #     if occurrence_index < 0 or occurrence_index >= len(candidate_matches):
+    #         return (
+    #             "EXTRACTION_FAILED: occurrence_index is out of range. "
+    #             f"Found {len(candidate_matches)} matching occurrence(s), got occurrence_index={occurrence_index}."
+    #         )
+    #     chosen = candidate_matches[occurrence_index]
+    # else:
+    if len(candidate_matches) > 1:
+        preview = [
+            {
+                "token": m["token"],
+                "char_span": [m["start"], m["end"]],
+            }
+            for m in candidate_matches[:10]
+        ]
+        return (
+            "EXTRACTION_FAILED: Multiple matching numeric occurrences were found. "
+            "Please refine your evidence_snippet disambiguate."
+            f"Candidates: {preview}"
+        )
+    chosen = candidate_matches[0]
+
+    matched_text = raw_text[chosen["start"]:chosen["end"]]
+
+    result_id = CANVAS.register_tool_output(
+        tool_name="extract_numeric_from_tool_output",
+        args={
+            "source_tool_call_id": source_tool_call_id,
+            "value": value,
+            "evidence_snippet": evidence_snippet,
+            "description": description,
+        },
+        value=value,
+        description=description,
+        parent_result_ids=[source_tool_call_id],
+        metadata={
+            "matched_text": matched_text,
+            "matched_span": [chosen["start"], chosen["end"]],
+        },
+    )
+
+    return f"value: {value} is now registered with id {result_id} and can be used for further calculations."
+
+    
+@tool
+def extract_numeric_from_tool_output_NOTDEMO(
     source_tool_call_id: Annotated[str, "The ID of the text result from a prior tool call that you want to extract the numeric value from."],
     value: Annotated[float, "The numeric value you want to verify and extract from the tool output."],
     evidence_snippet: Annotated[str, "An substring from the tool output that contains the number. To avoid ambiguate when the same number may appear multiple times." ],
@@ -3573,109 +4044,6 @@ def submit_and_monitor_job(
         print("waiting for files...")
         time.sleep(10)
         break
-        
-        # if jobType == "DFT":
-        #     print("Checking jobs")
-            
-        #     checked = set()
-        #     unchecked = set(job_list)
-        #     while checked != unchecked:
-        #         for inputFile in job_list:
-        #             outputFile = resource_dict[inputFile]['outputFilename']
-        #             print(f"Checking job {inputFile}")
-        #             checked.add(inputFile)
-        #             try:
-        #                 atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
-        #                 print(atoms.get_potential_energy())
-        #                 # delete inputFile from job_list
-        #                 job_list.remove(inputFile)
-        #                 print(f"Job list: {job_list}")
-        #                 print()
-        #             except:
-        #                 # see if the job did not converge
-        #                 # read the output file as text
-        #                 with open(os.path.join(WORKING_DIRECTORY, outputFile), 'r') as f:
-        #                     lines = f.readlines()
-        #                 # check if the output file contains "convergence NOT achieved"
-        #                 notConverge = False
-        #                 for line in lines:
-        #                     if "convergence NOT achieved" in line:
-        #                         notConverge = True
-        #                         notConvergedList.append(inputFile)
-        #                         break
-                            
-        #                 if notConverge:
-        #                     # remove inputFile from job_list
-        #                     job_list.remove(inputFile)
-        #                 else:
-        #                     # if outputFile exsit remove outputFile
-        #                     try:
-        #                         # temporay disable remove to avoid the calculation
-        #                         # os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
-        #                         print(f"{outputFile} removed")
-        #                     except:
-        #                         print("output file does not exist")
-        #                     print(f"Job {inputFile} failed, will resubmit the job")
-            
-            
-        #     # for idx, inputFile in enumerate(job_list):
-        #     #     outputFile = resource_dict[inputFile]['outputFilename']
-        #     #     print(f"Checking job {inputFile}")
-        #     #     try:
-        #     #         atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
-        #     #         print(atoms.get_potential_energy())
-        #     #         # delete inputFile from job_list
-        #     #         job_list.remove(inputFile)
-        #     #         print(f"Job list: {job_list}")
-        #     #         print()
-        #     #     except:
-        #     #         # remove outputFile
-        #     #         os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
-        #     #         print(f"Job {inputFile} failed, will resubmit the job")
-        #     if len(job_list) == 0:
-        #         # load jobs frm job_list.json
-        #         job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
-                
-        #         # read all energies into a dict
-        #         energies = {}
-        #         for inputFile in job_list:
-        #             if inputFile in notConvergedList:
-        #                 continue
-        #             outputFile = resource_dict[inputFile]['outputFilename']
-        #             atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
-        #             energies[inputFile] = atoms.get_potential_energy()
-                
-        #         job_list = []
-                
-        #         # check two or more key has the same value, if so, add the key back to the job_list
-        #         for key, value in energies.items():
-        #             if list(energies.values()).count(value) > 1:
-        #                 print(f"!!!!!!!Job {key} has the same energy as other jobs, may resubmit the job!!!!!!!!")
-        #                 job_list.append(key)
-                
-        #         print()
-        #         # check whether job in job_list has the same inputFile content, if so, remove the job from job_list
-        #         tobeRemoved = np.zeros(len(job_list))
-        #         for jobIdx in range(len(job_list)):
-        #             for jobIdx2 in range(jobIdx+1, len(job_list)):
-        #                 if cmp(os.path.join(WORKING_DIRECTORY, job_list[jobIdx]), os.path.join(WORKING_DIRECTORY, job_list[jobIdx2]), shallow=False):
-        #                     print(f"!!!!!!!Job {job_list[jobIdx]} has the same content as {job_list[jobIdx2]}, will remove the job!!!!!!!!")
-        #                     tobeRemoved[jobIdx] = 1
-        #                     tobeRemoved[jobIdx2] = 1
-                
-        #         job_list = [job_list[i] for i in range(len(job_list)) if tobeRemoved[i] == 0]
-                
-        #         print("##########")
-        #         print(f"Final jobs to be resubmitted: {job_list}")
-        #         print("##########")
-        #         # remove outputFile for jobs in job_list
-        #         for inputFile in job_list:
-        #             outputFile = resource_dict[inputFile]['outputFilename']
-        #             print(f"Removing {outputFile}")
-        #             os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
-            
-        #         if len(job_list) == 0:
-        #             break
     
     # reset resource_suggestions.db and job lists
     finishedJobs = CANVAS.canvas.get('finished_job_list', [])

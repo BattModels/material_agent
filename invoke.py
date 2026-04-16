@@ -198,7 +198,7 @@ if __name__ == "__main__":
     reaction (OER) in the Google DeepMind GNoME database. Please do a iterative multi-round screening, learning from each round and applying insights to new candidates, 
     surfaces/terminations, or active sites if and when possible.Please use literature searches to inform your per-round candidate selection and hypothesis formation, and note them down clearly.
     Prioritise O adsorption calculations broadly across many candidates. Use the resulting G(O) values to identify the most promising candidates and sites before proceeding with OH adsorption calculations.
-    You have a maximum of 6 hours to complete the entire study and make your final report.
+    You have a maximum of 1 hours to complete the entire study and make your final report.
     
     The AQ-GNoME database is available, which enables filtering based on aqueous stability across pH and
     electrochemical potential (V vs. SHE). You need to make use of literature when choosing filtering criteria and making candidate selections.
@@ -372,6 +372,11 @@ if __name__ == "__main__":
     # print(EXPLOG.relational_frame.candidates.df.dtypes)
     # assert False    
     CANVAS.set_working_directory(WORKING_DIRECTORY)
+    Worker_available_tools = {}
+    with open(os.path.join('./config', "oer_available_tools.yaml"), "r") as f:
+        Worker_available_tools = yaml.safe_load(f)
+    CANVAS.write("Worker_available_tools", Worker_available_tools)
+
 
     rawGraph = create_planning_graph(config)
     # graph = create_graph(config)
@@ -411,9 +416,9 @@ if __name__ == "__main__":
             history = list(graph.get_state_history(llm_config))
             # print(history)
             snap = history[timeTravelToXFrameBefore]
-            print("\n\n\n")
-            print(snap)
-            print("\n\n\n")
+            # print("\n\n\n")
+            # print(snap)
+            # print("\n\n\n")
 
             
             # NOTE: FAIL when trying to resume a checkpoint that predates the boss-era state format.
@@ -432,6 +437,7 @@ if __name__ == "__main__":
             print(f"Time since the start of the session: {time.time() - var.startTime} seconds")
             llm_config = snap.config
             CANVAS.canvas = snap.values["canvas"]
+            CANVAS.result_registry = snap.values["artifacts"]
             CANVAS.print()
             print(CANVAS)
             EXPLOG.relational_frame.candidates.df = snap.values["explog_candidates"]

@@ -31,11 +31,17 @@ from src.tools import *
 from src.prompt import dft_agent_prompt,hpc_agent_prompt,supervisor_prompt, oer_agent_prompt, boss_prompt
 from src import var
 from src.myCANVAS import CANVAS
+from src.live_visualizer import LiveVisualizer
 from gnome_dreams_oer_screening.explog.explog import EXPLOG
 
 import json, hashlib, time
 from collections import defaultdict, deque
 import traceback
+
+viz = LiveVisualizer(
+    canvas_obj=CANVAS,       # has a `.canvas` dict
+    explog_obj=EXPLOG,       # has `.relational_frame.<name>.df`
+)
 
 members = ["OER_Agent"]
 
@@ -47,28 +53,23 @@ class myStep(BaseModel):
         description=f"Agent to perform the step. Should be one of {members}."
     )
     required_tools: List[Literal[
-                    # "inspect_my_canvas",
-                    # "write_my_canvas",
-                    # "read_my_canvas",
-                    "calculate_formation_E",
-                    "generateSurface_and_getPossibleSite",
-                    "generate_myAdsorbate",
-                    "add_myAdsorbate",
-                    "init_structure_data",
-                    "find_pseudopotential",
-                    "write_QE_script_w_ASE",
-                    "calculate_lc",
-                    "generate_convergence_test",
-                    "find_optimal_parameter",
-                    "generate_eos_test",
-                    "read_energy_from_output",
-                    "get_convergence_suggestions",
-                    "analyze_BEEF_result",
-                    "extract_numeric_from_tool_output",
-                    "math_expression_tool",
-                    "submit_and_monitor_job",
-                    "add_resource_suggestion",
-                    ""
+                            "inspect_explog",
+                            "inspect_my_canvas",
+                            "write_my_canvas",
+                            "read_my_canvas",
+                            "OER_data_analasis_v2",
+                            "browse_df",
+                            "arXiv_search",
+                            "enter_candidate_in_log",
+                            "submit_dft_job",
+                            "get_terminations_ranking",
+                            "list_adsorption_sites",
+                            "read_explog",
+                            "wait_for_update",
+                            "query_explog",
+                            "math_expression_tool",
+                            "extract_numeric_from_tool_output",
+                            ""
                 ]] = Field(f"must-use tools for this step, should be a subset of the tools available to the agent. read the CANVAS with key Worker_available_tools to see more details about each tools.")
 
 class myPastStep(BaseModel):
@@ -299,7 +300,16 @@ teamRestriction = """
 """
 
 
-def print_stream(s):
+def print_stream(s, DAG=None):
+    viz.on_event(s, DAG=DAG)
+    
+    if DAG is not None:
+        DAG_title = f"step_{DAG}_DAG"
+        CANVAS.gen_DAG(
+            filename=f"{var.my_WORKING_DIRECTORY}/{DAG_title}.html",
+            title=DAG_title,
+        )
+    
     if "messages" not in s:
         print("#################")
         if var.my_SAVE_DIALOGUE:
@@ -523,28 +533,23 @@ def supervisor_chain_node(state, agent, name):
         if isinstance(agent_response.action, Plan):
             for step in agent_response.action.steps:
                 ToolList = [
+                    "inspect_explog",
                     "inspect_my_canvas",
                     "write_my_canvas",
                     "read_my_canvas",
-                    "calculate_formation_E",
-                    "generateSurface_and_getPossibleSite",
-                    "generate_myAdsorbate",
-                    "add_myAdsorbate",
-                    "init_structure_data",
-                    "find_pseudopotential",
-                    "write_QE_script_w_ASE",
-                    "calculate_lc",
-                    "generate_convergence_test",
-                    "find_optimal_parameter",
-                    "generate_eos_test",
-                    "read_energy_from_output",
-                    "get_convergence_suggestions",
-                    "analyze_BEEF_result",
-                    "extract_numeric_from_tool_output",
+                    "OER_data_analasis_v2",
+                    "browse_df",
+                    "arXiv_search",
+                    "enter_candidate_in_log",
+                    "submit_dft_job",
+                    "get_terminations_ranking",
+                    "list_adsorption_sites",
+                    "read_explog",
+                    "wait_for_update",
+                    "query_explog",
                     "math_expression_tool",
-                    "submit_and_monitor_job",
-                    "add_resource_suggestion",
-                    "",
+                    "extract_numeric_from_tool_output",
+                    ""
                 ]
                 wrongTools = set(step.required_tools) - set(ToolList)
                 print(f"wrongTools: {wrongTools}")
@@ -640,27 +645,27 @@ Here is the overall objective:
 Now, you are tasked with: {task}. Please only do this task! Do not do anything else! Please note down important information on CANVAS together with their reference id before you end.
 """
     
-    print(task_formatted)
-    if var.my_SAVE_DIALOGUE:
-        with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-            f.write(task_formatted)
-            f.write("\n")
-    print(f"Agent {name} is processing!!!!!")
-    if var.my_SAVE_DIALOGUE:
-        with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-            f.write(f"Agent {name} is processing!!!!!\n")
     old_task_formatted = task_formatted
     CANVAS.rest_curr_round_result_ids()
     workerGood = False
     workerGood_patient = 2
     while not workerGood and workerGood_patient > 0:
+        print(task_formatted)
+        if var.my_SAVE_DIALOGUE:
+            with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+                f.write(task_formatted)
+                f.write("\n")
+        print(f"Agent {name} is processing!!!!!")
+        if var.my_SAVE_DIALOGUE:
+            with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+                f.write(f"Agent {name} is processing!!!!!\n")
         workerGood_patient -= 1
         for agent_response in agent.stream(
             {"messages": [("user", task_formatted)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
         ):
             # set agent_response to be the value of the first key of the dictionary
             agent_response = next(iter(agent_response.values()))
-            print_stream(agent_response)
+            print_stream(agent_response, DAG=len(state["past_steps"])+1)
         
         # agent_response = agent.invoke(
         #     {"messages": [("user", task_formatted)]},  {"configurable": {"thread_id": "1"}}
@@ -725,6 +730,7 @@ def whos_next(state):
 def create_planning_graph(config: dict) -> StateGraph:
     # create a file named status.txt in the working directory
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+    viz.set_working_directory(WORKING_DIRECTORY)
     with open(f"{WORKING_DIRECTORY}/status.txt", "w") as f:
         f.write("run")
     
@@ -841,8 +847,6 @@ def create_planning_graph(config: dict) -> StateGraph:
         write_my_canvas,
         read_my_canvas,
         OER_data_analasis_v2,
-        # read_df, # Depriciated, functionallity now under browse_df
-        # extract_df, # Depriciated, functionallity now under browse_df
         browse_df,
         arXiv_search,
         enter_candidate_in_log,
@@ -850,9 +854,10 @@ def create_planning_graph(config: dict) -> StateGraph:
         get_terminations_ranking,
         list_adsorption_sites,
         read_explog,
-        # get_top_k_candidates,
         wait_for_update,
         query_explog,
+        math_expression_tool,
+        extract_numeric_from_tool_output
         ]
     # oer_agent = create_react_agent(workerllm, tools=oer_tools,
     #                                prompt=oer_agent_prompt)

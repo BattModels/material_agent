@@ -59,6 +59,8 @@ class NumericArtifact(BaseModel):
     reasons: Dict[str, str]
     parent_result_ids: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    timestamp: float = Field(default_factory=lambda: time.time())
+    listed_value: bool = Field(default=False)
     
 class OtherArtifact(BaseModel):
     result_id: str
@@ -69,6 +71,8 @@ class OtherArtifact(BaseModel):
     reasons: Dict[str, str]
     parent_result_ids: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    timestamp: float = Field(default_factory=lambda: time.time())
+    listed_value: bool = Field(default=False)
     
 class ListedArtifact(BaseModel):
     result_id: str
@@ -79,6 +83,8 @@ class ListedArtifact(BaseModel):
     reasons: Dict[str, str]
     parent_result_ids: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    timestamp: float = Field(default_factory=lambda: time.time())
+    listed_value: bool = Field(default=True)
 
 
 # class CanvasEntry(BaseModel):
