@@ -12,12 +12,14 @@ from langchain_core.messages import (
     HumanMessage,
     ToolMessage,
 )
+import pickle
 # from langchain_anthropic import ChatAnthropic
 
 # from src.prompt import hpc_agent_prompt,dft_agent_prompt
 # from src.graph import create_graph
 from src.planNexe2 import create_planning_graph
 # from src.planNexeHighPlan import create_planning_graph as create_graph
+import sys
 import sys
 import time
 from src.utils import load_config, save_graph_to_file,initialize_database
@@ -103,7 +105,7 @@ if __name__ == "__main__":
     Sn (dia)	6.474
     '''
     
-    userMessage_6 = "You are going to calculate the lattice constant for BCC Li through DFT, the experiment value is 3.451, use this to create the initial structure."
+    userMessage_6 = "You are going to calculate the lattice constant for BCC Li through DFT."
     userMessage_7 = "You are going to generat a Pt surface structure with 2x2x4 supercell, then do a convergence test, use maximum ecutwfc = 160. Get the optimal kspacing and ecutwfc."
     userMessage_8 = """Please generate intial structures required to calculate CO adsorbtion on Pt(111) surface with 1/4 coverage (2x2x4 supercell), and calculate the adsorbtion energy."""
     userMessage_9 = """

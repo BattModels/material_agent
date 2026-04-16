@@ -7,6 +7,7 @@ import functools
 import pandas as pd
 import os
 import threading
+import traceback
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langchain_core.tools import tool
@@ -45,7 +46,31 @@ class myStep(BaseModel):
     agent: str = Field(
         description=f"Agent to perform the step. Should be one of {members}."
     )
-    
+    required_tools: List[Literal[
+                    # "inspect_my_canvas",
+                    # "write_my_canvas",
+                    # "read_my_canvas",
+                    "calculate_formation_E",
+                    "generateSurface_and_getPossibleSite",
+                    "generate_myAdsorbate",
+                    "add_myAdsorbate",
+                    "init_structure_data",
+                    "find_pseudopotential",
+                    "write_QE_script_w_ASE",
+                    "calculate_lc",
+                    "generate_convergence_test",
+                    "find_optimal_parameter",
+                    "generate_eos_test",
+                    "read_energy_from_output",
+                    "get_convergence_suggestions",
+                    "analyze_BEEF_result",
+                    "extract_numeric_from_tool_output",
+                    "math_expression_tool",
+                    "submit_and_monitor_job",
+                    "add_resource_suggestion",
+                    ""
+                ]] = Field(f"must-use tools for this step, should be a subset of the tools available to the agent. read the CANVAS with key Worker_available_tools to see more details about each tools.")
+
 class myPastStep(BaseModel):
     """Step in the plan."""
 
@@ -55,9 +80,8 @@ class myPastStep(BaseModel):
     )
     timeStamp: Any = Field(description="The time when the step is completed.")
     timeSpent: str = Field(description="The time spent on this step.")
-
 class Plan(BaseModel):
-    """Plan to follow in future"""
+    """Need to add/modify current plan, which is going to be followed by your worker agents in future"""
 
     steps: List[myStep] = Field(
         description=f"""
@@ -73,15 +97,21 @@ class Response(BaseModel):
 
     response: str
 
+# the class supervisor will choose if the plan doesn't need to be changed
+class NoChange(BaseModel):
+    """No change to the plan, just continue to execute the original plan."""
+    comment: str = Field(description="any comment from the supervisor if needed, otherwise just put 'No change to the plan, continue to execute the original plan.'")
 
 
 class Act(BaseModel):
     """Action to perform."""
 
-    action: Union[Plan, Response] = Field(
-        description="Use Plan if more work is needed. Use Response when you believe the task is complete and want to submit a proposed final answer for boss review."
+    action: Union[Plan, NoChange, Response] = Field(
+        description="""Action to perform. If the team need to further use tools to get the answer, and if you need to add more steps or adjust the steps, use Plan.
+        If the team can continue to execute the original plan without any change, use NoChange.
+        Use Response when you believe the task is complete and want to submit a proposed final answer for boss review."""
+        # "DO NOT use response unless absolutly necessary."
     )
-
 class BossReview(BaseModel):
     """Structured response from the boss review gate."""
 
@@ -103,6 +133,11 @@ class wokerResponse(BaseModel):
     summary: str = Field(
         description="""what have you done + what did you note down? i.e. I did xxx, and got xxx. I did xxx, and found xxx ..... In the end, I answered xxx/finished xxx/failed xxx/... I have noted down xxx, xxx, and xxx on CANVAS"""
     )
+    
+    success: bool = Field(
+        description="whether the task is successfully finished. True or False."
+    )
+    
 
 class PlanExecute(TypedDict):
     inputs: str
@@ -112,11 +147,11 @@ class PlanExecute(TypedDict):
     boss_feedback: str
     response: str
     canvas: Dict
+    artifacts: Dict
     explog_candidates: pd.DataFrame
     explog_processes: pd.DataFrame
     time: float
     next: str
-
 
 class DisableParallelToolCallsMiddleware(AgentMiddleware):
     
@@ -236,6 +271,33 @@ def handle_tool_errors(request, handler):
             content=f"Tool error: Please check your input and try again. ({str(e)}), the traceback is: {traceback.format_exc()}",
             tool_call_id=request.tool_call["id"]
         )
+
+teamCapability = """
+<DFT Agent>:
+    - Create intial structure of the system
+    - Find pseudopotential
+    - Write initial script
+    - generate convergence test input files
+    - determine the best parameters from convergence test result
+    - generate EOS calculation input files using the best parameters
+    - generate production run input files
+    - generate BEEF input files from finished relax calculation
+    - Read output file to get energy
+    - Calculate lattice constant
+    - Calculate formation energy
+<HPC Agent>:
+    - find job list from the job list file
+    - Add resource suggestion base on the DFT input file
+    - Submit job to HPC and report back once all jobs are done
+"""
+
+teamRestriction = """
+<DFT Agent>:
+    - Cannot submit job to HPC
+<HPC Agent>:
+    - Cannot determine the best parameters from convergence test result
+"""
+
 
 def print_stream(s):
     if "messages" not in s:
@@ -413,6 +475,16 @@ def supervisor_chain_node(state, agent, name):
 
         Please inspect and extract related information from CANVAS and EXPLOG, then update the plan accordingly.
         """
+    elif len(plan) == 0:
+        supervisorMessage =  f"""
+        Current time: {timeElapsed}.
+        
+        The overall goal is: {state['inputs']}.
+
+        Nothing has been done yet and there is no plan yet. 
+
+        Please inspect and extract related information from CANVAS, then only update the plan accordingly if needed.
+        """
     else:
         supervisorMessage =  f"""
         Current time: {timeElapsed}.
@@ -429,19 +501,66 @@ def supervisor_chain_node(state, agent, name):
 
         Please inspect and extract related information from CANVAS and EXPLOG, then update the plan accordingly.
         """
-        
-    for agent_response in agent.stream(
-        {"messages": [("user", supervisorMessage)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
-    ):
-        # set agent_response to be the value of the first key of the dictionary
-        agent_response = next(iter(agent_response.values()))
-        print_stream(agent_response)
-
-    # output = agent.invoke(
-    #     {"messages": [("user", supervisorMessage)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
-    #     )
     
-    agent_response = agent_response['structured_response']
+    old_supervisorMessage = supervisorMessage
+    sup_good = False
+    sup_good_patient = 3
+    while not sup_good and sup_good_patient > 0:
+        sup_good_patient -= 1
+        for agent_response in agent.stream(
+            {"messages": [("user", supervisorMessage)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
+        ):
+            # set agent_response to be the value of the first key of the dictionary
+            agent_response = next(iter(agent_response.values()))
+            print_stream(agent_response)
+
+        # output = agent.invoke(
+        #     {"messages": [("user", supervisorMessage)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
+        #     )
+    
+        agent_response = agent_response['structured_response']
+        sup_good = True
+        if isinstance(agent_response.action, Plan):
+            for step in agent_response.action.steps:
+                ToolList = [
+                    "inspect_my_canvas",
+                    "write_my_canvas",
+                    "read_my_canvas",
+                    "calculate_formation_E",
+                    "generateSurface_and_getPossibleSite",
+                    "generate_myAdsorbate",
+                    "add_myAdsorbate",
+                    "init_structure_data",
+                    "find_pseudopotential",
+                    "write_QE_script_w_ASE",
+                    "calculate_lc",
+                    "generate_convergence_test",
+                    "find_optimal_parameter",
+                    "generate_eos_test",
+                    "read_energy_from_output",
+                    "get_convergence_suggestions",
+                    "analyze_BEEF_result",
+                    "extract_numeric_from_tool_output",
+                    "math_expression_tool",
+                    "submit_and_monitor_job",
+                    "add_resource_suggestion",
+                    "",
+                ]
+                wrongTools = set(step.required_tools) - set(ToolList)
+                print(f"wrongTools: {wrongTools}")
+                if len(wrongTools) > 0:
+                    supervisorMessage = old_supervisorMessage + f"\n\nWARNING: In step '{step.step}', you required the following tools that are not in the tool list: {', '.join(wrongTools)}. Please check the CANVAS and try again!"
+                    sup_good = False
+                    break
+            
+            
+        else:
+            sup_good = True
+            
+    if not sup_good:
+        print("Supervisor failed")
+        exit(0)
+        
     if isinstance(agent_response.action, Response):
         return {
             "draft_response": agent_response.action.response,
@@ -452,22 +571,39 @@ def supervisor_chain_node(state, agent, name):
             }
     # elif isinstance(output.action, Response):
     #     return {"response": "Plan is not finished! Do not use response!", "next": "Supervisor"}
+    elif isinstance(agent_response.action, NoChange):
+        plan_str = "\n".join(f"{i+1}. {step.step}, agent={step.agent}, required_tools: {step.required_tools}" for i, step in enumerate(plan[1:]))
+        print("No change to the plan, continue to execute the original plan.")
+        print(plan_str)
+        if var.my_SAVE_DIALOGUE:
+            with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+                f.write("No change to the plan, continue to execute the original plan.\n")
+                f.write(plan_str)
+                f.write("\n")
+        return {
+            "plan": plan[1:],
+            "next": plan[1].agent,
+            "canvas":CANVAS.canvas
+            }
     else:
-        plan_str = "\n".join(f"{i+1}. {step.step}" for i, step in enumerate(agent_response.action.steps))
+        plan_str = "\n".join(f"{i+1}. {step.step}, agent={step.agent}, required_tools: {step.required_tools}" for i, step in enumerate(agent_response.action.steps))
         print(plan_str)
         if var.my_SAVE_DIALOGUE:
             with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
                 f.write(plan_str)
                 f.write("\n")
         return {
-            "plan": agent_response.action.steps,
-            "next": agent_response.action.steps[0].agent,
+            "plan": agent_response.action.steps, 
+            "next": agent_response.action.steps[0].agent, 
             "canvas":CANVAS.canvas,
             "explog_candidates": EXPLOG.relational_frame.candidates.df,
             "explog_processes": EXPLOG.relational_frame.processes.df,
             }
     
+    
+
 def worker_agent_node(state, agent, name):
+    # CANVAS.snap()
     # read "status.txt" in the working directory
     with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
         status = f.read()
@@ -501,7 +637,7 @@ Here are what has been done so far:
 Here is the overall objective:
 {state["inputs"]}
 
-Now, you are tasked with: {task}. Please only do this task! Do not do anything else! Please note down important information on CANVAS before you end.
+Now, you are tasked with: {task}. Please only do this task! Do not do anything else! Please note down important information on CANVAS together with their reference id before you end.
 """
     
     print(task_formatted)
@@ -513,19 +649,49 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
     if var.my_SAVE_DIALOGUE:
         with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
             f.write(f"Agent {name} is processing!!!!!\n")
+    old_task_formatted = task_formatted
+    CANVAS.rest_curr_round_result_ids()
+    workerGood = False
+    workerGood_patient = 2
+    while not workerGood and workerGood_patient > 0:
+        workerGood_patient -= 1
+        for agent_response in agent.stream(
+            {"messages": [("user", task_formatted)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
+        ):
+            # set agent_response to be the value of the first key of the dictionary
+            agent_response = next(iter(agent_response.values()))
+            print_stream(agent_response)
+        
+        # agent_response = agent.invoke(
+        #     {"messages": [("user", task_formatted)]},  {"configurable": {"thread_id": "1"}}
+        # )
+        structured_response = agent_response['structured_response']
+        if not structured_response.success:
+            print(f"worker {name} didn't finish")
+            workerGood = True # if the worker agent fails, we want the supervisor to know and make a new plan.
+        else:
+            print(f"worker {name} finished the task successfully, now checking tool use...")
+            # check if the worker used all required tools
+            tool_use_passed, tool_use_msg = CANVAS.check_required_tool_use(task.required_tools)
+            print(tool_use_msg)
+            if tool_use_passed:
+                # LLM sanity check
+                # if LLM_check_passed:
+                #     workerGood = True
+                DAG_title = f"step_{len(state['past_steps'])+1}_DAG"
+                CANVAS.gen_DAG(
+                    filename=f"{var.my_WORKING_DIRECTORY}/{DAG_title}.html",
+                    title=DAG_title,
+                )
+                workerGood = True
+            else:
+                task_formatted = old_task_formatted
+                task_formatted += f"\n\nWARNING: You didn't use the following required tools: {tool_use_msg}. Retry again!"
     
-    for agent_response in agent.stream(
-        {"messages": [("user", task_formatted)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
-    ):
-        # set agent_response to be the value of the first key of the dictionary
-        agent_response = next(iter(agent_response.values()))
-        print_stream(agent_response)
-    
-    # agent_response = agent.invoke(
-    #     {"messages": [("user", task_formatted)]},  {"configurable": {"thread_id": "1"}}
-    # )
-    structured_response = agent_response['structured_response']
-    
+    if not workerGood:
+        print(f"Worker Agent {name} failed")
+        exit(0)
+        
     timeElapsed_tmp = time.time() - var.startTime
     timeElapsed = timedelta(seconds=timeElapsed_tmp)
     # state["past_steps"].append((task, agent_response["messages"][-1].content))
@@ -547,6 +713,7 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
     return {
         "past_steps": state["past_steps"], 
         "canvas":CANVAS.canvas,
+         "artifacts": CANVAS.result_registry,
         "explog_candidates": EXPLOG.relational_frame.candidates.df,
         "explog_processes": EXPLOG.relational_frame.processes.df,
         "time": timeElapsed_tmp,
@@ -646,11 +813,15 @@ def create_planning_graph(config: dict) -> StateGraph:
         write_QE_script_w_ASE,
         calculate_lc,
         generate_convergence_test,
-        get_kspacing_ecutwfc,
+        find_optimal_parameter,
         generate_eos_test,
         read_energy_from_output,
         get_convergence_suggestions,
-        analyze_BEEF_result
+        analyze_BEEF_result,
+        extract_numeric_from_tool_output,
+        math_expression_tool
+        # get_ase_atoms_property,
+        # inspect_ase_atoms,
         ]
     # dft_agent = create_react_agent(workerllm, tools=dft_tools,
     #                                prompt="You are a DFT expert")   
