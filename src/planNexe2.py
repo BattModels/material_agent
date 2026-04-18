@@ -30,11 +30,17 @@ from src.tools import *
 from src.prompt import dft_agent_prompt,hpc_agent_prompt,supervisor_prompt, oer_agent_prompt, boss_prompt
 from src import var
 from src.myCANVAS import CANVAS
+from src.live_visualizer import LiveVisualizer
 from gnome_dreams_oer_screening.explog.explog import EXPLOG
 
 import json, hashlib, time
 from collections import defaultdict, deque
 import traceback
+
+viz = LiveVisualizer(
+    canvas_obj=CANVAS,       # has a `.canvas` dict
+    explog_obj=EXPLOG,       # has `.relational_frame.<name>.df`
+)
 
 members = ["OER_Agent"]
 
@@ -238,6 +244,8 @@ def handle_tool_errors(request, handler):
         )
 
 def print_stream(s):
+    viz.on_event(s)
+    
     if "messages" not in s:
         print("#################")
         if var.my_SAVE_DIALOGUE:
@@ -558,14 +566,15 @@ def whos_next(state):
 def create_planning_graph(config: dict) -> StateGraph:
     # create a file named status.txt in the working directory
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+    viz.set_working_directory(WORKING_DIRECTORY)
     with open(f"{WORKING_DIRECTORY}/status.txt", "w") as f:
         f.write("run")
     
     # Define the model
     # llm = ChatAnthropic(model="claude-haiku-4-5-20251001", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # workerllm = ChatAnthropic(model="claude-haiku-4-5-20251001", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0, tool_choice="auto")
-    llm = ChatAnthropic(model="claude-sonnet-4-6", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-    workerllm = ChatAnthropic(model="claude-sonnet-4-6", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0, tool_choice="auto")
+    llm = ChatAnthropic(model="claude-sonnet-4-5-20250929", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    workerllm = ChatAnthropic(model="claude-sonnet-4-5-20250929", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0, tool_choice="auto")
     # workerllm = ChatAnthropic(model="claude-3-5-sonnet-20241022", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # llm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
     # workerllm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"], model_kwargs={'parallel_tool_calls': False})
