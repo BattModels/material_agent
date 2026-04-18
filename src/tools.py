@@ -108,14 +108,14 @@ def arXiv_search(
     ) -> str:
     """
     Perform an arXiv search for papers with a given arxiv_search_query and context and provide a summary.
-    Only 5 papers will be considered in the search. If you want to consider more papers, you will need to refine
-    your search arguments.
+    Only 5 papers will be considered in the search. If you want to consider more papers, you will need 
+    to refine your search arguments.
     """
 
     result = asyncio.run(_arXiv_search(arxiv_search_query, context))
 
     return result
-
+    
 
 @tool
 def wait_for_update(
@@ -668,8 +668,8 @@ def get_terminations_ranking(
         # maximum Miller index. Once run, the ranking is fixed and will not be
         # recalculated on subsequent calls.
 
-    # max_miller now fixed to 2
-    max_miller = 2
+    # max_miller now fixed to 1
+    max_miller = 1
     
     # Arguments left fixed for now:
     method = 'all'      # What coordination to consider
@@ -1017,17 +1017,7 @@ def browse_df(
     sorting, and pagination.
 
     Filters and sort are applied first to the full dataframe, then the specified
-    row window [startIdx, endIdx) is returned. This allows systematic exploration
-    of large dataframes — for example, narrowing down candidates by column
-    values without modifying the stored dataframe.
-
-    Use the `filters` parameter to select rows by column value (e.g. filter by
-    element composition, HHI index, or bandgap), and `sort` to order results before
-    reading. Pagination via startIdx/endIdx can then be used to step through results
-    that exceed the 50-row display limit.
-
-    Returns the selected rows as a string with row index. The row index refers to
-    the position in the filtered/sorted dataframe, not the original stored dataframe.
+    row window [startIdx, endIdx] is returned.
     """
 
     # Ensure that the provided start/end indices to not exceed 50 (as speficied in the docstring/annotations):
