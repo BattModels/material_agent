@@ -301,11 +301,7 @@ def boss_node(state, agent, name):
     if var.my_SAVE_DIALOGUE:
         with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
             f.write(f"{name} is processing!!!!! Current time: {timeElapsed}.\n")
-            
-    if var.my_SAVE_DIALOGUE:
-        with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-            f.write(bossMessage)
-            f.write("\n")
+
     # can't print state anymore because it now contains canvas and explog, and printing them will cause too much output
     # print(state)
     # if var.my_SAVE_DIALOGUE:
