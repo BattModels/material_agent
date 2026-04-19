@@ -59,6 +59,7 @@ class NumericArtifact(BaseModel):
     reasons: Dict[str, str]
     parent_result_ids: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    timeStamp: float = Field(default_factory=lambda: time.time())
     
 class OtherArtifact(BaseModel):
     result_id: str
@@ -69,6 +70,7 @@ class OtherArtifact(BaseModel):
     reasons: Dict[str, str]
     parent_result_ids: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    timeStamp: float = Field(default_factory=lambda: time.time())
     
 class ListedArtifact(BaseModel):
     result_id: str
@@ -79,6 +81,7 @@ class ListedArtifact(BaseModel):
     reasons: Dict[str, str]
     parent_result_ids: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    timeStamp: float = Field(default_factory=lambda: time.time())
 
 
 # class CanvasEntry(BaseModel):
@@ -138,7 +141,7 @@ class myCANVAS():
         
         if key == "finished_job_list":
             # turn list into a dict where the key is the index and the value is the job name
-            returning_finished_job_list = {i: job for i, job in enumerate(self.canvas[key])}
+            returning_finished_job_list = {i: job for i, job in enumerate(self.canvas[key].items())}
             return repr(returning_finished_job_list)
         
         return f"{self.canvas.get(key, notFoundMsg)}"
@@ -150,8 +153,10 @@ class myCANVAS():
         if key in self.SpecialKeys:
             if key == "finished_job_list":
                 return f"Key '{key}' is read-only and cannot be overwritten."
-            assert isinstance(value, list), f"Value for key '{key}' must be a list."
-            assert all(isinstance(i, str) for i in value), f"All elements in the list for key '{key}' must be strings of job names."
+            assert isinstance(value, dict), f"Value for key '{key}' must be a dict."
+            assert all(isinstance(k, str) and isinstance(v, str) for k, v in value.items()), f"All keys and values in the dict for key '{key}' must be strings."
+            # assert all(isinstance(t, tuple) and len(t) == 2 and all(isinstance(s, str) for s in t) for t in value), f"All elements in the list for key '{key}' must be tuples of (str(job_name), str(id))."
+            
             
         if key not in self.canvas.keys():
             self.canvas[key] = value
@@ -326,12 +331,13 @@ class myCANVAS():
     def rest_curr_round_result_ids(self):
         self.curr_round_result_ids = []
         
-    def check_required_tool_use(self, required_tools: List[str]):
-        missing_tools = set(required_tools) - set([self.get_artifact(result_id).tool_name for result_id in self.curr_round_result_ids])
-        # remove "" from missing tools if it exists
-        missing_tools = [tool for tool in missing_tools if tool != ""]
-        if missing_tools:
-            return False, f"{', '.join(missing_tools)}"
+    def check_required_tool_use(self, required_tools: str):
+        # missing_tools = set(required_tools) - set([self.get_artifact(result_id).tool_name for result_id in self.curr_round_result_ids])
+        # # remove "" from missing tools if it exists
+        # missing_tools = [tool for tool in missing_tools if tool != ""]
+        # if missing_tools:
+        if required_tools not in [self.get_artifact(result_id).tool_name for result_id in self.curr_round_result_ids]:
+            return False, f"{required_tools}"
         else:
             return True, "All required tools have been used in this round."
         

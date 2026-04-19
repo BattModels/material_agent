@@ -44,6 +44,7 @@ import contextlib
 from autocat.surface import generate_surface_structures
 from autocat.adsorption import get_adsorption_sites, get_adsorbate_height_estimate
 from src import var
+from collections import OrderedDict
 
 ##################################################################################################
 ##                                        Common tools                                          ##
@@ -638,9 +639,9 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
                                         # a_dict: Annotated[Dict[str, float], "Dictionary of lattice parameters for the crystal structure: Dict[species, lattice_parameter_a]. i.e. {'Pt': 4.0}"],
                                         facets: Annotated[str, "Facet of the surface. Must be one of 100, 110, 111, 210, 211, 310, 311, 320, 321, 410, 411, 420, 421, 510, 511, 520, 521, 530, 531, 540, 541, 610, 611, 620, 621, 630, 631, 640, 641, 650, 651, 660, 661"],
                                         supercell_dim_xy: Annotated[List[int], "Supercell dimension, how many times do you want to repeat the primitive cell in XY direction: [int, int]"],
-                                        supercell_dim_z:Annotated[int, "typically 6. Supercell dimension, how many times do you want to repeat the primitive cell in Z direction."],
-                                        n_fixed_layers: Annotated[int, "typically 3. Number of fixed layers in the slab"],
-                                        vacuum: Annotated[float, "typically 10.0. Vacuum size in Angstrom"],
+                                        supercell_dim_z:Annotated[int, "typically 6. Supercell dimension, how many times do you want to repeat the primitive cell in Z direction. A larger number can better approximate the bulk property of the surface, but also increase the computational cost."],
+                                        n_fixed_layers: Annotated[int, "typically 3. Number of fixed layers in the slab. A larger number can better approximate the bulk property of the surface, but too much fixed layers lower the number of relaxed layers and may lead to less accurate surface property."],
+                                        vacuum: Annotated[float, "typically 10.0. Vacuum size in Angstrom. Larger vacuum can avoid the interaction between periodic images, but also increase the computational cost."],
                                         surfaceFilename: Annotated[str, "Name (not a path) of the surface file to be saved in traj format"],
                                         reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'supercell_dim_xy', 'supercell_dim_z', 'n_fixed_layers', 'vacuum'."],
                                         supercell_dim_z_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of supercell_dim_z. If not provided, the result will not be registered and you can't use the result in the final report"] = "",
@@ -916,14 +917,14 @@ def write_QE_script_w_ASE(
     ibrav: Annotated[int, "Bravais-lattice index. Optional only if space_group is set."],
     nat: Annotated[int, "Number of atoms in the unit cell"],
     ntyp: Annotated[int, "Number of atom types in the unit cell"],
-    ecutwfc: Annotated[float, "kinetic energy cutoff (Ry) for wavefunctions, typically between 30-100 Ry"],
+    ecutwfc: Annotated[float, "kinetic energy cutoff (Ry) for wavefunctions, typically between 30-100 Ry. Higher value means better accuracy."],
     ecutrho: Annotated[float, "Kinetic energy cutoff (Ry) for charge density and potential. typically ecutwfc*4"],
     occupations: Annotated[Literal['smearing', 'tetrahedra', 'tetrahedra_lin', 'tetrahedra_opt', 'fixed', 'from_input'], "Occupation type"],
     smearing: Annotated[Literal['gaussian', 'methfessel-paxton', 'marzari-vanderbilt', 'fermi-dirac'], "Smearing type, please start with methfessel-paxton first"],
     degauss: Annotated[float, "value of the gaussian spreading (Ry) for brillouin-zone integration in metals."],
     conv_thr: Annotated[float, "Convergence threshold for self-consistent loop"],
     electron_maxstep: Annotated[int, "Maximum number of SCF iterations"],
-    kspacing: Annotated[float, "K-point spacing (in Angstrom^-1)"],
+    kspacing: Annotated[float, "K-point spacing (in Angstrom^-1). Lower value means more k-points and better accuracy."],
     input_dft: Annotated[Literal['LDA', 'PBE', 'BEEF-vdW'], "DFT functional. You'll be told which functional to use"],
     reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'calculation', 'restart_mode', 'prefix', 'disk_io', 'ibrav', 'nat', 'ntyp', 'ecutwfc', 'ecutrho', 'occupations', 'smearing', 'degauss', 'conv_thr', 'electron_maxstep', 'kspacing', 'input_dft', 'ready_to_run_job', 'additional_input'."],
     ready_to_run_job: Annotated[bool, "True if the job is intended to be run directly without further modification, False if this file is intended to be used to generate other files"] = False,
@@ -1040,19 +1041,6 @@ def write_QE_script_w_ASE(
           kpts=tuple(kpoints)
           )
     
-    
-    if not ready_to_run_job:
-        destiJobList = 'scratch_job_list'
-    else:
-        destiJobList = 'ready_to_run_job_list'
-    
-    job_list = [filename]
-    old_job_list = CANVAS.canvas.get(destiJobList, []).copy()
-    job_list = list(set(old_job_list + job_list))
-    CANVAS.write(destiJobList, job_list, overwrite=True)
-    
-    outStr = f"Quantum Espresso input script is written to {filename}"
-
     if ecutwfc_ref != "" and kspacing_ref != "":
         parent_result_ids = [inputAtomsDir_ref, ecutwfc_ref, kspacing_ref, *ppfilesID]
     else:   
@@ -1087,6 +1075,21 @@ def write_QE_script_w_ASE(
         parent_result_ids=parent_result_ids,
         metadata={}
     )
+    
+    if not ready_to_run_job:
+        destiJobList = 'scratch_job_list'
+    else:
+        destiJobList = 'ready_to_run_job_list'
+    
+    # job_list = [(filename, id)]
+    # old_job_list = CANVAS.canvas.get(destiJobList, []).copy()
+    # job_list = list(set(old_job_list + job_list))
+    job_list = copy.deepcopy(CANVAS.canvas.get(destiJobList, {}))
+    job_list[filename] = id
+    CANVAS.write(destiJobList, job_list, overwrite=True)
+    
+    outStr = f"Quantum Espresso input script is written to {filename}"
+
     outStr += f" Filename_ID={id}"
     
     # if ecutwfc_ref == "" or kspacing_ref == "":
@@ -1244,15 +1247,10 @@ def generate_convergence_test(input_file_name: Annotated[str, "Name of the templ
             job_list.append(new_file_name)
             with open(new_input_file, 'w') as f:
                 f.writelines(lines)
+                
     ## Remove duplicate files
     job_list = list(set(job_list))
     job_list_to_register = copy.deepcopy(job_list)
-    ## Save the job list
-    old_job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
-    job_list = list(set(old_job_list + job_list))
-    CANVAS.write('ready_to_run_job_list',job_list, overwrite=True)
-    CANVAS.write('jobs_K_and_ecut',job_list_dict)
-    
     id = CANVAS.register_tool_output(
         tool_name="generate_convergence_test",
         args={
@@ -1267,6 +1265,12 @@ def generate_convergence_test(input_file_name: Annotated[str, "Name of the templ
         parent_result_ids=[input_file_name_ref],
         metadata={}
     )
+    job_list_dict = {job_name: id for job_name in job_list}
+    ## Save the job list
+    job_list_dict = copy.deepcopy(CANVAS.canvas.get('ready_to_run_job_list', {})) | job_list_dict
+    CANVAS.write('ready_to_run_job_list',job_list_dict, overwrite=True)
+    CANVAS.write('jobs_K_and_ecut',job_list_dict)
+    
     
     return f"Job list is saved scucessfully. ID={id}. Please tell the supervisor in your response that convergence job has generated sucessfully, please continue to submit the jobs"
 
@@ -1355,23 +1359,11 @@ def generate_eos_test(
         new_file = os.path.join(WORKING_DIRECTORY, new_file_name)
         with open(new_file, 'w') as f:
             f.writelines(lines)
+            
     ## Remove duplicate files
     job_list = list(set(job_list))
     print(job_list)
     job_list_to_register = copy.deepcopy(job_list)
-    
-    ## Save the job list as json file
-    old_job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
-    job_list = list(set(old_job_list + job_list))
-    CANVAS.write('ready_to_run_job_list',job_list, overwrite=True)
-    
-    outStr = f"Job list is saved scucessfully, continue to submit the jobs. Files of interest are {job_list}."
-    
-    if kspacing_ref != "" and ecutwfc_ref != "":
-        parent_result_ids = [kspacing_ref, ecutwfc_ref, input_file_name_ref]
-    else:
-        parent_result_ids = [input_file_name_ref]
-        
     id = CANVAS.register_tool_output(
         tool_name="generate_eos_test",
         args={
@@ -1387,6 +1379,20 @@ def generate_eos_test(
         parent_result_ids=parent_result_ids,
         metadata={}
     )
+    job_list_dict = {job_name: id for job_name in job_list}
+    
+    
+    ## Save the job list as json file
+    job_list_dict = copy.deepcopy(CANVAS.canvas.get('ready_to_run_job_list', {})) | job_list_dict
+    CANVAS.write('ready_to_run_job_list',job_list_dict, overwrite=True)
+    
+    outStr = f"Job list is saved scucessfully, continue to submit the jobs. Files of interest are {job_list}."
+    
+    if kspacing_ref != "" and ecutwfc_ref != "":
+        parent_result_ids = [kspacing_ref, ecutwfc_ref, input_file_name_ref]
+    else:
+        parent_result_ids = [input_file_name_ref]
+        
     if kspacing_ref != "" and ecutwfc_ref != "":
         outStr += f" Filename_ID={id}"
     
@@ -1535,9 +1541,9 @@ def get_convergence_suggestions(
 @tool
 def find_optimal_parameter(
     sweeping_parameter: Annotated[str, "Name of the sweeping parameter, e.g. 'ecutwfc', 'kspacing', and etc."],
-    Filename_n_parameters_w_ref: Annotated[List[Tuple[str, float, str]], "List of (filename, parameter_value, filename_ref_id) pairs. filename is the name of the output file corresponding to the parameter value, filename_ref_id is the source_result_id of the file that you want to reference for this file."],
+    Filename_n_parameters_w_ref: Annotated[List[Tuple[str, float, str]], "List of (filename, parameter_value, filename_ref_id) pairs. filename is the name of the output file corresponding to the parameter value, filename_ref_id is the source_result_id given to that specific filename at the moment of file creation."],
     reference_file: Annotated[str, "Among the list of files, the reference_file filename corresponding to the most expensive / most accurate reference calculation."],
-    threshold: Annotated[float, "Maximum allowed absolute energy difference from the reference energy."],
+    threshold: Annotated[float, "Maximum allowed absolute energy difference in eV from the reference energy."],
     reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'threshold'."],
 ) -> Dict[str, Any]:
     """
@@ -1650,29 +1656,31 @@ def calculate_formation_E(slabFilePath: Annotated[str, "the slab calculation fil
 
 @tool
 def calculate_lc(
-    jobFileIdx_w_ref: Annotated[List[Tuple[int, str]], "indexs of files in the finished job list of files of interest, which will be used to calculate the lattice constant, together with the reference_id for each filename."],
+    jobFileIdx: Annotated[List[int], "indexs of files in the finished job list of files of interest, which will be used to calculate the lattice constant."],
     reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'jobFileIdx' (why do you choose those job)."],
     ) -> str:
     """Read the output file and calculate the lattice constant"""
     
     
-    assert isinstance(jobFileIdx_w_ref, list), "jobFileIdx_w_ref should be a list"
-    for i, ref in jobFileIdx_w_ref:
-        assert isinstance(i, int), "jobFileIdx_w_ref should be a list of (index of files of interest, reference_id) pairs"
+    assert isinstance(jobFileIdx, list), "jobFileIdx should be a list"
+    for i in jobFileIdx:
+        assert isinstance(i, int), "jobFileIdx should be a list of integer index"
     
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
-    job_list = CANVAS.canvas.get('finished_job_list', []).copy()
+    job_list = [key for key in CANVAS.canvas.get('finished_job_list', OrderedDict()).keys()]
+    parent_ids = set(value for value in CANVAS.canvas.get('ready_to_run_job_list', OrderedDict()).values())
     
-    jobFileIdx = []
-    jobFileIdx_ref = []
-    for idx, ref in jobFileIdx_w_ref:
-        ok, msg = CANVAS.verify_artifact(job_list[idx] ,ref)
-        if not ok:
-            return f"Verification failed for job index {idx} with reference ID {ref}: {msg}"
-        jobFileIdx.append(idx)
-        jobFileIdx_ref.append(ref)
+    # don't need to verify anymore since ref comes with filenames automatically
+    # jobFileIdx = []
+    # jobFileIdx_ref = []
+    # for idx, ref in jobFileIdx_w_ref:
+    #     ok, msg = CANVAS.verify_artifact(job_list[idx] ,ref)
+    #     if not ok:
+    #         return f"Verification failed for job index {idx} with reference ID {ref}: {msg}"
+    #     jobFileIdx.append(idx)
+    #     jobFileIdx_ref.append(ref)
     
-    jobFileIdx_ref = set(jobFileIdx_ref)
+    # jobFileIdx_ref = set(jobFileIdx_ref)
     
     job_list = np.array(job_list, dtype=str)[jobFileIdx]
     print(f"actual job list: {job_list}")
@@ -1730,7 +1738,7 @@ def calculate_lc(
         value=lc,
         description=f"The lattice constant calculated using the job list with index {jobFileIdx}",
         reasons=reasons,
-        parent_result_ids=[*jobFileIdx_ref],
+        parent_result_ids=[*parent_ids],
         metadata={}
     )
 
@@ -2122,13 +2130,14 @@ echo "Job Ended at `date`"\n \
         # time.sleep(60)
         return "Invalid input, please check the input format"
     
-    assert qeInputFileName in CANVAS.canvas.get('ready_to_run_job_list', []), f"{qeInputFileName} is not in the ready_to_run_job_list, please check the job list and make sure the file name is correct"
+    assert qeInputFileName in CANVAS.canvas.get("ready_to_run_job_list", {}) , f"{qeInputFileName} is not in the ready_to_run_job_list, please check the job list and make sure the file name is correct"
     
     # craete the json file if it does not exist, otherwise load it
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+    parent_ID = CANVAS.canvas.get("ready_to_run_job_list", {})[qeInputFileName]
 
     # new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 48, "runtime": 2800, "submissionScript": submissionScript, "outputFilename": outputFilename}}
-    new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 4, "runtime": 30, "submissionScript": submissionScript, "outputFilename": outputFilename}}
+    new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 4, "runtime": 30, "submissionScript": submissionScript, "outputFilename": outputFilename, "ID": parent_ID}}
 
     # check if resource_suggestions.db exist in the working directory
     db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
@@ -2151,7 +2160,7 @@ echo "Job Ended at `date`"\n \
         value=new_resource_dict,
         description=f"Resource suggestion for {qeInputFileName} with partition {partition}, nnodes {nnodes}, ntasks {ntasks}, runtime {span}, submission script {submissionScript}, and output filename {outputFilename}",
         reasons={},
-        parent_result_ids=[],
+        parent_result_ids=[parent_ID],
         metadata={}
     )
     
@@ -2192,7 +2201,7 @@ def submit_and_monitor_job(
     # Reconstruct the original dictionary
     resource_dict = {}
     for row in rows:
-        filename, partition, nnodes, ntasks, runtime, submissionScript, outputFilename = row
+        filename, partition, nnodes, ntasks, runtime, submissionScript, outputFilename, ID = row
         job_list.append(filename)
         resource_dict[filename] = {
             'partition': partition,
@@ -2200,14 +2209,16 @@ def submit_and_monitor_job(
             'ntasks': ntasks,
             'runtime': runtime,
             'submissionScript': submissionScript,
-            'outputFilename': outputFilename
+            'outputFilename': outputFilename,
+            'ID': ID
         }
     
     conn.close()
     print(f"loaded resource suggestions: {json.dumps(resource_dict, indent=4)}")
     
-    CANVAS.canvas['ready_to_run_job_list'] = job_list.copy()
-    wasJobList = deepcopy(job_list)
+    # commented out since DFT check is commented out
+    # CANVAS.canvas['ready_to_run_job_list'] = job_list.copy()
+    wasJobList = {job: CANVAS.canvas.get('ready_to_run_job_list', {}).get(job, None) for job in job_list}
     
     ## Check resource key is valid
     for job in job_list:
@@ -2231,6 +2242,7 @@ def submit_and_monitor_job(
     
     queueIDList = []
     notConvergedList = []
+    parent_ids = set()
     while True:
         for inputFile in job_list:    
             
@@ -2273,6 +2285,7 @@ def submit_and_monitor_job(
                 return "Job submission failed"
 
             queueIDList.append(job_id)
+            parent_ids.add(resource_dict[inputFile]['ID'])
             ## Sleep for 1.5 second to avoid the job submission too fast
             time.sleep(1)
             
@@ -2405,27 +2418,27 @@ def submit_and_monitor_job(
         #             break
     
     # reset resource_suggestions.db and job lists
-    finishedJobs = CANVAS.canvas.get('finished_job_list', [])
-    finishedJobs += wasJobList
+    finishedJobs = copy.deepcopy(CANVAS.canvas.get('finished_job_list', OrderedDict()))
+    finishedJobs |= wasJobList
     CANVAS.canvas['finished_job_list'] = finishedJobs
-    CANVAS.write('ready_to_run_job_list', [], overwrite=True)
+    CANVAS.write('ready_to_run_job_list', {}, overwrite=True)
     db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
     os.remove(db_file)
     time.sleep(1)
     initialize_database(db_file)
     time.sleep(1)
     
-    id = CANVAS.register_tool_output(
-        tool_name="submit_and_monitor_job",
-        args={
-            "jobType": jobType,
-        },
-        value="places_holder",
-        description=f"HPC places_holder",
-        reasons={},
-        parent_result_ids=[],
-        metadata={}
-    )
+    # id = CANVAS.register_tool_output(
+    #     tool_name="submit_and_monitor_job",
+    #     args={
+    #         "jobType": jobType,
+    #     },
+    #     value="places_holder",
+    #     description=f"HPC places_holder",
+    #     reasons={},
+    #     parent_result_ids=[],
+    #     metadata={}
+    # )
     
     notConvergedListString = ""
     
@@ -2443,13 +2456,28 @@ def submit_and_monitor_job(
     if notConvergedListString != "":
         notConvergedListString = "However, the following jobs did not converge: " + notConvergedListString
     
+    outStr = ""
     # if all job failed
     if numberOfSucc == 0:
         # time.sleep(60)
-        return f"All jobs failed. Please figure out why they failed, then regenerate the job. Tell the supervisor in your response that new runs, with problems resolved, need to be regenerated and calculated."
+        outStr = f"All jobs failed. Please figure out why they failed, then regenerate the job. Tell the supervisor in your response that new runs, with problems resolved, need to be regenerated and calculated."
     
     # time.sleep(60)
-    return f"All job in job_list has finished. {notConvergedListString}please check the output file in the {WORKING_DIRECTORY}"
+    outStr = f"All job in job_list has finished. {notConvergedListString}please check the output file in the {WORKING_DIRECTORY}"
+    
+    id = CANVAS.register_tool_output(
+        tool_name="submit_and_monitor_job",
+        args={
+            "jobType": jobType,
+        },
+        value=outStr,
+        description=f"HPC job submission and monitoring result",
+        reasons={},
+        parent_result_ids=list(parent_ids),
+        metadata={}
+    )
+    
+    return f"{outStr}\nConclusion reference_ID={id}"
 
 @tool
 def submit_single_job(
@@ -2549,7 +2577,8 @@ echo "Job Ended at `date`"
     return f"Job has finished, please check the output file"   
 
 @tool
-def read_energy_from_output(jobFileIdx: Annotated[List[int], "indexs of files in the finished job list of files of interest, energies of which will be read and printed"]
+def read_energy_from_output(jobFileIdx: Annotated[List[int], "indexs of files in the finished job list of files of interest, energies of which will be read and printed"],
+                            reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'jobFileIdx'. (why do you choose those files index)"]
 ) -> str:
     '''Read the total energy from the output file in job list and return it in a string'''
     
@@ -2559,7 +2588,9 @@ def read_energy_from_output(jobFileIdx: Annotated[List[int], "indexs of files in
     
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     # load job_list.jason
-    job_list = CANVAS.canvas.get('finished_job_list', []).copy()
+    job_list = [key for key in CANVAS.canvas.get('finished_job_list', OrderedDict()).keys()]
+    parent_ids = set(value for value in CANVAS.canvas.get('ready_to_run_job_list', OrderedDict()).values())
+    
     job_list = np.array(job_list, dtype=str)[jobFileIdx]
     print(f"actual job list: {job_list}")
     
@@ -2594,7 +2625,20 @@ def read_energy_from_output(jobFileIdx: Annotated[List[int], "indexs of files in
             except:
                 # time.sleep(60)
                 return f"Invalid output file {output_file} or calculation failed, please submit the {job} again."
-        result += f"Energy read from {job} is {atoms.get_potential_energy()} eV.\n"
+        
+        id = CANVAS.register_tool_output(
+            tool_name="read_energy_from_output",
+            args={
+                "jobFileIdx": jobFileIdx,
+            },
+            value=atoms.get_potential_energy(),
+            description=f"The energy read from {job} is {atoms.get_potential_energy()} eV",
+            reasons=reasons,
+            parent_result_ids=[CANVAS.canvas.get('finished_job_list', OrderedDict()).get(job, None)],
+            metadata={}
+        )
+            
+        result += f"Energy read from {job} is {atoms.get_potential_energy()} eV. Energy reference_ID={id}\n"
         # print(result)
         time.sleep(1)
     print(result)

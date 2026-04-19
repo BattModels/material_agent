@@ -51,7 +51,7 @@ class myStep(BaseModel):
     agent: str = Field(
         description=f"Agent to perform the step. Should be one of {members}."
     )
-    required_tools: List[Literal[
+    required_tools:Literal[
                     # "inspect_my_canvas",
                     # "write_my_canvas",
                     # "read_my_canvas",
@@ -74,7 +74,8 @@ class myStep(BaseModel):
                     "submit_and_monitor_job",
                     "add_resource_suggestion",
                     ""
-                ]] = Field(f"must-use tools for this step, should be a subset of the tools available to the agent. read the CANVAS with key Worker_available_tools to see more details about each tools.")
+                ] = Field(f"The one final tool your worker agent must use to obtain the desired output of a certain step. Please read the CANVAS with key Worker_available_tools to see more details about each tools.")
+    # what would be that final one tool must use to obtain the desired output of a certain step
 
 class Plan(BaseModel):
     """Need to add/modify current plan, which is going to be followed by your worker agents in future"""
@@ -303,10 +304,11 @@ Please inspect and extract related information from CANVAS, then only update the
                     "add_resource_suggestion",
                     "",
                 ]
-                wrongTools = set(step.required_tools) - set(ToolList)
-                print(f"wrongTools: {wrongTools}")
-                if len(wrongTools) > 0:
-                    supervisorMessage = old_supervisorMessage + f"\n\nWARNING: In step '{step.step}', you required the following tools that are not in the tool list: {', '.join(wrongTools)}. Please check the CANVAS and try again!"
+                # step.required_tools is no longer a list of tools
+                # wrongTools = set(step.required_tools) - set(ToolList)
+                if step.required_tools not in ToolList:
+                    print(f"wrongTools: {step.required_tools}")
+                    supervisorMessage = old_supervisorMessage + f"\n\nWARNING: In step '{step.step}', you required the following tool that are not in the tool list: {step.required_tools}. Please check the CANVAS and try again!"
                     sup_good = False
                     break
             
