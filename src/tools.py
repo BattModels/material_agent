@@ -562,6 +562,8 @@ def submit_dft_job(
 
     OH_adsorption submits three jobs with slightly varied initial adsorbate
     positions to increase the likelihood of finding the global minimum.
+    Only the global minimum will be reported and used.
+    To obtain the OH adsorption energy, the O adsorption calculation must be completed first.
 
     Returns a confirmation message including the submitted process ID(s).
     """
@@ -698,6 +700,7 @@ def get_terminations_ranking(
     if ranking is None:
         out_string += f"This is the first termination ranking for candidate {candidate_id}:"
         
+        # Will fail if the relaxed bulk has not been set (will raise an RuntimeError)
         study.predict_most_likely_surfaces(
         max_miller = max_miller,
         method = method,
