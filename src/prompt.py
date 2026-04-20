@@ -124,6 +124,7 @@ dft_agent_prompt = """
                 15. when calculating formation energies, convergence test on DFT parameters should be done on one representitive system with both the adsorbate and the surface.
                 16. If a job is having issue, i.e. didn't converge or not accurate enough, use the right tool to get suggestions on how to modify the input file to fix the issue.
                 17. Never do math yourself. Call the math tool instead
+                18. When asked to provide a ref_id, that id would be the id of the previous tool output where this parameter value was initially generated.
             """
 
 dft_reader_agent_prompt = """

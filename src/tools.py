@@ -50,6 +50,8 @@ from collections import OrderedDict
 ##                                        Common tools                                          ##
 ##################################################################################################
 
+
+
 _ALLOWED_FUNCS = {
     "abs": abs,
     "round": round,
@@ -126,6 +128,7 @@ def math_expression_tool(
     """
     Evaluate a math expression on arbitrary input floats.
     Inputs are mapped by order to x0, x1, x2, ...
+    reference_id ties with: computed math result, float
     """
     if not values:
         return "No values were provided."
@@ -241,6 +244,8 @@ def extract_numeric_from_tool_output(
 
     Returns:
         str: A message indicating the result of the extraction and verification process.
+    reference_id ties with: 
+        verified extracted numeric value, float
     """
     abs_tol = 1e-8,
     record = CANVAS.get_artifact(source_tool_call_id)
@@ -377,6 +382,8 @@ def inspect_ase_atoms(
     -------
     dict
         JSON-serializable dictionary containing extracted information.
+    reference_id ties with:
+        full ASE Atoms inspection summary, str (JSON string)
     """
     try:
         from ase import Atoms
@@ -509,6 +516,8 @@ def get_ase_atoms_property(
     -------
     dict
         JSON-serializable dictionary with the requested property.
+    reference_id ties with:
+        requested ASE property, variable dtype (native property dtype)
     """
     try:
         from ase import Atoms
@@ -598,7 +607,8 @@ def init_structure_data(
     b: Annotated[float, "Lattice constant. If only a and b is given, b will be interpreted as c instead."] = None,
     c: Annotated[float, "Lattice constant"] = None,
 ) -> Annotated[str, "Path of the saved initial structure data file."]:
-    """Create single element bulk initial structure based on composite, crystal lattice, lattice info, save to the working dir, and return filename."""
+    """Create single element bulk initial structure based on composite, crystal lattice, lattice info, save to the working dir, and return filename.
+    reference_id ties with: saved initial structure filepath, str"""
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     os.makedirs(WORKING_DIRECTORY, exist_ok=True)
     atoms = bulk(element, lattice, a=a, b=b, c=c, cubic=True)
@@ -644,14 +654,15 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
                                         vacuum: Annotated[float, "typically 10.0. Vacuum size in Angstrom. Larger vacuum can avoid the interaction between periodic images, but also increase the computational cost."],
                                         surfaceFilename: Annotated[str, "Name (not a path) of the surface file to be saved in traj format"],
                                         reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'supercell_dim_xy', 'supercell_dim_z', 'n_fixed_layers', 'vacuum'."],
-                                        supercell_dim_z_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of supercell_dim_z. If not provided, the result will not be registered and you can't use the result in the final report"] = "",
-                                        n_fixed_layers_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of n_fixed_layers. If not provided, the result will not be registered and you can't use the result in the final report"] = "",
-                                        vacuum_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of vacuum size. If not provided, the result will not be registered and you can't use the result in the final report"] = "",
+                                        supercell_dim_z_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of supercell_dim_z value was generated. If not provided, the result will not be registered and you can't use the result in the final report"] = "",
+                                        n_fixed_layers_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of n_fixed_layers value was generated. If not provided, the result will not be registered and you can't use the result in the final report"] = "",
+                                        vacuum_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of vacuum size value was generated. If not provided, the result will not be registered and you can't use the result in the final report"] = "",
                                         ):
     """Generate a surface structure and get the available adsorption sites. 
     You can try out different supercell_dim_z, n_fixed_layers and vacuum size to see the effect.
     However, only when you specify the source_result_id reference for these parameters, the result will be registered in the canvas and you can use them in the production run.
-    Otherwise, the tool will still execute and return the generated surface structure and available adsorption sites, but they will not be registered and you can't use them in the production run"""
+    Otherwise, the tool will still execute and return the generated surface structure and available adsorption sites, but they will not be registered and you can't use them in the production run
+    reference_id ties with: adsorption site coordinates, np.ndarray shape (2,); and saved surface filepath, str"""
     
     # verfiy all *_ref:
     for value, ref in zip(
@@ -765,7 +776,8 @@ def generate_myAdsorbate(symbols: Annotated[str, "Element symbols of the adsorba
                          vaccum: Annotated[float, "Vacuum size in Angstrom around the adsorbate structure. Typically 10.0 Angstrom should be sufficient"],
                          reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'symbols', 'positions', 'vaccum'."],
                          ):
-    """Generate an adsorbate structure and save it."""
+    """Generate an adsorbate structure and save it.
+    reference_id ties with: saved adsorbate filepath, str"""
     assert AdsorbateFileName.endswith('.traj'), "AdsorbateFileName should end with .traj"
     assert not '/' in AdsorbateFileName, "AdsorbateFileName should not contain '/'"
     
@@ -798,12 +810,13 @@ def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure
                     rotations: Annotated[List[Tuple[float, str]], "List of rotations for the ith adsorbates, e.g. [[90.0, 'x'], [180.0, 'y'], ...]"],
                     surfaceWithAdsorbateFileName: Annotated[str, "Name (not a path) of the surface adsorbated with adsorbate to be saved in traj format"],
                     reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'mySurfacePath', 'adsorbatePath', 'mySites', 'rotations'."],
-                    mySites_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of adsorption sites. If not provided, the result will not be registered and you can't use the result in final report"] = "",
+                    mySites_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of adsorption sites value was generated. If not provided, the result will not be registered and you can't use the result in final report"] = "",
                     ):
     """
     Add adsorbate to the surface structure and save it.
     The third argument must be a list in the form of [[x1, y1], [x2, y2], ...], where x and y are the coordinates of the adsorption sites.
     The forth argument must be a list of tuple in the form of [[float(angle), str(axis)], ...], where the first element is the rotation angle and the second element is the axis of rotation.
+    reference_id ties with: saved surface-with-adsorbate filepath, str
     """
 # @tool
 # def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure"],
@@ -906,9 +919,9 @@ def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure
 @tool
 def write_QE_script_w_ASE(
     listofElements: Annotated[List[str], "List of distinct element symbols in the unit cell"],
-    ppfiles_w_ref: Annotated[List[Tuple[str, str]], "List of pseudopotential files in the order of the elements together with the reference source_result_id for each pp file. e.g. [('Pt.pbe-n-rrkjus_psl.1.0.0.UPF', 'ref_id_1'), ('C.pbe-n-rrkjus_psl.1.0.0.UPF', 'ref_id_2')]"],
+    ppfiles_w_ref: Annotated[List[Tuple[str, str]], "List of pseudopotential files in the order of the elements together with the reference source_result_id of the previous tool output where the specific pseudopotential filename was generated. e.g. [('Pt.pbe-n-rrkjus_psl.1.0.0.UPF', 'ref_id_1'), ('C.pbe-n-rrkjus_psl.1.0.0.UPF', 'ref_id_2')]"],
     filename: Annotated[str, "Name of the Quantum Espresso input file, end with .pwi"],
-    inputAtomsDir_w_ref: Annotated[Tuple[str, str], "Directory of the input Atoms object (i.e. traj or xyz), or the name of the job that contains the relaxed structure (i.e. xxxx.pwi), together with the reference source_result_id of the structure."],
+    inputAtomsDir_w_ref: Annotated[Tuple[str, str], "Directory of the input Atoms object (i.e. traj or xyz), or the name of the job that contains the relaxed structure (i.e. xxxx.pwi), together with the reference source_result_id of the previous tool output where the structure was generated."],
     ensembleCalculation: Annotated[bool, "Whether this calculation is ensemble calculation"],
     calculation: Annotated[str, "Type of calculation to perform, e.g. 'scf', 'relax', or 'ensemble'. Set to 'ensemble', when running ensemble calculation"],
     restart_mode: Annotated[Literal['from_scratch', 'restart'], "Restart mode"],
@@ -929,10 +942,11 @@ def write_QE_script_w_ASE(
     reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'calculation', 'restart_mode', 'prefix', 'disk_io', 'ibrav', 'nat', 'ntyp', 'ecutwfc', 'ecutrho', 'occupations', 'smearing', 'degauss', 'conv_thr', 'electron_maxstep', 'kspacing', 'input_dft', 'ready_to_run_job', 'additional_input'."],
     ready_to_run_job: Annotated[bool, "True if the job is intended to be run directly without further modification, False if this file is intended to be used to generate other files"] = False,
     additional_input: Annotated[Dict[str, Any], "Additional input parameters to be added to the input script. Should be in the format of a flat dict, {'input_parameter_1': parameter_1, 'input_parameter_2': parameter_2, ...}, parameter_x remain in their native type, str, float, bool, etc. Do not use unless you know what you are doing."] = {},
-    ecutwfc_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of ecutwfc. If not provided, the result will not be registered and you can't use the result in final report"] = "",
-    kspacing_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of kspacing. If not provided, the result will not be registered and you can't use the result in final report"] = "",
+    ecutwfc_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of ecutwfc value was generated. If not provided, the result will not be registered and you can't use the result in final report"] = "",
+    kspacing_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of kspacing value was generated. If not provided, the result will not be registered and you can't use the result in final report"] = "",
 ):
-    """Write a Quantum Espresso input script using ASE. Bool value have no quote around them. For smearing start with methfessel-paxton. For ecutwfc choose between 30-100 Ry. When asked to run ensemble calculation, set calculation to 'ensemble'. When generating template for convergence test, use scf calculation and set ready_to_run_job to False."""
+    """Write a Quantum Espresso input script using ASE. Bool value have no quote around them. For smearing start with methfessel-paxton. For ecutwfc choose between 30-100 Ry. When asked to run ensemble calculation, set calculation to 'ensemble'. When generating template for convergence test, use scf calculation and set ready_to_run_job to False.
+    reference_id ties with: saved QE input script filepath/name, str"""
 
     assert isinstance(additional_input, dict), "additional_input must be a dictionary"
     
@@ -1100,7 +1114,8 @@ def write_QE_script_w_ASE(
 
 @tool
 def find_pseudopotential(element: str) -> str:
-    """Return the pseudopotential file path for given element symbol."""
+    """Return the pseudopotential file path for given element symbol.
+    reference_id ties with: pseudopotential filename, str"""
     spList = []
     pseudo_dir = var.OTHER_GLOBAL_VARIABLES["PSEUDO_DIR"]
     if pseudo_dir is None:
@@ -1143,11 +1158,12 @@ def find_pseudopotential(element: str) -> str:
 def generate_convergence_test(input_file_name: Annotated[str, "Name of the template quantum espresso input file"],
                               kspacing:Annotated[list[float], "List of kspacing to be tested. Typically between 0.1-0.4"],
                               ecutwfc:Annotated[list[int], "List of ecutwfc to be tested. Typically between 40-100"],
-                              input_file_name_ref: Annotated[str, "source_result_id identifing which tool output to reference for this choice of input_file_name."],
+                              input_file_name_ref: Annotated[str, "The source_result_id of the previous tool output where this input_file_name value was generated."],
                               reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'input_file_name', 'kspacing', 'ecutwfc'."],
                               ):
     '''
     Generate the convergence test input scripts for quantum espresso calculation using another quantum espresso input file as a template and save the job list. 
+    reference_id ties with: generated convergence-test job list, list[str]
     '''
     # kspacing = [0.6, 0.8, 1.0]
     # ecutwfc = [10, 20, 30]
@@ -1281,15 +1297,17 @@ def generate_eos_test(
     ecutwfc: Annotated[int, "Kinetic energy cutoff (Ry) for wavefunctions for the equation of state test."],
     stepSize: Annotated[float, "Step size for scaling the cell size. The cell will be scaled from (1-2*stepSize) to (1+2*stepSize). Typically 0.025 should be good."],
     reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'input_file_name', 'kspacing', 'ecutwfc', 'stepSize'."],
-    input_file_name_ref: Annotated[str, "Source_result_id identifing which tool output to reference for this choice of template quantum espresso input file."],
-    kspacing_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of kspacing. If not provided, the result will not be registered and you can't use the result in final report"] = "",
-    ecutwfc_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of ecutwfc. If not provided, the result will not be registered and you can't use the result in final report"] = "",
+    input_file_name_ref: Annotated[str, "The source_result_id of the previous tool output where the name of the template quantum espresso input file was generated."],
+    kspacing_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of kspacing value was generated. If not provided, the result will not be registered and you can't use the result in final report"] = "",
+    ecutwfc_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of ecutwfc value was generated. If not provided, the result will not be registered and you can't use the result in final report"] = "",
     ):
     '''
     Generate the equation of state test input scripts for quantum espresso calculation and save the job list.
+    reference_id ties with: generated EOS-test job list, list[str]
     '''
     assert stepSize > 0.01 and stepSize < 0.1, "stepSize should be between 0.01 and 0.1"
     
+    # The reference ID of the previous tool output where this parameter value was generated.
     for value, ref in zip(
         [kspacing, ecutwfc],
         [kspacing_ref, ecutwfc_ref]
@@ -1360,6 +1378,10 @@ def generate_eos_test(
         with open(new_file, 'w') as f:
             f.writelines(lines)
             
+    if kspacing_ref != "" and ecutwfc_ref != "":
+        parent_result_ids = [kspacing_ref, ecutwfc_ref, input_file_name_ref]
+    else:
+        parent_result_ids = [input_file_name_ref]
     ## Remove duplicate files
     job_list = list(set(job_list))
     print(job_list)
@@ -1388,10 +1410,6 @@ def generate_eos_test(
     
     outStr = f"Job list is saved scucessfully, continue to submit the jobs. Files of interest are {job_list}."
     
-    if kspacing_ref != "" and ecutwfc_ref != "":
-        parent_result_ids = [kspacing_ref, ecutwfc_ref, input_file_name_ref]
-    else:
-        parent_result_ids = [input_file_name_ref]
         
     if kspacing_ref != "" and ecutwfc_ref != "":
         outStr += f" Filename_ID={id}"
@@ -1426,7 +1444,8 @@ def get_convergence_suggestions(
     question: Annotated[str, "Question about this job, e.g. 'Why this job did not converge?' or 'how to improve the accuracy of this job?'"],
     start_block: Annotated[int, "The block index to start with when the content is too long. Each block contains around 150k tokens. Set to 0 for the first block." ] = 0
 ):
-    "Get suggestions on how to resolve issues for a certain job, i.e. converge or not accurate enough. If the output file is too long, you can call this tool multiple times for the same file with the same question but different start_block index to get suggestions based on different part of the output."
+    """Get suggestions on how to resolve issues for a certain job, i.e. converge or not accurate enough. If the output file is too long, you can call this tool multiple times for the same file with the same question but different start_block index to get suggestions based on different part of the output.
+    reference_id ties with: suggestions on how to resolve the issue for the job, str"""
     outFile = filename + ".pwo"
     errFile = filename + ".err"
     block_size_tokens = 150000
@@ -1541,13 +1560,14 @@ def get_convergence_suggestions(
 @tool
 def find_optimal_parameter(
     sweeping_parameter: Annotated[str, "Name of the sweeping parameter, e.g. 'ecutwfc', 'kspacing', and etc."],
-    Filename_n_parameters_w_ref: Annotated[List[Tuple[str, float, str]], "List of (filename, parameter_value, filename_ref_id) pairs. filename is the name of the output file corresponding to the parameter value, filename_ref_id is the source_result_id given to that specific filename at the moment of file creation."],
+    Filename_n_parameters_w_ref: Annotated[List[Tuple[str, float, str]], "List of (filename, parameter_value, filename_ref_id) pairs. filename is the name of the output file corresponding to the parameter value, filename_ref_id is the source_result_id of the previous tool output where that specific filename was generated."],
     reference_file: Annotated[str, "Among the list of files, the reference_file filename corresponding to the most expensive / most accurate reference calculation."],
     threshold: Annotated[float, "Maximum allowed absolute energy difference in eV from the reference energy."],
     reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'threshold'."],
 ) -> Dict[str, Any]:
     """
     Find the most optimal parameter value for production run.
+    reference_id ties with: the most optimal parameter value for production run, float
     """
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     
@@ -1615,7 +1635,8 @@ def calculate_formation_E(slabFilePath: Annotated[str, "the slab calculation fil
                           systemFilePath: Annotated[str, "the slab with adsorbate calculation file name, ending in pwi"],
                           reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'slabFilePath', 'adsorbateFilePath', 'systemFilePath'."],
                           ):
-    """using the energies of the slab, adsorbate, and slab with adsorbate, calculate the formation energy of the adsorbate on the slab. """
+    """using the energies of the slab, adsorbate, and slab with adsorbate, calculate the formation energy of the adsorbate on the slab.
+    reference_id ties with: the formation energy of the adsorbate on the slab, float"""
     working_directory = var.my_WORKING_DIRECTORY
     slabFilePath = os.path.join(working_directory, slabFilePath + '.pwo')
     adsorbateFilePath = os.path.join(working_directory, adsorbateFilePath + '.pwo')
@@ -1656,33 +1677,32 @@ def calculate_formation_E(slabFilePath: Annotated[str, "the slab calculation fil
 
 @tool
 def calculate_lc(
-    jobFileIdx: Annotated[List[int], "indexs of files in the finished job list of files of interest, which will be used to calculate the lattice constant."],
-    reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'jobFileIdx' (why do you choose those job)."],
+    jobFilenames_w_ref: Annotated[List[Tuple[str, str]], "List of (filename, filename_ref_id) pairs. filename is the name of the jobs lattice constant will be calculated from, filename_ref_id is the source_result_id of the previous tool output where that specific filename was generated."], 
+    reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'jobFilenames_w_ref' (why do you choose those job)."],
     ) -> str:
-    """Read the output file and calculate the lattice constant"""
+    """Read the output file and calculate the lattice constant
+    reference_id ties with: the lattice constant calculated, float"""
     
     
-    assert isinstance(jobFileIdx, list), "jobFileIdx should be a list"
-    for i in jobFileIdx:
-        assert isinstance(i, int), "jobFileIdx should be a list of integer index"
+    assert isinstance(jobFilenames_w_ref, list), "jobFilenames_w_ref should be a list"
+    for name, ref in jobFilenames_w_ref:
+        assert isinstance(name, str), "filename should be a string"
+        assert isinstance(ref, str), "filename_ref_id should be a string"
     
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
-    job_list = [key for key in CANVAS.canvas.get('finished_job_list', OrderedDict()).keys()]
-    parent_ids = set(value for value in CANVAS.canvas.get('ready_to_run_job_list', OrderedDict()).values())
+    # job_list = [key for key in CANVAS.canvas.get('finished_job_list', OrderedDict()).keys()]
+    # parent_ids = set(value for value in CANVAS.canvas.get('ready_to_run_job_list', OrderedDict()).values())
     
-    # don't need to verify anymore since ref comes with filenames automatically
-    # jobFileIdx = []
-    # jobFileIdx_ref = []
-    # for idx, ref in jobFileIdx_w_ref:
-    #     ok, msg = CANVAS.verify_artifact(job_list[idx] ,ref)
-    #     if not ok:
-    #         return f"Verification failed for job index {idx} with reference ID {ref}: {msg}"
-    #     jobFileIdx.append(idx)
-    #     jobFileIdx_ref.append(ref)
+    job_list = []
+    parents = set()
+    for name, ref in jobFilenames_w_ref:
+        ok, msg = CANVAS.verify_artifact(name, ref)
+        if not ok:
+            return f"Verification failed for job filename {name} with reference ID {ref}: {msg}"
+        job_list.append(name)
+        parents.add(ref)
     
-    # jobFileIdx_ref = set(jobFileIdx_ref)
-    
-    job_list = np.array(job_list, dtype=str)[jobFileIdx]
+    # job_list = np.array(job_list, dtype=str)[jobFileIdx]
     print(f"actual job list: {job_list}")
 
     volume_list = []
@@ -1733,12 +1753,12 @@ def calculate_lc(
     id = CANVAS.register_tool_output(
         tool_name="calculate_lc",
         args={
-            "jobFileIdx": jobFileIdx,
+            "jobFilenames_w_ref": jobFilenames_w_ref,
         },
         value=lc,
-        description=f"The lattice constant calculated using the job list with index {jobFileIdx}",
+        description=f"The lattice constant calculated using the job list {job_list}",
         reasons=reasons,
-        parent_result_ids=[*parent_ids],
+        parent_result_ids=list(parents),
         metadata={}
     )
 
@@ -1969,7 +1989,8 @@ def analyze_BEEF_result(
     systemFilePath: Annotated[str, "the slab with ontop adsorbate calculation file"],
     reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'slabFilePath', 'adsorbateFilePath', 'systemFilePath'. (why do you choose those three files)"],
 ) -> str:
-    '''Read, extract, and analyze BEEF calculation results for slab, adsorbate, and surface with adsorbate. Return the mean and standard deviation of the adsorption energy.'''
+    '''Read, extract, and analyze BEEF calculation results for slab, adsorbate, and surface with adsorbate. Return the mean and standard deviation of the adsorption energy.
+    reference_id ties with: the mean adsorption energy calculated using the BEEF ensemble, float; the standard deviation of adsorption energy calculated using the BEEF ensemble, float.'''
     
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     
@@ -2174,6 +2195,7 @@ def submit_and_monitor_job(
     ) -> str:
     '''
     Submit jobs in the job list to supercomputer, return the location of the output file once the job is done. Do not call this tool until you added the resource suggestion.
+    reference_id ties with: finished_job_id, List[str]; job submision summary, str.
     '''
     
     # check if resource_suggestions.json exist
@@ -2243,6 +2265,7 @@ def submit_and_monitor_job(
     queueIDList = []
     notConvergedList = []
     parent_ids = set()
+    job_to_id = {}
     while True:
         for inputFile in job_list:    
             
@@ -2286,6 +2309,7 @@ def submit_and_monitor_job(
 
             queueIDList.append(job_id)
             parent_ids.add(resource_dict[inputFile]['ID'])
+            job_to_id[inputFile] = resource_dict[inputFile]['ID']
             ## Sleep for 1.5 second to avoid the job submission too fast
             time.sleep(1)
             
@@ -2443,12 +2467,16 @@ def submit_and_monitor_job(
     notConvergedListString = ""
     
     numberOfSucc = 0
+    convergedJobs = []
+    convergedJobsParents = set()
     for job in job_list:
         try:
             # temporay disable the read function to avoid the calculation
             tmp = read(os.path.join(WORKING_DIRECTORY, job + '.pwo'))
             _ = tmp.get_potential_energy()
             print(f"Job {job} has finished")
+            convergedJobs.append(job + '.pwo')
+            convergedJobsParents.add(job_to_id[job])
             numberOfSucc += 1
         except:
             notConvergedListString += job + ", "
@@ -2461,11 +2489,26 @@ def submit_and_monitor_job(
     if numberOfSucc == 0:
         # time.sleep(60)
         outStr = f"All jobs failed. Please figure out why they failed, then regenerate the job. Tell the supervisor in your response that new runs, with problems resolved, need to be regenerated and calculated."
+    else:
+        # time.sleep(60)
+        outStr = f"All job in job_list has finished. {notConvergedListString}please check the output file in the {WORKING_DIRECTORY}"
     
-    # time.sleep(60)
-    outStr = f"All job in job_list has finished. {notConvergedListString}please check the output file in the {WORKING_DIRECTORY}"
     
-    id = CANVAS.register_tool_output(
+    
+    finished_id = CANVAS.register_tool_output(
+        tool_name="submit_and_monitor_job",
+        args={
+            "jobType": jobType,
+        },
+        value=convergedJobs,
+        description=f"List of output files for jobs that have finished successfully",
+        listed_value=True,
+        reasons={},
+        parent_result_ids=list(convergedJobsParents),
+        metadata={}
+    )
+    
+    out_id = CANVAS.register_tool_output(
         tool_name="submit_and_monitor_job",
         args={
             "jobType": jobType,
@@ -2477,7 +2520,7 @@ def submit_and_monitor_job(
         metadata={}
     )
     
-    return f"{outStr}\nConclusion reference_ID={id}"
+    return f"{outStr}\nFinished_Job_List_ID={finished_id}, Text output reference_ID={out_id}"
 
 @tool
 def submit_single_job(
@@ -2577,21 +2620,29 @@ echo "Job Ended at `date`"
     return f"Job has finished, please check the output file"   
 
 @tool
-def read_energy_from_output(jobFileIdx: Annotated[List[int], "indexs of files in the finished job list of files of interest, energies of which will be read and printed"],
-                            reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'jobFileIdx'. (why do you choose those files index)"]
+def read_energy_from_output(
+    jobFilenames_w_ref: Annotated[List[Tuple[str, str]], "List of (filename, filename_ref_id) pairs. Energy of <filename> will be read and printed, filename_ref_id is the source_result_id of the previous tool output where that specific filename was generated."], 
+    reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'jobFileIdx'. (why do you choose those files index)"]
 ) -> str:
-    '''Read the total energy from the output file in job list and return it in a string'''
+    '''Read the total energy from the output file in job list and return it in a string
+    reference_id ties with: the energy read from the output file, float'''
     
-    assert isinstance(jobFileIdx, list), "jobFileIdx should be a list"
-    for i in jobFileIdx:
-        assert isinstance(i, int), "jobFileIdx should be a list of index of files of interest"
-    
+    assert isinstance(jobFilenames_w_ref, list), "jobFilenames_w_ref should be a list"
+    for name, ref in jobFilenames_w_ref:
+        assert isinstance(name, str), "filename should be a string"
+        assert isinstance(ref, str), "filename_ref_id should be a string"
+
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
-    # load job_list.jason
-    job_list = [key for key in CANVAS.canvas.get('finished_job_list', OrderedDict()).keys()]
-    parent_ids = set(value for value in CANVAS.canvas.get('ready_to_run_job_list', OrderedDict()).values())
     
-    job_list = np.array(job_list, dtype=str)[jobFileIdx]
+    job_list = []
+    parents = set()
+    for name, ref in jobFilenames_w_ref:
+        ok, msg = CANVAS.verify_artifact(name, ref)
+        if not ok:
+            return f"Verification failed for job filename {name} with reference ID {ref}: {msg}"
+        job_list.append(name)
+        parents.add(ref)
+    
     print(f"actual job list: {job_list}")
     
     result = ""
@@ -2629,12 +2680,12 @@ def read_energy_from_output(jobFileIdx: Annotated[List[int], "indexs of files in
         id = CANVAS.register_tool_output(
             tool_name="read_energy_from_output",
             args={
-                "jobFileIdx": jobFileIdx,
+                "jobFilenames_w_ref": jobFilenames_w_ref,
             },
             value=atoms.get_potential_energy(),
             description=f"The energy read from {job} is {atoms.get_potential_energy()} eV",
             reasons=reasons,
-            parent_result_ids=[CANVAS.canvas.get('finished_job_list', OrderedDict()).get(job, None)],
+            parent_result_ids=list(parents),
             metadata={}
         )
             

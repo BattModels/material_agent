@@ -236,6 +236,9 @@ def supervisor_chain_node(state, agent, name):
     # task_formatted = f"""For the following plan:
     # {plan_str}\n\nYou are tasked with executing step {1}, {task}."""
     old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step}" for i, step in enumerate(state["past_steps"]))
+    
+    
+    # TODO: notify the supervisor if the worker returned successed=false
     supervisorMessage = ""
     if len(plan) == 0:
         supervisorMessage =  f"""
