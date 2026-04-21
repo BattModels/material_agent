@@ -506,11 +506,7 @@ You have a maximum of 7 hours to complete the entire study and make your final r
 
         if overwrite:
             inputs = {
-<<<<<<< HEAD
-                "inputs": f"{revised_message_v5}", # TODO
-=======
                 "inputs": f"{revised_message_v5}",
->>>>>>> 17cde34be0ecf3bb00f66b365ca52d72a153db70
                 "plan": [],
                 "past_steps": [],
                 # NOTE: init boss answers state explicitly...
