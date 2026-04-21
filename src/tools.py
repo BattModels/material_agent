@@ -528,8 +528,8 @@ def enter_candidate_in_log(
 
     catalyst_study = OER_catalyst_study(
         init_atoms = atoms, 
-        H2O_gas_free_energy = -14.217, # <--- should be the DFT energy + free energy corrections, at the relevant level of theory
-        H2_gas_free_energy = -6.77, # <--- should be the DFT energy + free energy corrections, at the relevant level of theory
+        H2O_gas_free_energy = -14.183498, # <--- should be the DFT energy + free energy corrections, at the relevant level of theory
+        H2_gas_free_energy = -7.027336, # <--- should be the DFT energy + free energy corrections, at the relevant level of theory
                                         )
 
     EXPLOG.add_candidate(candidate_id=MaterialId,
