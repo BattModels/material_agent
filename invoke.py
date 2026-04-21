@@ -327,7 +327,7 @@ You have a maximum of 7 hours to complete the entire study and make your final r
     """
     #    You have a maximum of 25 minutes to complete your entire run and report your findings.
 
-    revised_message_v5 = """
+    revised_message_v6 = """
     Please conduct an acidic OER screening study to identify the best catalytic candidate
     for the oxygen evolution reaction (OER) in the Google DeepMind GNoME database.
     Please do an iterative multi-round screening, learning from each round and applying
@@ -386,9 +386,9 @@ You have a maximum of 7 hours to complete the entire study and make your final r
     - Any recommendations for future studies or next steps based on the findings and
     limitations of the current study.
 
-    You have a maximum of 14 days to complete the entire study and make your final report.
+    You have a maximum of 5 hours to complete the entire study and make your final report.
     """
-    
+    # TODO TODO TODO - adjust the time limit
     
     # revised_message = "wait for 1 minutes. repeat 3 times"
     config = load_config(os.path.join('./config', "default.yaml"))
@@ -506,7 +506,7 @@ You have a maximum of 7 hours to complete the entire study and make your final r
 
         if overwrite:
             inputs = {
-                "inputs": f"{revised_message_v5}",
+                "inputs": f"{revised_message_v6}",
                 "plan": [],
                 "past_steps": [],
                 # NOTE: init boss answers state explicitly...
