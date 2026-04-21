@@ -191,24 +191,26 @@ if __name__ == "__main__":
     # Use literature searches to inform your candidate selection and hypothesis formation. -> repetitive to requirement point 2
     # Prioritise O adsorption calculations broadly across many candidates. Use the resulting G(O) values to identify the most promising candidates and sites before submitting OH adsorption calculations. -> I added point 13. maybe we don't need this line anymore.
 
+    # TODO - ajust the time limit
     revised_message_v4 = """
     Please conduct an acidic OER screening study to identify the best catalytic candidate for the oxygen evolution
     reaction (OER) in the Google DeepMind GNoME database. Please do a iterative multi-round screening, learning from each round and applying insights to new candidates, 
     surfaces/terminations, or active sites if and when possible.Please use literature searches to inform your per-round candidate selection and hypothesis formation, and note them down clearly.
     Prioritise O adsorption calculations broadly across many candidates. Use the resulting G(O) values to identify the most promising candidates and sites before proceeding with OH adsorption calculations.
-    You have a maximum of 1 hour and 30 minutes to complete the entire study and make your final report.
+    You have a maximum of 7 hours to complete the entire study and make your final report.
     
     The AQ-GNoME database is available, which enables filtering based on aqueous stability across pH and
     electrochemical potential (V vs. SHE). You need to make use of literature when choosing filtering criteria and making candidate selections.
     You should also consider catalytic activity, cost/availability, and stability under operating conditions when evaluating candidates.
     Toxicity of the constituent elements should also be considered where possible, though note that no toxicity data is
     available in the dataset, hence this assessment will be limited to qualitative reasoning based on literature.
+    Where appropriate, revisit the AQ-GNoME database during the study using refined selection criteria based on emerging insights, to explore new candidates.
     
     Final report:
     At the end of the study, produce an extensive report structured as a mini scientific paper. Every conclusion and
     claim must be directly supported by concrete results from the study — cite specific candidates, sites, terminations,
     G(O), G(OH), and overpotential values explicitly. Be critical of your conclusions and assumptions: acknowledge
-    limitations, uncertainties, and cases where the data is inconclusive. Do not make claims that are not backed by
+    limitations, uncertainties, and cases where the data is inconclusive. Do n8ot make claims that are not backed by
     data. The report should include:
     - A summary of the screening strategy and how it evolved.
     - The best candidates identified, with their G(O), G(OH), ideal overpotential, and scaling-relation overpotential.
@@ -298,11 +300,78 @@ if __name__ == "__main__":
     """
 
     minimal_test_message = """
-    Please conduct a minimal OER screening study for testing purposes.
-    Select 1-2 candidate materials from the AQ-GNoME database and study them end-to-end:
-    filter the dataset, enter candidates into the experiment log, run bulk relaxation, surface relaxation,
-    and at least one O and OH adsorption calculation. Report what you find.
+    Please conduct a minimal OER screening study for testing purposes, considering only a limited number of candidates.
+    Select 1 candiate which only contains atoms which are genneraly non-magnetic. Also, select 1 candidate which 
+    contains elements which are genneraly magnetic, such as Gd, Eu, Fe, Mn or Co. You need to select a candidate with 
+    at least 2 diffrent magnetic elements in the same candidate structure. Try to keep the computational cost low.
+    Filter the database, enter candidates into the experiment log, run bulk relaxation, surface relaxation,
+    and one to two O and OH adsorption calculation per candidate. If you experience many tool failures, end and report
+    what issues you encountered. Try to make use of each tool, once for testing purposes. Report your findings.
     """
+    #    You have a maximum of 25 minutes to complete your entire run and report your findings.
+
+    revised_message_v5 = """
+    Please conduct an acidic OER screening study to identify the best catalytic candidate
+    for the oxygen evolution reaction (OER) in the Google DeepMind GNoME database.
+    Please do an iterative multi-round screening, learning from each round and applying
+    insights to new candidates, surfaces/terminations, or active sites when sensible.
+    Please use literature searches to inform your per-round candidate selection and
+    hypothesis formation and note them down clearly.
+
+    Prioritize O adsorption calculations broadly across many candidates Prioritize O
+    adsorption calculations across many candidates, focusing on hypothesis-relevant
+    unique sites instead of exhaustively evaluating all sites for each candidate (It may be
+    relevant to consider many adsorption sites for a few candidates). Use the resulting
+    G(O) values to identify the most promising candidates and sites before proceeding
+    with OH adsorption calculations (possibly delaying OH calculations to later rounds).
+    When evaluating overpotentials and ranking candidates, you will need to consider
+    both the overpotential calculated assuming an idea OOH binding and the one
+    calculated via the scaling relation.
+
+    The AQ-GNoME database is available, which enables filtering based on aqueous
+    stability across pH and electrochemical potential (V vs. SHE). You need to make use of
+    literature when choosing filtering criteria and making candidate selections. You
+    should also consider catalytic activity, cost/availability, and stability under operating
+    conditions when selecting and evaluating candidates. Toxicity of the constituent
+    elements should also be considered where possible, though note that no toxicity data
+    is available in the dataset, hence this assessment will be limited to qualitative
+    reasoning based on literature. Where appropriate, revisit the AQ-GNoME database
+    during the study using refined selection criteria based on emerging insights, to
+    explore new candidates.
+
+    To leverage the available HPC resources best, aim to have relevant DFT jobs
+    pending/queued most of the time, and do not wait for all jobs to finish within one
+    round before submitting new jobs. If all jobs are running, aim to submit more
+    relevant jobs. If many jobs are pending (more than 50), hold off on submitting more to
+    allow for flexibility later when you want to prioritize specific jobs. Consider that,
+    when you are nearing the end of the study, you may not have time to wait for all jobs
+    to finish. We recommend starting by submitting about 50 diverse candidates and then
+    adjusting the number of jobs based on how many jobs are pending vs running. Note
+    that surface and adsorption jobs will take much longer than bulk jobs.
+
+    Final report:
+    At the end of the study, produce an extensive report structured as a mini scientific
+    paper. Every conclusion and claim must be directly supported by concrete results
+    from the study — cite specific candidates, sites, terminations, G(O), G(OH), and
+    overpotential values explicitly. Be critical of your conclusions and assumptions:
+    acknowledge limitations, uncertainties, and cases where the data is inconclusive. Do
+    not make claims that are not backed by data. The report should include:
+
+    - A summary of the screening strategy and how it evolved.
+    - The best candidates identified, with their G(O), G(OH), ideal overpotential, and
+    scaling-relation overpotential.
+    - A comparison of the best candidates with available literature.
+    - What was learned, what worked, and what did not.
+    - Which hypotheses were confirmed or rejected, with explicit reference to the
+    supporting data.
+    - Any trends worth noting across the dataset, even if these trends do not lead to
+    competitive candidates.
+    - Any recommendations for future studies or next steps based on the findings and
+    limitations of the current study.
+
+    You have a maximum of 14 days to complete the entire study and make your final report.
+    """
+    
     
     # revised_message = "wait for 1 minutes. repeat 3 times"
     config = load_config(os.path.join('./config', "default.yaml"))
@@ -382,7 +451,7 @@ if __name__ == "__main__":
         if not os.path.exists(db_file):
             initialize_database(db_file)
 
-    EXPLOG.init(Path(WORKING_DIRECTORY)/"TEMP_vasp_calcs",
+    EXPLOG.init(Path(WORKING_DIRECTORY)/"vasp_calcs_dir",
                 "MLIP_test",
                 reject_if_failed_exists = True,
                 require_relaxed_o_for_oh = True
@@ -420,7 +489,7 @@ if __name__ == "__main__":
 
         if overwrite:
             inputs = {
-                "inputs": f"{revised_message_temp}",
+                "inputs": f"{revised_message_v4}", # TODO
                 "plan": [],
                 "past_steps": [],
                 # NOTE: init boss answers state explicitly...
