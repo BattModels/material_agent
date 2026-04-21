@@ -401,8 +401,6 @@ def supervisor_chain_node(state, agent, name):
     
     if state["boss_feedback"].strip() != "":
         supervisorMessage =  f"""
-        Current time: {timeElapsed}.
-
         Your available agents are: {members}.
 
         The overall goal is: {state['inputs']}. 
@@ -416,12 +414,12 @@ def supervisor_chain_node(state, agent, name):
         Your previous draft final answer has been reviewed and rejected by the boss and received the following feedback:
         {current_boss_feedback}
 
+        Current time: {timeElapsed}.
+        
         Please inspect and extract related information from CANVAS and EXPLOG, then update the plan accordingly.
         """
     else:
         supervisorMessage =  f"""
-        Current time: {timeElapsed}.
-
         Your available agents are: {members}.
 
         The overall goal is: {state['inputs']}. 
@@ -431,6 +429,8 @@ def supervisor_chain_node(state, agent, name):
 
         this is what has been done:
         {old_tasks_string}
+        
+        Current time: {timeElapsed}.
 
         Please inspect and extract related information from CANVAS and EXPLOG, then update the plan accordingly.
         """
@@ -549,6 +549,56 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
     
     print_stream(structured_response.summary)
     
+    if var.reportName:
+        old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step}" for i, step in enumerate(state["past_steps"]))
+        task_formatted = f"""
+Here is the overall objective:
+{state["inputs"]}
+
+During the end of the last step, you just: 
+{structured_response.summary}
+
+and generated the following report:
+{CANVAS.canvas[var.reportName]}
+
+Now, please summarize previous steps that has been done so far:
+{old_tasks_string}
+
+Please only do this task! Do not do anything else! The summarized old steps will be noted down by the system, and you don't have to worry about that.
+"""
+
+        print(task_formatted)
+        if var.my_SAVE_DIALOGUE:
+            with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+                f.write(task_formatted)
+                f.write("\n")
+        print(f"Summarize Agent is processing!!!!!")
+        if var.my_SAVE_DIALOGUE:
+            with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+                f.write(f"Summarize Agent is processing!!!!!\n")
+        
+        config = var.OTHER_GLOBAL_VARIABLES
+        workerllm = ChatAnthropic(model="claude-sonnet-4-5-20250929", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+        response = workerllm.invoke(task_formatted)
+        
+        timeElapsed_tmp = time.time() - var.startTime
+        timeElapsed = timedelta(seconds=timeElapsed_tmp)
+        
+        state["past_steps"] = []
+        state["past_steps"].append(
+            myPastStep(
+                step= f"Summary of all previous steps: {response.content}\nDetailed previous steps can be found in CANVAS with key '{var.reportName}_compressed_steps'", 
+                agent=name, 
+                timeStamp=timeElapsed,
+                timeSpent=str(timeElapsed).split(".")[0]
+                )
+            )
+        CANVAS.canvas[f"{var.reportName}_compressed_steps"] = old_tasks_string
+        
+        print_stream(f"Summary of all previous steps: {response.content}")
+
+        var.reportName = ""
+        
     return {
         "past_steps": state["past_steps"], 
         "canvas":CANVAS.canvas,
@@ -675,6 +725,8 @@ def create_planning_graph(config: dict) -> StateGraph:
         inspect_my_canvas,
         write_my_canvas,
         read_my_canvas,
+        write_report,
+        check_time,
         OER_data_analasis_v2,
         # read_df, # Depriciated, functionallity now under browse_df
         # extract_df, # Depriciated, functionallity now under browse_df

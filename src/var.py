@@ -10,3 +10,4 @@ TOKEN_USAGE = []
 TOTAL_TOKEN_USED = 0
 GPU_AVAILABLE = False
 path_to_data_directory = None
+reportName = ""

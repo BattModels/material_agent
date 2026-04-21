@@ -176,7 +176,8 @@ oer_agent_prompt = f"""
                 13. Avoid submitting OH adsorption jobs for sites where G(O) is far from the ideal value of 2.46 eV, as such sites will not yield competitive overpotentials regardless of G(OH).
                 14. Use waiting time opportunistically to advance the study if possible, and try to keep the HPC queue occupied with meaningful jobs
                 15. Do not wait for all jobs in one phase to complete before submitting new ones. Instead, submit new calculations opportunistically if you have no queued jobs. Periodically check the EXPLOG for completed results and use these to guide the next submissions.
-                16. <Reporting>
+                16. If the time elapsed is getting close to the given time constrain (if there's any) in the overall goal you may want to report back early instead of waiting for the completion of all the calculations.
+                17. <Reporting>
                     From time to time (maybe at the end of each round), you may want to produce an extensive report structured as a mini scientific paper to carefully review what has been done.
                     Every conclusion and claim must be directly supported by concrete results from the study — cite specific candidates, sites, terminations,
                     G(O), G(OH), and overpotential values explicitly. Be critical of your conclusions and assumptions: acknowledge

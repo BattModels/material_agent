@@ -115,7 +115,15 @@ def arXiv_search(
     result = asyncio.run(_arXiv_search(arxiv_search_query, context))
 
     return result
-    
+
+@tool
+def check_time():
+    """
+    Check the total time elapsed since the project start. If the time elapsed is getting close to the given time constrain (if there's any) in the overall goal you may want to report back early instead of waiting for the completion of all the calculations.
+    """
+    timeElapsed_tmp = time.time() - var.startTime
+    timeElapsed = timedelta(seconds=timeElapsed_tmp)
+    return f"total time elapsed since project start: {str(timeElapsed).split('.')[0]} "
 
 @tool
 def wait_for_update(
@@ -233,11 +241,12 @@ def inspect_explog():
         N_finished_O = len(sub_pdf[(sub_pdf['job_type'] == 'O_adsorption') & (sub_pdf['status'] == 'completed')])
         N_finished_OH = len(sub_pdf[(sub_pdf['job_type'] == 'OH_adsorption') & (sub_pdf['status'] == 'completed')])
         
+        N_bulk_tot = len(sub_pdf[sub_pdf['job_type'] == 'bulk_relaxation'])
         N_surf_tot = len(sub_pdf[sub_pdf['job_type'] == 'surface_relaxation'])
         N_O_tot = len(sub_pdf[sub_pdf['job_type'] == 'O_adsorption'])
         N_OH_tot = len(sub_pdf[sub_pdf['job_type'] == 'OH_adsorption'])
         
-        outString += f'candidate {cant_id} has {N_finished_bulk}/1 bulk relaxation job finished, {N_finished_surface}/{N_surf_tot} surface relaxation job finished, {N_finished_O}/{N_O_tot} O adsorption job finished, and {N_finished_OH}/{N_OH_tot} OH adsorption job finished.\n'
+        outString += f'candidate {cant_id} has {N_finished_bulk}/{N_bulk_tot} bulk relaxation job finished, {N_finished_surface}/{N_surf_tot} surface relaxation job finished, {N_finished_O}/{N_O_tot} O adsorption job finished, and {N_finished_OH}/{N_OH_tot} OH adsorption job finished.\n'
         
         #-------------------------------------------------
         # Maybe we don't need to display so much info
@@ -1329,6 +1338,20 @@ def write_my_canvas(key: Annotated[str, "key"],
     """Write a value to the working canvas. If the key already exists, it will not overwrite unless specified."""
     # write a value to myCANVAS given a key and a value
     return CANVAS.write(key, value, overwrite)
+
+@tool
+def write_report(
+    report: Annotated[str, "Intermediate/final report content in markdown format."],
+    report_name: Annotated[str, "Name of the report."],
+    ):
+    """Note down your report on CANVAS and let the supervisor know you've generated a report"""
+    outStr = CANVAS.write(report_name, report, False)
+    if outStr == f"Key '{report_name}' already exists. Please choose a different key. If you want to overwrite the value, set the 'overwrite' flag to True.":
+        outStr = f"Report '{report_name}' already exists. Please choose a different name for the report. You should never overwirte a report."
+    else:
+        var.reportName = report_name
+    
+    return outStr
 
 # @tool
 # def inspect_my_explog():
