@@ -962,7 +962,7 @@ def OER_data_analasis_v2(
     # ------------------------------------------------------------------
     # Prost processing removal:
     df = df[df['Dimensionality Cheon'] == '3D'] # 3D cells only!
-    df = df.loc[df["formula"].apply(count_magnetic_sites_from_formula) 
+    df = df.loc[df["Composition"].apply(count_magnetic_sites_from_formula) 
                 <= 10] # NOTE HARD LIMIT ON MAGNETIC ATOMS IN UNTCELL
     # ------------------------------------------------------------------
     
