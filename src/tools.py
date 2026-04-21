@@ -53,18 +53,14 @@ from ursa.agents import ArxivAgent
 
 from GNoME_aqueous_stability.src.gnome_aqueous_stability.data_utils import Data_Handler
 from GNoME_aqueous_stability.src.gnome_aqueous_stability.analysis_utils import (
-    plot_periodic_table_with_values, get_col_dict_for_atoms, 
     Stable_Entries, Stability_Criteria, get_simplified_df, 
     atoms_from_db
 )
 from gnome_dreams_oer_screening.oer.oer_study import OER_catalyst_study
-from gnome_dreams_oer_screening.vasp.pre_defined_vasp_sets import (
-    RPBE_relax_bulk_set, RPBE_relax_surface_set 
-)
-from gnome_dreams_oer_screening.vasp.vasp_calculation import (
-    run_vasp_via_custodian, read_vasp_results, clean_up_vasp_directory
-)
 from gnome_dreams_oer_screening.explog.explog import EXPLOG
+from gnome_dreams_oer_screening.vasp.magnetic_enumeration import (
+    count_magnetic_sites_from_formula
+)
 
 try:
     import torch
@@ -148,12 +144,12 @@ def wait_for_update(
         while status == "stop":
             # print(f"Calculation pause, Agent is waiting. cwd: {var.my_WORKING_DIRECTORY}")
             # # wait for 5 second
-            time.sleep(5)
+            time.sleep(60)
             with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
                 status = f.read()
 
 
-        time.sleep(60)
+        time.sleep(15) # TODO - consider before production run
         tmpUpdate = EXPLOG.update_log()
         # Sort through the updates, remove non-failed/completed jobs (ignore going from pending to running)
         
@@ -162,7 +158,7 @@ def wait_for_update(
         for_deletion = []
         for key, value in tmpUpdate.items():
 
-            if value not in ["completed", "failed"]:
+            if value not in ["completed", "failed"] or 'unrecoverable' in value:
                 for_deletion.append(key)
 
         for key in for_deletion:
@@ -184,7 +180,7 @@ def wait_for_update(
             for key, value in tmpUpdate.items():
                 outText += f"\nprocess_id {key} status is now {value}."
             return outText
-        elif time.time() - var.startTime > patience*60:
+        elif time.time() - waitStartTime > patience*60:
             return f"Total time elapsed since project start {timeElapsed}, you have been waiting for {patience} minutes with no update in the EXPLOG. You may want to check the EXPLOG and see if there is anything you can do to move the study forward."
                        
 @tool
@@ -560,6 +556,8 @@ def submit_dft_job(
           get_terminations_ranking and list_adsorption_sites first to identify
           a suitable termination index and adsorption site index.
 
+    For bilk_relaxation jobs, if magnetic elements are present in a bulk structure, 
+    several bulk jobs will be submitted to explore the most likely magnetic configurations.
     OH_adsorption submits three jobs with slightly varied initial adsorbate
     positions to increase the likelihood of finding the global minimum.
     Only the global minimum will be reported and used.
@@ -953,8 +951,10 @@ def OER_data_analasis_v2(
     df = se.get_stable_df()
 
     # ------------------------------------------------------------------
-    # We should consider adding this: <<< ---- NOTE
-    # df = df[df['Dimensionality Cheon'] == '3D']
+    # Prost processing removal:
+    df = df[df['Dimensionality Cheon'] == '3D'] # 3D cells only!
+    df = df.loc[df["formula"].apply(count_magnetic_sites_from_formula) 
+                <= 10] # NOTE HARD LIMIT ON MAGNETIC ATOMS IN UNTCELL
     # ------------------------------------------------------------------
     
     df = df_query(df, filters, sort)
