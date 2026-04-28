@@ -57,6 +57,7 @@ class NumericArtifact(BaseModel):
     args: Dict[str, Any]
     description: str
     reasons: Dict[str, str]
+    parent_result_ids_w_args: Dict[str, str] = Field(default_factory=dict)
     parent_result_ids: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     timeStamp: float = Field(default_factory=lambda: time.time())
@@ -68,6 +69,7 @@ class OtherArtifact(BaseModel):
     args: Dict[str, Any]
     description: str
     reasons: Dict[str, str]
+    parent_result_ids_w_args: Dict[str, str] = Field(default_factory=dict)
     parent_result_ids: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     timeStamp: float = Field(default_factory=lambda: time.time())
@@ -79,6 +81,7 @@ class ListedArtifact(BaseModel):
     args: Dict[str, Any]
     description: str
     reasons: Dict[str, str]
+    parent_result_ids_w_args: Dict[str, str] = Field(default_factory=dict)
     parent_result_ids: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     timeStamp: float = Field(default_factory=lambda: time.time())

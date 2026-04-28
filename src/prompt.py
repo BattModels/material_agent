@@ -1,3 +1,5 @@
+judge_agent_prompt = "You are a careful and critical scientist. Please listen and follow the request carefully and responsibly."
+
 ### Prompt content
 teamCapability = """
 <DFT Agent>:
@@ -15,6 +17,7 @@ teamCapability = """
     - Read output file to get energy
     - Calculate lattice constant
     - Calculate formation energy
+    - Generate structured report
 <HPC Agent>:
     - find job list from the job list file
     - Add resource suggestion base on the DFT input file
@@ -67,6 +70,7 @@ supervisor_prompt = f"""
     5.  Do not work on structural convergence test (slab thickness, vaccum size) and DFT parameter convergence test (k-points, ecut) at the same time.
     6.  Please be critical to your final answer, reflect on what you have done, make sure the answer is correct. If you found any possible issue, try to fix it and rerun the calculations.
     7.  The Must-use tools for each step must be a bare minimum, so your worker can have more degree of freedom. 
+    8.  A structured report must be generated at the end of the project. During the project, multiple small structured reports may be generated as records. 
         """
 
 
@@ -125,6 +129,7 @@ dft_agent_prompt = """
                 16. If a job is having issue, i.e. didn't converge or not accurate enough, use the right tool to get suggestions on how to modify the input file to fix the issue.
                 17. Never do math yourself. Call the math tool instead
                 18. When asked to provide a ref_id, that id would be the id of the previous tool output where this parameter value was initially generated.
+                19. Many tools in this framework accept a reasons parameter and rely on you to populate it thoughtfully. For every parameter you set on a tool call, your rationale must cover three things: (a) which study or exploration this tool call is part of (e.g. "convergence test for ecutwfc," "production run for the adsorption energy calculation," "sensitivity sweep over n_fixed_layers," "one-off check"); (b) the role this specific parameter plays in that study (e.g. "being varied now to characterize convergence," "fixed at the converged value from the prior convergence test," "inherited from the upstream relaxation," "placeholder before a real value is obtained"); and (c) why this specific value was chosen — how you arrived at it, what evidence supports it, and the expected effect on the output. Write rationales that an outside reviewer could read to understand both the immediate purpose of the call and how it serves the overall study goal. Skipping this context, or writing only about effect without identifying the study and the parameter's role will be rejected even when the underlying science is sound.
             """
 
 dft_reader_agent_prompt = """

@@ -295,17 +295,18 @@ def read_BEEF_output(file_path: str):
 
 _NUMERIC_RE = re.compile(
     r"""
-    (?<![\w.])                       # avoid letters/underscore immediately before
+    (?<!\d)                          # no digit immediately before
+    (?<!\d\.)                        # no digit-then-dot immediately before
     [+-]?                            # optional sign
     (?:
         (?:\d+\.\d*|\.\d+|\d+)       # int or decimal
         (?:[eE][+-]?\d+)?            # optional scientific notation
     )
-    (?![\w.])                        # avoid letters/underscore immediately after
+    (?!\d)                           # no digit immediately after
+    (?!\.\d)                         # no dot-then-digit immediately after
     """,
     re.VERBOSE,
 )
-
 
 def util_find_all_substring_spans(text: str, snippet: str) -> List[tuple[int, int]]:
     spans = []
@@ -328,13 +329,14 @@ def util_numeric_matches_in_region(
 ) -> List[Dict[str, Any]]:
     matches = []
     region_text = text[region_start:region_end]
-
+    
     for m in _NUMERIC_RE.finditer(region_text):
         token = m.group(0)
         try:
             parsed = float(token)
         except ValueError:
             continue
+        print(parsed, float(target_value), 0.0, abs_tol)
 
         if math.isclose(parsed, float(target_value), rel_tol=0.0, abs_tol=abs_tol):
             matches.append(

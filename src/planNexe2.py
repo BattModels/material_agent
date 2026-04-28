@@ -26,9 +26,11 @@ from langgraph.prebuilt import ToolNode, create_react_agent
 from pydantic import BaseModel, Field
 
 from src.tools import *
-from src.prompt import dft_agent_prompt,hpc_agent_prompt,supervisor_prompt
+from src.safety_guard import generate_structured_report
+from src.prompt import dft_agent_prompt,hpc_agent_prompt,supervisor_prompt, judge_agent_prompt
 from src import var
 from src.myCANVAS import CANVAS
+from src.safety_guard import verify_structured_report
 
 import sqlite3
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -73,6 +75,8 @@ class myStep(BaseModel):
                     "math_expression_tool",
                     "submit_and_monitor_job",
                     "add_resource_suggestion",
+                    "generate_structured_report",
+                    "extract_text_from_tool_output",
                     ""
                 ] = Field(f"The one final tool your worker agent must use to obtain the desired output of a certain step. Please read the CANVAS with key Worker_available_tools to see more details about each tools.")
     # what would be that final one tool must use to obtain the desired output of a certain step
@@ -126,6 +130,14 @@ class wokerResponse(BaseModel):
         description="whether the task is successfully finished. True or False."
     )
 
+class judgeResponse(BaseModel):
+    verdict: Literal["pass", "fail", "warning"] = Field(
+        description="the final verdict of the judge after careful and critical evaluation based on the information given. Should be pass, fail, or warning."
+    )
+    reasoning: str = Field(
+        description="the reasoning behind the verdict. Please be specific and detailed in your reasoning, with references that support your verdict and your reasoning."
+    )
+    
 class PlanExecute(TypedDict):
     inputs: str
     plan: List[myStep]
@@ -134,6 +146,8 @@ class PlanExecute(TypedDict):
     canvas: dict
     artifacts: dict
     next: str
+    
+    
 
 class DisableParallelToolCallsMiddleware(AgentMiddleware):
     
@@ -200,13 +214,7 @@ def print_stream(s):
     if var.my_SAVE_DIALOGUE:
         with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
             f.write("\n")
-
-# def agent_node(state, agent, name):
-#     print(f"Agent {name} is processing!!!!!")
-#     for s in agent.stream(state, {"recursion_limit": 1000}):
-#         print_stream(s)
-#     return {"messages": [HumanMessage(content=s["messages"][-1].content, name=name)]}
-
+   
 def supervisor_chain_node(state, agent, name):
     # CANVAS.snap()
     # read "status.txt" in the working directory
@@ -226,10 +234,10 @@ def supervisor_chain_node(state, agent, name):
 
     # no longer print state since it may contain too much information from canvas
     # print(state)
-    if var.my_SAVE_DIALOGUE:
-        with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-            f.write(str(state))
-            f.write("\n")
+    # if var.my_SAVE_DIALOGUE:
+    #     with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+    #         f.write(str(state))
+    #         f.write("\n")
             
     plan = state["plan"]
     plan_str = "\n".join(f"{i+1}. {step.step}" for i, step in enumerate(plan[1:]))
@@ -305,6 +313,8 @@ Please inspect and extract related information from CANVAS, then only update the
                     "math_expression_tool",
                     "submit_and_monitor_job",
                     "add_resource_suggestion",
+                    "generate_structured_report",
+                    "extract_text_from_tool_output",
                     "",
                 ]
                 # step.required_tools is no longer a list of tools
@@ -351,7 +361,36 @@ Please inspect and extract related information from CANVAS, then only update the
                 f.write("\n")
         return {"plan": agent_response.action.steps, "next": agent_response.action.steps[0].agent, "canvas":CANVAS.canvas}
     
+class judge():
+    def __init__(self):
+        config = var.OTHER_GLOBAL_VARIABLES
+        self.llm = ChatAnthropic(model="claude-sonnet-4-5-20250929", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0).with_structured_output(judgeResponse)
     
+    def invoke(self, input):
+        with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
+            status = f.read()
+        while status == "stop":
+            print(f"Calculation pause, judge is waiting. cwd: {var.my_WORKING_DIRECTORY}")
+            # wait for 5 second
+            time.sleep(5)
+            with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
+                status = f.read()
+        
+        print(f"Judge Agent is processing!!!!!")
+        if var.my_SAVE_DIALOGUE:
+            with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+                f.write(f"Judge Agent is processing!!!!!\n")
+            
+        agent_response = self.llm.invoke(input)
+        
+        outStr = f"Judge's verdict: {agent_response.verdict}\nJudge's reasoning: {agent_response.reasoning}"
+        print(outStr)
+        if var.my_SAVE_DIALOGUE:
+            with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+                f.write(outStr)
+                f.write("\n")
+                
+        return {"verdict": agent_response.verdict, "reasoning": agent_response.reasoning}
 
 def worker_agent_node(state, agent, name):
     # CANVAS.snap()
@@ -436,6 +475,9 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
                 )
                 workerGood = True
             else:
+                # if tool use fail, report is not trustworthy
+                if var.reportName:
+                    del CANVAS.canvas[var.reportName]
                 task_formatted = old_task_formatted
                 task_formatted += f"\n\nWARNING: You didn't use the following required tools: {tool_use_msg}. Retry again!"
     
@@ -443,8 +485,28 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
         print(f"Worker Agent {name} failed")
         exit(0)
     
+    reportReviewResult = ""
+    config = var.OTHER_GLOBAL_VARIABLES
+    if var.reportName:
+        myJudge = judge()
+        rawReport = verify_structured_report(var.reportName, sensitive_parameters=config["sensitive_para"], judge=myJudge)
+        if rawReport["overall_verdict"] == "pass":
+            reportReviewResult = f"\nA reprot was generated, and the judge's review on the report: PASS."
+        elif rawReport["overall_verdict"] == "warning":
+            reportReviewResult = f"\nA reprot was generated, and the judge's review on the report: WARNING."
+            for issue in rawReport["issues"]:
+                reportReviewResult += f"\nIssue level: {issue['level']}, location: {issue['location']}, verdict: {issue['verdict']}, message: {issue['message']}."
+        else:
+            reportReviewResult = f"\nA reprot was generated, but the judge's review on the report: FAIL."
+            for issue in rawReport["issues"]:
+                reportReviewResult += f"\nIssue level: {issue['level']}, location: {issue['location']}, verdict: {issue['verdict']}, message: {issue['message']}."
+            reportReviewResult += "\nPlease fix the issue and try again! Note that the report should be truthful and accurate based on the information you have, and should not contain any fabricated information that is not supported by data!"
+        var.All_Report_Names.append(copy.deepcopy(var.reportName))
+        var.reportName = ""
+        
+    
     # state["past_steps"].append((task, agent_response["messages"][-1].content))
-    state["past_steps"].append(myStep(step=structured_response.summary, agent=name))
+    state["past_steps"].append(myStep(step=structured_response.summary + f"\n{reportReviewResult}", agent=name, required_tools=task.required_tools))
     
     print_stream(structured_response.summary)
     # CANVAS.snap_save()
@@ -454,6 +516,7 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
         "artifacts": CANVAS.result_registry
     }
     
+
 def recusive_agent_node(state, agent, name):
     print(f"Agent {name} is processing!!!!!")
     if var.my_SAVE_DIALOGUE:
@@ -462,6 +525,7 @@ def recusive_agent_node(state, agent, name):
     
 def whos_next(state):
     return state["next"]
+
         
 def create_planning_graph(config: dict) -> StateGraph:
     # create a file named status.txt in the working directory
@@ -491,6 +555,7 @@ def create_planning_graph(config: dict) -> StateGraph:
     supervisor_tools = [
         inspect_my_canvas,
         read_my_canvas,
+        supervisor_get_available_report_names
         ]
     
     supervisor_agent = create_agent(
@@ -526,7 +591,9 @@ def create_planning_graph(config: dict) -> StateGraph:
         get_convergence_suggestions,
         analyze_BEEF_result,
         extract_numeric_from_tool_output,
-        math_expression_tool
+        extract_text_from_tool_output,
+        math_expression_tool,
+        generate_structured_report
         # get_ase_atoms_property,
         # inspect_ase_atoms,
         ]
