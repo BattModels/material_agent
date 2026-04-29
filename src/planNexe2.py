@@ -173,8 +173,14 @@ def handle_tool_errors(request, handler):
         # - Schema mismatch errors (already auto-handled by the framework)
         #
         # Return a custom error message to the model
+        outStr = f"Tool error: Please check your input and try again. ({str(e)}), traceback: {traceback.format_exc()}"
+        if var.my_SAVE_DIALOGUE:
+            with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+                f.write(f"Error during tool execution: {str(e)}\n")
+                f.write(traceback.format_exc())
+                f.write("\n")
         return ToolMessage(
-            content=f"Tool error: Please check your input and try again. ({str(e)}), traceback: {traceback.format_exc()}",
+            content=outStr,
             tool_call_id=request.tool_call["id"]
         )
 
@@ -364,7 +370,7 @@ Please inspect and extract related information from CANVAS, then only update the
 class judge():
     def __init__(self):
         config = var.OTHER_GLOBAL_VARIABLES
-        self.llm = ChatAnthropic(model="claude-sonnet-4-5-20250929", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0).with_structured_output(judgeResponse)
+        self.llm = ChatAnthropic(model="claude-sonnet-4-5-20250929", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0).with_structured_output(judgeResponse, include_raw=True)
     
     def invoke(self, input):
         with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
@@ -380,17 +386,28 @@ class judge():
         if var.my_SAVE_DIALOGUE:
             with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
                 f.write(f"Judge Agent is processing!!!!!\n")
-            
-        agent_response = self.llm.invoke(input)
         
-        outStr = f"Judge's verdict: {agent_response.verdict}\nJudge's reasoning: {agent_response.reasoning}"
+        # print(input)    
+        agent_response_raw = self.llm.invoke(input)
+        # print(agent_response_raw)
+        agent_response = agent_response_raw['raw'].content[0]['input']
+        # print(agent_response)
+        # 'input_tokens': 2102, 'output_tokens': 393, '
+        token_usage = agent_response_raw['raw'].usage_metadata
+        # print(token_usage)
+        
+        outStr = f"Judge's verdict: {agent_response['verdict']}\nJudge's reasoning: {agent_response['reasoning']}\nJudge's token usage: input_tokens: {token_usage['input_tokens']}, output_tokens: {token_usage['output_tokens']}"
         print(outStr)
         if var.my_SAVE_DIALOGUE:
             with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
                 f.write(outStr)
                 f.write("\n")
                 
-        return {"verdict": agent_response.verdict, "reasoning": agent_response.reasoning}
+        # exit()
+                
+        return {"verdict": agent_response['verdict'], "reasoning": agent_response['reasoning']}
+
+
 
 def worker_agent_node(state, agent, name):
     # CANVAS.snap()
@@ -488,6 +505,9 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
     reportReviewResult = ""
     config = var.OTHER_GLOBAL_VARIABLES
     if var.reportName:
+        print("#######################")
+        print("Judging")
+        print("#######################")
         myJudge = judge()
         rawReport = verify_structured_report(var.reportName, sensitive_parameters=config["sensitive_para"], judge=myJudge)
         if rawReport["overall_verdict"] == "pass":

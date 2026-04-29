@@ -14,7 +14,7 @@ DFT_Agent:
   "write_QE_script_w_ASE": "Write a Quantum Espresso input script using ASE. Bool value have no quote around them. For smearing start with methfessel-paxton. For ecutwfc choose between 30-100 Ry. When asked to run ensemble calculation, set calculation to 'ensemble'. When generating template for convergence test, use scf calculation and set ready_to_run_job to False."
   "find_pseudopotential": "Return the pseudopotential file path for given element symbol."
   "generate_convergence_test": "Generate the convergence test input scripts for quantum espresso calculation using another quantum espresso input file as a template and save the job list. "
-  "generate_eos_test": "Generate the equation of state test input scripts for quantum espresso calculation and save the job list."
+  "generate_eos_test": "From a template quantum espresso input file with production run settings, generate the equation of state test input scripts for quantum espresso calculation and save the job list."
   "get_convergence_suggestions": "Get suggestions on how to resolve issues for a certain job, i.e. converge or not accurate enough. If the output file is too long, you can call this tool multiple times for the same file with the same question but different start_block index to get suggestions based on different part of the output."
   "find_optimal_parameter": "Find the most optimal parameter value for production run."
   "calculate_formation_E": "using the energies of the slab, adsorbate, and slab with adsorbate, calculate the formation energy of the adsorbate on the slab. "

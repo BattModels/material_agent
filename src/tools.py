@@ -60,6 +60,37 @@ def supervisor_get_available_report_names():
 ##################################################################################################
 
 
+def _merge_context(context: str, reasons: Any) -> Dict[str, str]:
+    """Prepend the per-call `context` onto each per-parameter rationale.
+
+    Accepts `reasons` in either of two shapes:
+      * `Dict[str, str]` — multi-key rationale, one entry per tool parameter.
+      * `str`            — single rationale used by tools with one logical input.
+
+    In both cases, the return value is a dict so that every artifact registered
+    via `register_tool_output(reasons=...)` has a uniform shape on disk. For
+    str-shape inputs, the merged value is stored under the key `"reasons"`,
+    matching the pre-existing convention used by tools like
+    `math_expression_tool` and `extract_numeric_from_tool_output`.
+
+    Empty / whitespace-only `context` is rejected at the tool boundary so that
+    a missing study description fails loudly instead of silently degrading the
+    verifier's signal.
+    """
+    if not context or not context.strip():
+        raise ValueError(
+            "context is required and must be non-empty. Describe in one "
+            "sentence which study or exploration this tool call is part of "
+            "(e.g. 'convergence test for ecutwfc', 'production run for "
+            "adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+            "'one-off check')."
+        )
+    prefix = f"Context: {context.strip()}"
+    if isinstance(reasons, dict):
+        return {k: f"{prefix}\n\nRationale: {v}" for k, v in reasons.items()}
+    return {"reasons": f"{prefix}\n\nRationale: {reasons}"}
+
+
 _ALLOWED_FUNCS = {
     "abs": abs, "round": round, "min": min, "max": max, "sum": sum,
     "pow": pow, "sqrt": math.sqrt, "exp": math.exp, "log": math.log,
@@ -105,16 +136,21 @@ def math_expression_tool(
         str,
         "Math expression using x0, x1, x2, ... Example: '(x0 - x1) / x2' or 'sqrt(x0**2 + x1**2)'",
     ],
+    context: Annotated[
+        str,
+        "1-2 sentence describing which study or exploration this tool call "
+        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
+        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+        "'one-off check'). Applies to the entire call and is merged into "
+        "each per-parameter rationale at registration time.",
+    ],
     reasons: Annotated[
         str,
-        "Per-parameter rationale. Write 2-4 sentences covering: "
-        "(a) WHICH STUDY OR EXPLORATION this tool call is part of (e.g. "
-        "'convergence test for ecutwfc', 'production run for adsorption "
-        "energy', 'sensitivity sweep over n_fixed_layers', 'one-off check'); "
-        "(b) THE ROLE this calculation plays in that study (e.g. 'computing "
-        "an intermediate value used downstream', 'final reported quantity', "
-        "'sanity check'); "
-        "(c) WHY THIS SPECIFIC EXPRESSION AND VALUES: how the inputs were "
+        "Per-parameter rationale. Write 2-3 sentences covering: "
+        "(a) THE ROLE this calculation plays in the study described in "
+        "`context` (e.g. 'computing an intermediate value used downstream', "
+        "'final reported quantity', 'sanity check'); "
+        "(b) WHY THIS SPECIFIC EXPRESSION AND VALUES: how the inputs were "
         "chosen, what evidence supports them, and the expected meaning of "
         "the output. Since this tool has only one logical parameter (the "
         "expression+values pair), provide one combined rationale rather "
@@ -128,6 +164,8 @@ def math_expression_tool(
     """
     if not values_w_ref:
         return "No values were provided."
+
+    merged_reasons = _merge_context(context, reasons)
 
     # Verify each value against its ref.
     for v, ref_id in values_w_ref:
@@ -151,7 +189,7 @@ def math_expression_tool(
             },
             value=result,
             description=f"Result of evaluating expression '{expression}' with mapping {mapping}",
-            reasons={"reasons": reasons},
+            reasons=merged_reasons,
             parent_result_ids=list(set(bare_refs)),
             parent_result_ids_w_args={"values": bare_refs},
             metadata={"mapping": mapping},
@@ -203,16 +241,22 @@ def extract_numeric_from_tool_output(
         "clarify the unit of the number in this description, e.g. 'the "
         "adsorption energy in eV', 'the length of the cell in Angstrom', etc.",
     ],
+    context: Annotated[
+        str,
+        "1-2 sentence describing which study or exploration this tool call "
+        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
+        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+        "'one-off check'). Applies to the entire call and is merged into "
+        "each per-parameter rationale at registration time.",
+    ],
     reasons: Annotated[
         str,
-        "Per-parameter rationale. Write 2-4 sentences covering: "
-        "(a) WHICH STUDY OR EXPLORATION this extraction is part of (e.g. "
-        "'convergence test for ecutwfc', 'production run for adsorption "
-        "energy', 'sensitivity sweep over n_fixed_layers', 'one-off check'); "
-        "(b) THE ROLE this extracted number plays in that study (e.g. "
-        "'final reported quantity', 'intermediate input to a downstream "
-        "tool', 'used as the new ecutwfc for the next convergence step'); "
-        "(c) WHY THIS SPECIFIC SOURCE AND SNIPPET: how the source tool "
+        "Per-parameter rationale. Write 2-3 sentences covering: "
+        "(a) THE ROLE this extracted number plays in the study described in "
+        "`context` (e.g. 'final reported quantity', 'intermediate input to "
+        "a downstream tool', 'used as the new ecutwfc for the next "
+        "convergence step'); "
+        "(b) WHY THIS SPECIFIC SOURCE AND SNIPPET: how the source tool "
         "output was chosen, why the snippet is the right region of the "
         "output, and what the expected interpretation of the value is. "
         "For an extraction step, treat the extraction itself as the "
@@ -282,6 +326,8 @@ def extract_numeric_from_tool_output(
 
     registring_value = chosen["parsed_value"]
 
+    merged_reasons = _merge_context(context, reasons)
+
     result_id = CANVAS.register_tool_output(
         tool_name="extract_numeric_from_tool_output",
         args={
@@ -292,7 +338,7 @@ def extract_numeric_from_tool_output(
         },
         value=registring_value,
         description=description,
-        reasons={"reasons": reasons},
+        reasons=merged_reasons,
         parent_result_ids=[source_tool_call_id],
         parent_result_ids_w_args={"source_tool_call_id": source_tool_call_id},
         metadata={},
@@ -326,17 +372,22 @@ def extract_text_from_tool_output(
         "converged total energy line', 'the chemical formula of the relaxed "
         "structure', 'the warning message about k-point sampling').",
     ],
+    context: Annotated[
+        str,
+        "1-2 sentence describing which study or exploration this tool call "
+        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
+        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+        "'one-off check'). Applies to the entire call and is merged into "
+        "each per-parameter rationale at registration time.",
+    ],
     reasons: Annotated[
         str,
-        "Per-parameter rationale. Write 2-4 sentences covering: "
-        "(a) WHICH STUDY OR EXPLORATION this extraction is part of (e.g. "
-        "'convergence test for ecutwfc', 'production run for adsorption "
-        "energy', 'sensitivity sweep over n_fixed_layers', 'one-off check'); "
-        "(b) THE ROLE this extracted text plays in that study (e.g. "
-        "'used as input filename for a downstream tool', 'recorded as the "
-        "calculation status note', 'identifies the converged structure for "
-        "the next stage'); "
-        "(c) WHY THIS SPECIFIC SOURCE AND SNIPPET: how the source tool "
+        "Per-parameter rationale. Write 2-3 sentences covering: "
+        "(a) THE ROLE this extracted text plays in the study described in "
+        "`context` (e.g. 'used as input filename for a downstream tool', "
+        "'recorded as the calculation status note', 'identifies the "
+        "converged structure for the next stage'); "
+        "(b) WHY THIS SPECIFIC SOURCE AND SNIPPET: how the source tool "
         "output was chosen, why the snippet is the right region of the "
         "output, and what the expected interpretation of the text is. "
         "For an extraction step, treat the extraction itself as the "
@@ -444,6 +495,8 @@ def extract_text_from_tool_output(
     text_end = text_start + len(text)
     matched_text = raw_text[text_start:text_end]  # equal to `text` by construction
 
+    merged_reasons = _merge_context(context, reasons)
+
     result_id = CANVAS.register_tool_output(
         tool_name="extract_text_from_tool_output",
         args={
@@ -454,7 +507,7 @@ def extract_text_from_tool_output(
         },
         value=text,
         description=description,
-        reasons=reasons,
+        reasons=merged_reasons,
         parent_result_ids=[source_tool_call_id],
         parent_result_ids_w_args={"source_tool_call_id": source_tool_call_id},
         metadata={
@@ -507,17 +560,22 @@ def inspect_ase_atoms(
         "must trace back to a registered upstream artifact (the tool that "
         "produced the file or wrote its path).",
     ],
+    context: Annotated[
+        str,
+        "1-2 sentence describing which study or exploration this tool call "
+        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
+        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+        "'one-off check'). Applies to the entire call and is merged into "
+        "each per-parameter rationale at registration time.",
+    ],
     reasons: Annotated[
         str,
-        "Per-parameter rationale. Write 2-4 sentences covering: "
-        "(a) WHICH STUDY OR EXPLORATION this inspection is part of (e.g. "
-        "'convergence test for ecutwfc', 'production run for adsorption "
-        "energy', 'sensitivity sweep over n_fixed_layers', 'one-off check'); "
-        "(b) THE ROLE this inspection plays in that study (e.g. 'sanity "
-        "check on the relaxed slab geometry', 'reading cell parameters to "
-        "feed the next tool', 'verifying the file produced by an upstream "
-        "tool is well-formed'); "
-        "(c) WHY THIS SPECIFIC FILE: how the file was chosen, what you "
+        "Per-parameter rationale. Write 2-3 sentences covering: "
+        "(a) THE ROLE this inspection plays in the study described in "
+        "`context` (e.g. 'sanity check on the relaxed slab geometry', "
+        "'reading cell parameters to feed the next tool', 'verifying the "
+        "file produced by an upstream tool is well-formed'); "
+        "(b) WHY THIS SPECIFIC FILE: how the file was chosen, what you "
         "expect to find in it, and what downstream decision will use the "
         "result. Since this tool has only one logical input, provide one "
         "combined rationale rather than per-key entries.",
@@ -594,12 +652,13 @@ def inspect_ase_atoms(
         }
 
     result = json.dumps(result, indent=2)
+    merged_reasons = _merge_context(context, reasons)
     id = CANVAS.register_tool_output(
         tool_name="inspect_ase_atoms",
         args={"atomsFilename": atomsFilename},
         value=result,
         description=f"Inspection result of ASE Atoms object from {atomsFilename}",
-        reasons={"reasons": reasons},
+        reasons=merged_reasons,
         parent_result_ids=[atomsFilename_ref],
         parent_result_ids_w_args={"atomsFilename": atomsFilename_ref},
         metadata={},
@@ -625,17 +684,22 @@ def get_ase_atoms_property(
         "Name of the property to extract from the Atoms object (e.g. "
         "'volume', 'cell', 'positions', 'potential_energy', 'forces').",
     ],
+    context: Annotated[
+        str,
+        "1-2 sentence describing which study or exploration this tool call "
+        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
+        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+        "'one-off check'). Applies to the entire call and is merged into "
+        "each per-parameter rationale at registration time.",
+    ],
     reasons: Annotated[
         str,
-        "Per-parameter rationale. Write 2-4 sentences covering: "
-        "(a) WHICH STUDY OR EXPLORATION this extraction is part of (e.g. "
-        "'convergence test for ecutwfc', 'production run for adsorption "
-        "energy', 'sensitivity sweep over n_fixed_layers', 'one-off check'); "
-        "(b) THE ROLE this extracted property plays in that study (e.g. "
-        "'cell volume feeding an EOS fit', 'positions used to build a slab "
-        "with adsorbate', 'potential energy used as the converged reference "
-        "for an optimization sweep'); "
-        "(c) WHY THIS SPECIFIC FILE AND PROPERTY: how the file was chosen, "
+        "Per-parameter rationale. Write 2-3 sentences covering: "
+        "(a) THE ROLE this extracted property plays in the study described "
+        "in `context` (e.g. 'cell volume feeding an EOS fit', 'positions "
+        "used to build a slab with adsorbate', 'potential energy used as "
+        "the converged reference for an optimization sweep'); "
+        "(b) WHY THIS SPECIFIC FILE AND PROPERTY: how the file was chosen, "
         "why this property in particular, and what downstream decision will "
         "use the result. Since this tool has only one logical input "
         "(file + property), provide one combined rationale rather than "
@@ -717,6 +781,7 @@ def get_ase_atoms_property(
         "value": _to_serializable(value),
     }, indent=2)
 
+    merged_reasons = _merge_context(context, reasons)
     id = CANVAS.register_tool_output(
         tool_name="get_ase_atoms_property",
         args={
@@ -725,7 +790,7 @@ def get_ase_atoms_property(
         },
         value=value,
         description=f"{key} property extracted from ASE Atoms object from {atomsFilename}",
-        reasons={"reasons": reasons},
+        reasons=merged_reasons,
         parent_result_ids=[atomsFilename_ref],
         parent_result_ids_w_args={"atomsFilename": atomsFilename_ref},
         metadata={},
@@ -738,18 +803,23 @@ def init_structure_data(
     element: Annotated[str, "Element symbol"],
     lattice: Annotated[str, "Lattice type. Must be one of sc, fcc, bcc, tetragonal, bct, hcp, rhombohedral, orthorhombic, mcl, diamond, zincblende, rocksalt, cesiumchloride, fluorite or wurtzite."],
     a: Annotated[float, "Lattice constant"],
+    context: Annotated[
+        str,
+        "1-2 sentence describing which study or exploration this tool call "
+        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
+        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+        "'one-off check'). Applies to the entire call and is merged into "
+        "each per-parameter rationale at registration time.",
+    ],
     reasons: Annotated[
         Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-4 sentences "
+        "Per-parameter rationale. For each parameter, write 2-3 sentences "
         "covering: "
-        "(a) WHICH STUDY OR EXPLORATION this tool call is part of (e.g. "
-        "'convergence test for ecutwfc', 'production run for adsorption "
-        "energy', 'sensitivity sweep over n_fixed_layers', 'one-off check'); "
-        "(b) THE ROLE THIS PARAMETER plays in that study (e.g. 'being varied "
-        "now', 'fixed at converged value from prior convergence test', "
-        "'inherited from upstream tool', 'placeholder before a real value "
-        "is obtained'); "
-        "(c) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
+        "(a) THE ROLE THIS PARAMETER plays in the study described in "
+        "`context` (e.g. 'being varied now', 'fixed at converged value from "
+        "prior convergence test', 'inherited from upstream tool', "
+        "'placeholder before a real value is obtained'); "
+        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
         "supports it, and the expected effect on the output. "
         "The keys must include: 'element', 'lattice', 'a', 'b', 'c'.",
     ],
@@ -764,6 +834,7 @@ def init_structure_data(
 
     saveDir = os.path.join(WORKING_DIRECTORY, f"{element}-{lattice}.xyz")
     write(saveDir, atoms)
+    merged_reasons = _merge_context(context, reasons)
     result_id = CANVAS.register_tool_output(
         tool_name="init_structure_data",
         args={
@@ -775,7 +846,7 @@ def init_structure_data(
         },
         value=f"{element}-{lattice}.xyz",
         description="Path of the saved initial structure data file.",
-        reasons=reasons,
+        reasons=merged_reasons,
         parent_result_ids=[],
         metadata={},
     )
@@ -793,21 +864,27 @@ def generateSurface_and_getPossibleSite(
     n_fixed_layers: Annotated[int, "typically 3. Number of fixed layers in the slab. A larger number can better approximate the bulk property of the surface, but too much fixed layers lower the number of relaxed layers and may lead to less accurate surface property."],
     vacuum: Annotated[float, "typically 10.0. Vacuum size in Angstrom. Larger vacuum can avoid the interaction between periodic images, but also increase the computational cost."],
     surfaceFilename: Annotated[str, "Name (not a path) of the surface file to be saved in traj format"],
+    context: Annotated[
+        str,
+        "1-2 sentence describing which study or exploration this tool call "
+        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
+        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+        "'one-off check'). Applies to the entire call and is merged into "
+        "each per-parameter rationale at registration time.",
+    ],
     reasons: Annotated[
         Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-4 sentences "
+        "Per-parameter rationale. For each parameter, write 2-3 sentences "
         "covering: "
-        "(a) WHICH STUDY OR EXPLORATION this tool call is part of (e.g. "
-        "'convergence test for ecutwfc', 'production run for adsorption "
-        "energy', 'sensitivity sweep over n_fixed_layers', 'one-off check'); "
-        "(b) THE ROLE THIS PARAMETER plays in that study (e.g. 'being varied "
-        "now', 'fixed at converged value from prior convergence test', "
-        "'inherited from upstream tool', 'placeholder before a real value "
-        "is obtained'); "
-        "(c) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
+        "(a) THE ROLE THIS PARAMETER plays in the study described in "
+        "`context` (e.g. 'being varied now', 'fixed at converged value from "
+        "prior convergence test', 'inherited from upstream tool', "
+        "'placeholder before a real value is obtained'); "
+        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
         "supports it, and the expected effect on the output. "
-        "The keys must include: 'supercell_dim_xy', 'supercell_dim_z', "
-        "'n_fixed_layers', 'vacuum'.",
+        "The keys must include: 'species', 'crystal_structures', 'facets',"
+        "'supercell_dim_xy', 'supercell_dim_z', 'n_fixed_layers', 'vacuum',"
+        "and 'surfaceFilename'.",
     ],
     supercell_dim_z_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of supercell_dim_z value was generated. If not provided, you can only play around and see the effect of input parameter settings to output result of this tool, but you cannot use the output directly to calculate the final result"] = "",
     n_fixed_layers_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of n_fixed_layers value was generated. If not provided, you can only play around and see the effect of input parameter settings to output result of this tool, but you cannot use the output directly to calculate the final result"] = "",
@@ -887,6 +964,8 @@ def generateSurface_and_getPossibleSite(
         "surfaceFilename": surfaceFilename,
     }
 
+    merged_reasons = _merge_context(context, reasons)
+
     ids = {}
     for k, v in mySites.items():
         ids[k] = CANVAS.register_tool_output(
@@ -894,7 +973,7 @@ def generateSurface_and_getPossibleSite(
             args=common_args,
             value=v,
             description=f"Adsorption {k} site",
-            reasons=reasons,
+            reasons=merged_reasons,
             parent_result_ids=parent_result_ids,
             parent_result_ids_w_args=param_sources,
             metadata={},
@@ -913,7 +992,7 @@ def generateSurface_and_getPossibleSite(
         args=common_args,
         value=f"surface{surfaceFilename}",
         description="Path of the saved surface structure file in traj format.",
-        reasons=reasons,
+        reasons=merged_reasons,
         parent_result_ids=parent_result_ids,
         parent_result_ids_w_args=param_sources,
         metadata={},
@@ -930,20 +1009,25 @@ def generate_myAdsorbate(
     positions: Annotated[List[List[float]], "Positions of the atoms in the adsorbate, e.g. [[x1, y1, z1], [x2, y2, z2], ...], following the same order as the symbols."],
     AdsorbateFileName: Annotated[str, "Name (not a path) of the adsorbate file to be saved in traj format"],
     vaccum: Annotated[float, "Vacuum size in Angstrom around the adsorbate structure. Typically 10.0 Angstrom should be sufficient"],
+    context: Annotated[
+        str,
+        "1-2 sentence describing which study or exploration this tool call "
+        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
+        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+        "'one-off check'). Applies to the entire call and is merged into "
+        "each per-parameter rationale at registration time.",
+    ],
     reasons: Annotated[
         Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-4 sentences "
+        "Per-parameter rationale. For each parameter, write 2-3 sentences "
         "covering: "
-        "(a) WHICH STUDY OR EXPLORATION this tool call is part of (e.g. "
-        "'convergence test for ecutwfc', 'production run for adsorption "
-        "energy', 'sensitivity sweep over n_fixed_layers', 'one-off check'); "
-        "(b) THE ROLE THIS PARAMETER plays in that study (e.g. 'being varied "
-        "now', 'fixed at converged value from prior convergence test', "
-        "'inherited from upstream tool', 'placeholder before a real value "
-        "is obtained'); "
-        "(c) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
+        "(a) THE ROLE THIS PARAMETER plays in the study described in "
+        "`context` (e.g. 'being varied now', 'fixed at converged value from "
+        "prior convergence test', 'inherited from upstream tool', "
+        "'placeholder before a real value is obtained'); "
+        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
         "supports it, and the expected effect on the output. "
-        "The keys must include: 'symbols', 'positions', 'vaccum'.",
+        "The keys must include: 'symbols', 'positions', 'vaccum', 'AdsorbateFileName'.",
     ],
 ):
     """Generate an adsorbate structure and save it.
@@ -957,6 +1041,7 @@ def generate_myAdsorbate(
     tmpAtoms = Atoms(symbols=symbols, positions=positions)
     tmpAtoms.center(vacuum=vaccum)
     write(os.path.join(WORKING_DIRECTORY, "adsorbates", f"{AdsorbateFileName}"), tmpAtoms)
+    merged_reasons = _merge_context(context, reasons)
     id = CANVAS.register_tool_output(
         tool_name="generate_myAdsorbate",
         args={
@@ -967,7 +1052,7 @@ def generate_myAdsorbate(
         },
         value=f"adsorbates/{AdsorbateFileName}",
         description="Path of the saved adsorbate structure file in traj format.",
-        reasons=reasons,
+        reasons=merged_reasons,
         parent_result_ids=[],
         metadata={},
     )
@@ -981,21 +1066,26 @@ def add_myAdsorbate(
     mySites: Annotated[List[List[float]], "List of adsorption sites you want to put adsorbates on, e.g. [[x1, y1], [x2, y2], ...]"],
     rotations: Annotated[List[Tuple[float, str]], "List of rotations for the ith adsorbates, e.g. [[90.0, 'x'], [180.0, 'y'], ...]"],
     surfaceWithAdsorbateFileName: Annotated[str, "Name (not a path) of the surface adsorbated with adsorbate to be saved in traj format"],
+    context: Annotated[
+        str,
+        "1-2 sentence describing which study or exploration this tool call "
+        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
+        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+        "'one-off check'). Applies to the entire call and is merged into "
+        "each per-parameter rationale at registration time.",
+    ],
     reasons: Annotated[
         Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-4 sentences "
+        "Per-parameter rationale. For each parameter, write 2-3 sentences "
         "covering: "
-        "(a) WHICH STUDY OR EXPLORATION this tool call is part of (e.g. "
-        "'convergence test for ecutwfc', 'production run for adsorption "
-        "energy', 'sensitivity sweep over n_fixed_layers', 'one-off check'); "
-        "(b) THE ROLE THIS PARAMETER plays in that study (e.g. 'being varied "
-        "now', 'fixed at converged value from prior convergence test', "
-        "'inherited from upstream tool', 'placeholder before a real value "
-        "is obtained'); "
-        "(c) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
+        "(a) THE ROLE THIS PARAMETER plays in the study described in "
+        "`context` (e.g. 'being varied now', 'fixed at converged value from "
+        "prior convergence test', 'inherited from upstream tool', "
+        "'placeholder before a real value is obtained'); "
+        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
         "supports it, and the expected effect on the output. "
         "The keys must include: 'mySurfacePath', 'adsorbatePath', 'mySites', "
-        "'rotations'.",
+        "'rotations', 'surfaceWithAdsorbateFileName'.",
     ],
     mySites_ref: Annotated[str, "Optional source_result_id for mySites."] = "",
 ):
@@ -1058,6 +1148,7 @@ def add_myAdsorbate(
         parent_result_ids = []
 
     outStr = f"Surface with adsorbate saved at {relaPath}."
+    merged_reasons = _merge_context(context, reasons)
     id = CANVAS.register_tool_output(
         tool_name="add_myAdsorbate",
         args={
@@ -1069,7 +1160,7 @@ def add_myAdsorbate(
         },
         value=relaPath,
         description="Path of the saved surface with adsorbate structure file in traj format.",
-        reasons=reasons,
+        reasons=merged_reasons,
         parent_result_ids=parent_result_ids,
         parent_result_ids_w_args=param_sources,
         metadata={},
@@ -1090,7 +1181,7 @@ def write_QE_script_w_ASE(
     calculation: Annotated[str, "Type of calculation to perform, e.g. 'scf', 'relax', or 'ensemble'. Set to 'ensemble', when running ensemble calculation"],
     restart_mode: Annotated[Literal['from_scratch', 'restart'], "Restart mode"],
     prefix: Annotated[str, "Prefix for the output files"],
-    disk_io: Annotated[Literal['none', 'minimal', 'nowf', 'low', 'medium', 'high'], "Disk I/O level"],
+    disk_io: Annotated[Literal['none'], "Disk I/O level"],
     ibrav: Annotated[int, "Bravais-lattice index."],
     nat: Annotated[int, "Number of atoms in the unit cell"],
     ntyp: Annotated[int, "Number of atom types in the unit cell"],
@@ -1103,20 +1194,26 @@ def write_QE_script_w_ASE(
     electron_maxstep: Annotated[int, "Maximum number of SCF iterations"],
     kspacing: Annotated[float, "K-point spacing (in Angstrom^-1). Lower value means more k-points and better accuracy."],
     input_dft: Annotated[Literal['LDA', 'PBE', 'BEEF-vdW'], "DFT functional. You'll be told which functional to use"],
+    context: Annotated[
+        str,
+        "1-2 sentence describing which study or exploration this tool call "
+        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
+        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+        "'one-off check'). Applies to the entire call and is merged into "
+        "each per-parameter rationale at registration time.",
+    ],
     reasons: Annotated[
         Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-4 sentences "
+        "Per-parameter rationale. For each parameter, write 2-3 sentences "
         "covering: "
-        "(a) WHICH STUDY OR EXPLORATION this tool call is part of (e.g. "
-        "'convergence test for ecutwfc', 'production run for adsorption "
-        "energy', 'sensitivity sweep over n_fixed_layers', 'one-off check'); "
-        "(b) THE ROLE THIS PARAMETER plays in that study (e.g. 'being varied "
-        "now', 'fixed at converged value from prior convergence test', "
-        "'inherited from upstream tool', 'placeholder before a real value "
-        "is obtained'); "
-        "(c) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
+        "(a) THE ROLE THIS PARAMETER plays in the study described in "
+        "`context` (e.g. 'being varied now', 'fixed at converged value from "
+        "prior convergence test', 'inherited from upstream tool', "
+        "'placeholder before a real value is obtained'); "
+        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
         "supports it, and the expected effect on the output. "
-        "The keys must include: 'calculation', 'restart_mode', 'prefix', "
+        "The keys must include: 'listofElements', 'ppfiles', 'filename',"
+        "'inputAtomsDir', 'ensembleCalculation', 'calculation', 'restart_mode', 'prefix', "
         "'disk_io', 'ibrav', 'nat', 'ntyp', 'ecutwfc', 'ecutrho', "
         "'occupations', 'smearing', 'degauss', 'conv_thr', "
         "'electron_maxstep', 'kspacing', 'input_dft', 'ready_to_run_job', "
@@ -1140,8 +1237,6 @@ def write_QE_script_w_ASE(
     if calculation == 'ensemble':
         assert inputAtomsDir.endswith('.pwi'), "inputAtomsDir must be a .pwi file with relaxed structure when running ensemble calculation with BEEF-vdW functional"
         assert input_dft == 'BEEF-vdW', "input_dft must be 'BEEF-vdW' when running ensemble calculation"
-
-    disk_io = 'none'
 
     # Verify refs.
     for value, ref in zip([ecutwfc, kspacing], [ecutwfc_ref, kspacing_ref]):
@@ -1240,6 +1335,8 @@ def write_QE_script_w_ASE(
     else:
         parent_result_ids = [inputAtomsDir_ref, *ppfilesID]
 
+    merged_reasons = _merge_context(context, reasons)
+
     id = CANVAS.register_tool_output(
         tool_name="write_QE_script_w_ASE",
         args={
@@ -1257,16 +1354,18 @@ def write_QE_script_w_ASE(
             "ntyp": ntyp,
             "ecutwfc": ecutwfc,
             "ecutrho": ecutrho,
+            "kspacing": kspacing,
             "occupations": occupations,
             "smearing": smearing,
             "degauss": degauss,
             "conv_thr": conv_thr,
             "electron_maxstep": electron_maxstep,
             "input_dft": input_dft,
+            "additional_input": additional_input,
         },
         value=filename,
         description="Path of the saved Quantum Espresso input script.",
-        reasons=reasons,
+        reasons=merged_reasons,
         parent_result_ids=parent_result_ids,
         parent_result_ids_w_args=param_sources,
         metadata={},
@@ -1320,24 +1419,174 @@ def find_pseudopotential(element: str) -> str:
         return f"Could not find pseudopotential for {element}"
 
 
+# @tool
+# def generate_convergence_test(
+#     input_file_name: Annotated[str, "Name of the template quantum espresso input file"],
+#     kspacing: Annotated[list[float], "List of kspacing to be tested. Typically between 0.1-0.4"],
+#     ecutwfc: Annotated[list[int], "List of ecutwfc to be tested. Typically between 40-100"],
+#     input_file_name_ref: Annotated[str, "The source_result_id of the previous tool output where this input_file_name value was generated."],
+#     context: Annotated[
+#         str,
+#         "1-2 sentence describing which study or exploration this tool call "
+#         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
+#         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+#         "'one-off check'). Applies to the entire call and is merged into "
+#         "each per-parameter rationale at registration time.",
+#     ],
+#     reasons: Annotated[
+#         Dict[str, str],
+#         "Per-parameter rationale. For each parameter, write 2-3 sentences "
+#         "covering: "
+#         "(a) THE ROLE THIS PARAMETER plays in the study described in "
+#         "`context` (e.g. 'being varied now', 'fixed at converged value from "
+#         "prior convergence test', 'inherited from upstream tool', "
+#         "'placeholder before a real value is obtained'); "
+#         "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
+#         "supports it, and the expected effect on the output. "
+#         "The keys must include: 'input_file_name', 'kspacing', 'ecutwfc'.",
+#     ],
+# ):
+#     '''
+#     Generate the convergence test input scripts for quantum espresso calculation using another quantum espresso input file as a template and save the job list.
+#     reference_id in the output ties with: generated convergence-test job list, list[str]
+#     '''
+#     ok, msg = CANVAS.verify_artifact(input_file_name, input_file_name_ref)
+#     if not ok:
+#         return msg
+
+#     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+#     input_file = os.path.join(WORKING_DIRECTORY, input_file_name)
+#     try:
+#         atom = read(input_file)
+#     except:
+#         return f"Invalid input file, please inspect CANVAS and select the correct template file."
+
+#     cell = atom.cell
+#     ecutwfc_max = max(ecutwfc)
+#     kspacing_min = min(kspacing)
+#     job_list_dict = CANVAS.canvas.get('jobs_K_and_ecut', {})
+#     job_list = []
+
+#     for k in kspacing:
+#         kpoints = [
+#             2 * ((np.ceil(2 * np.pi / np.linalg.norm(ii) / k).astype(int)) // 2 + 1) for ii in cell
+#         ]
+#         for i in range(len(kpoints)):
+#             if kpoints[i] % 2 == 0:
+#                 if kpoints[i] > 1:
+#                     kpoints[i] -= 1
+#                 else:
+#                     kpoints[i] += 1
+
+#         with open(input_file, 'r') as f:
+#             lines = f.readlines()
+#             for i, line in enumerate(lines):
+#                 if 'ecutwfc' in line:
+#                     lines[i] = f'    ecutwfc = {ecutwfc_max},\n'
+#                 if 'ecutrho' in line:
+#                     lines[i] = f"    ecutrho = {ecutwfc_max*4},\n"
+#                 if 'K_POINTS' in line:
+#                     lines[i + 1] = ' '.join(map(str, kpoints)) + ' 0 0 0' + '\n'
+
+#             tmpName = os.path.splitext(input_file_name)[0].split('_k_')[0]
+#             new_file_name = f'{tmpName}_k_{k}_ecutwfc_{ecutwfc_max}.pwi'
+#             print(new_file_name)
+#             job_list_dict[new_file_name] = {'k': k, 'ecutwfc': ecutwfc_max}
+#             new_input_file = os.path.join(WORKING_DIRECTORY, new_file_name)
+#             job_list.append(new_file_name)
+#             with open(new_input_file, 'w') as f:
+#                 f.writelines(lines)
+
+#     for e in ecutwfc:
+#         kpoints = [
+#             2 * ((np.ceil(2 * np.pi / np.linalg.norm(ii) / kspacing_min).astype(int)) // 2 + 1) for ii in cell
+#         ]
+#         for i in range(len(kpoints)):
+#             if kpoints[i] % 2 == 0:
+#                 if kpoints[i] > 1:
+#                     kpoints[i] -= 1
+#                 else:
+#                     kpoints[i] += 1
+
+#         with open(input_file, 'r') as f:
+#             lines = f.readlines()
+#             for i, line in enumerate(lines):
+#                 if 'ecutwfc' in line:
+#                     lines[i] = f'    ecutwfc = {e},\n'
+#                 if 'ecutrho' in line:
+#                     lines[i] = f"    ecutrho = {e*4},\n"
+#                 if 'K_POINTS' in line:
+#                     lines[i + 1] = ' '.join(map(str, kpoints)) + ' 0 0 0' + '\n'
+
+#             new_file_name = f'{os.path.splitext(input_file_name)[0]}_k_{kspacing_min}_ecutwfc_{e}.pwi'
+#             job_list_dict[new_file_name] = {'k': kspacing_min, 'ecutwfc': e}
+#             new_input_file = os.path.join(WORKING_DIRECTORY, new_file_name)
+#             job_list.append(new_file_name)
+#             with open(new_input_file, 'w') as f:
+#                 f.writelines(lines)
+
+#     job_list = list(set(job_list))
+
+#     merged_reasons = _merge_context(context, reasons)
+
+#     id_dict = {}
+#     for job in job_list:
+#         id_dict[job] = CANVAS.register_tool_output(
+#             tool_name="generate_convergence_test",
+#             args={
+#                 "input_file_name": input_file_name,
+#                 "kspacing": job_list_dict[job]['k'],
+#                 "ecutwfc": job_list_dict[job]['ecutwfc'],
+#             },
+#             value=[job, job_list_dict[job]['k'], job_list_dict[job]['ecutwfc']],
+#             listed_value=True,
+#             description=f"Generated convergence test job with its corresponding kspacing and ecutwfc values.",
+#             reasons=merged_reasons,
+#             parent_result_ids=[input_file_name_ref],
+#             parent_result_ids_w_args={"input_file_name": input_file_name_ref},
+#             metadata={},
+#         )
+
+#     job_list_dict_for_canvas = {job_name: id_dict[job_name] for job_name in job_list}
+#     job_list_dict_for_canvas = copy.deepcopy(CANVAS.canvas.get('ready_to_run_job_list', {})) | job_list_dict_for_canvas
+#     CANVAS.write('ready_to_run_job_list', job_list_dict_for_canvas, overwrite=True)
+#     CANVAS.write('jobs_K_and_ecut', job_list_dict_for_canvas)
+
+#     out_id_dict = {
+#         id_dict[job_name]: {
+#             'kspacing': job_list_dict[job_name]['k'],
+#             'ecutwfc': job_list_dict[job_name]['ecutwfc'],
+#             'job_name': job_name,
+#         }
+#         for job_name in job_list
+#     }
+
+#     return f"Job list is saved scucessfully. \nIDs for each generated files and their varying parameters are shown below:\n{out_id_dict}. Please tell the supervisor in your response that convergence job has generated sucessfully, please continue to submit the jobs"
+
+
 @tool
 def generate_convergence_test(
     input_file_name: Annotated[str, "Name of the template quantum espresso input file"],
     kspacing: Annotated[list[float], "List of kspacing to be tested. Typically between 0.1-0.4"],
     ecutwfc: Annotated[list[int], "List of ecutwfc to be tested. Typically between 40-100"],
     input_file_name_ref: Annotated[str, "The source_result_id of the previous tool output where this input_file_name value was generated."],
+    context: Annotated[
+        str,
+        "1-2 sentence describing which study or exploration this tool call "
+        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
+        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+        "'one-off check'). Applies to the entire call and is merged into "
+        "each per-parameter rationale at registration time.",
+    ],
     reasons: Annotated[
         Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-4 sentences "
+        "Per-parameter rationale. For each parameter, write 2-3 sentences "
         "covering: "
-        "(a) WHICH STUDY OR EXPLORATION this tool call is part of (e.g. "
-        "'convergence test for ecutwfc', 'production run for adsorption "
-        "energy', 'sensitivity sweep over n_fixed_layers', 'one-off check'); "
-        "(b) THE ROLE THIS PARAMETER plays in that study (e.g. 'being varied "
-        "now', 'fixed at converged value from prior convergence test', "
-        "'inherited from upstream tool', 'placeholder before a real value "
-        "is obtained'); "
-        "(c) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
+        "(a) THE ROLE THIS PARAMETER plays in the study described in "
+        "`context` (e.g. 'being varied now', 'fixed at converged value from "
+        "prior convergence test', 'inherited from upstream tool', "
+        "'placeholder before a real value is obtained'); "
+        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
         "supports it, and the expected effect on the output. "
         "The keys must include: 'input_file_name', 'kspacing', 'ecutwfc'.",
     ],
@@ -1423,18 +1672,21 @@ def generate_convergence_test(
 
     job_list = list(set(job_list))
 
+    merged_reasons = _merge_context(context, reasons)
+
     id_dict = {}
     for job in job_list:
         id_dict[job] = CANVAS.register_tool_output(
             tool_name="generate_convergence_test",
             args={
-                "input_file_name": job,
+                "input_file_name": input_file_name,
                 "kspacing": job_list_dict[job]['k'],
                 "ecutwfc": job_list_dict[job]['ecutwfc'],
             },
             value=[job, job_list_dict[job]['k'], job_list_dict[job]['ecutwfc']],
+            listed_value=True,
             description=f"Generated convergence test job with its corresponding kspacing and ecutwfc values.",
-            reasons=reasons,
+            reasons=merged_reasons,
             parent_result_ids=[input_file_name_ref],
             parent_result_ids_w_args={"input_file_name": input_file_name_ref},
             metadata={},
@@ -1459,42 +1711,48 @@ def generate_convergence_test(
 
 @tool
 def generate_eos_test(
-    input_file_name: Annotated[str, "Name of the template quantum espresso input file"],
-    kspacing: Annotated[float, "K-point spacing (in Angstrom^-1) for the equation of state test."],
-    ecutwfc: Annotated[int, "Kinetic energy cutoff (Ry) for wavefunctions for the equation of state test."],
+    input_file_name: Annotated[str, "Name of the template quantum espresso input file with production run settings"],
+    # kspacing: Annotated[float, "K-point spacing (in Angstrom^-1) for the equation of state test."],
+    # ecutwfc: Annotated[int, "Kinetic energy cutoff (Ry) for wavefunctions for the equation of state test."],
     stepSize: Annotated[float, "Step size for scaling the cell size. The cell will be scaled from (1-2*stepSize) to (1+2*stepSize). Typically 0.025 should be good."],
+    context: Annotated[
+        str,
+        "1-2 sentence describing which study or exploration this tool call "
+        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
+        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+        "'one-off check'). Applies to the entire call and is merged into "
+        "each per-parameter rationale at registration time.",
+    ],
     reasons: Annotated[
         Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-4 sentences "
+        "Per-parameter rationale. For each parameter, write 2-3 sentences "
         "covering: "
-        "(a) WHICH STUDY OR EXPLORATION this tool call is part of (e.g. "
-        "'convergence test for ecutwfc', 'production run for adsorption "
-        "energy', 'sensitivity sweep over n_fixed_layers', 'one-off check'); "
-        "(b) THE ROLE THIS PARAMETER plays in that study (e.g. 'being varied "
-        "now', 'fixed at converged value from prior convergence test', "
-        "'inherited from upstream tool', 'placeholder before a real value "
-        "is obtained'); "
-        "(c) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
+        "(a) THE ROLE THIS PARAMETER plays in the study described in "
+        "`context` (e.g. 'being varied now', 'fixed at converged value from "
+        "prior convergence test', 'inherited from upstream tool', "
+        "'placeholder before a real value is obtained'); "
+        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
         "supports it, and the expected effect on the output. "
-        "The keys must include: 'input_file_name', 'kspacing', 'ecutwfc', "
+        "The keys must include: 'input_file_name', "
+        # "'kspacing', 'ecutwfc', "
         "'stepSize'.",
     ],
     input_file_name_ref: Annotated[str, "The source_result_id of the previous tool output where the name of the template quantum espresso input file was generated."],
-    kspacing_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of kspacing value was generated. If not provided, you can only play around and see the effect of input parameter settings to output result of this tool, but you cannot use the output directly to calculate the final result"] = "",
-    ecutwfc_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of ecutwfc value was generated. If not provided, you can only play around and see the effect of input parameter settings to output result of this tool, but you cannot use the output directly to calculate the final result"] = "",
+    # kspacing_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of kspacing value was generated. If not provided, you can only play around and see the effect of input parameter settings to output result of this tool, but you cannot use the output directly to calculate the final result"] = "",
+    # ecutwfc_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of ecutwfc value was generated. If not provided, you can only play around and see the effect of input parameter settings to output result of this tool, but you cannot use the output directly to calculate the final result"] = "",
 ):
     '''
-    Generate the equation of state test input scripts for quantum espresso calculation and save the job list.
+    From a template quantum espresso input file with production run settings, generate the equation of state test input scripts for quantum espresso calculation and save the job list.
     Each generated job is registered as its own artifact (one per scale).
     reference_id in the output ties with: per-scale generated EOS-test job filename, str
     '''
     assert stepSize > 0.01 and stepSize < 0.1, "stepSize should be between 0.01 and 0.1"
 
-    for value, ref in zip([kspacing, ecutwfc], [kspacing_ref, ecutwfc_ref]):
-        if ref != "":
-            ok, msg = CANVAS.verify_artifact(value, ref)
-            if not ok:
-                return msg
+    # for value, ref in zip([kspacing, ecutwfc], [kspacing_ref, ecutwfc_ref]):
+    #     if ref != "":
+    #         ok, msg = CANVAS.verify_artifact(value, ref)
+    #         if not ok:
+    #             return msg
 
     ok, msg = CANVAS.verify_artifact(input_file_name, input_file_name_ref)
     if not ok:
@@ -1510,71 +1768,117 @@ def generate_eos_test(
     except:
         return f"Invalid input file, try inspect the shared CANVAS and use the inital pwi file as the input file"
 
-    cell = atom.cell
-    kpoints = [
-        2 * ((np.ceil(2 * np.pi / np.linalg.norm(ii) / kspacing).astype(int)) // 2 + 1) for ii in cell
-    ]
-    for i in range(len(kpoints)):
-        if kpoints[i] % 2 == 0:
-            if kpoints[i] > 1:
-                kpoints[i] -= 1
-            else:
-                kpoints[i] += 1
+    # cell = atom.cell
+    # kpoints = [
+    #     2 * ((np.ceil(2 * np.pi / np.linalg.norm(ii) / kspacing).astype(int)) // 2 + 1) for ii in cell
+    # ]
+    # for i in range(len(kpoints)):
+    #     if kpoints[i] % 2 == 0:
+    #         if kpoints[i] > 1:
+    #             kpoints[i] -= 1
+    #         else:
+    #             kpoints[i] += 1
 
     job_list = []
     scale_for_job = {}
+    
+    args = CANVAS.get_artifact(input_file_name_ref).args
+    
+    pseudopotentials = {}
+    for element, pseudo in zip(args['listofElements'], args['ppfiles']):
+        if not os.path.exists(os.path.join("/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/all_lda_pbe_UPF", pseudo)):
+            return f"Invalid pseudopotential file: {pseudo}. Make sure to supply the correct pseudopotential file name."
+        pseudopotentials[element] = pseudo
 
     for scale in np.linspace(1 - stepSize * 2, 1 + stepSize * 2, 5):
         scale = float(scale)
-        with open(input_file, 'r') as f:
-            lines = f.readlines()
-        for i, line in enumerate(lines):
-            if 'ecutwfc' in line:
-                lines[i] = f"    ecutwfc = {ecutwfc},\n"
-            if 'ecutrho' in line:
-                lines[i] = f"    ecutrho = {ecutwfc*4},\n"
-            if 'CELL_PARAMETERS' in line:
-                lines[i + 1] = f"{cell[0][0]*scale} {cell[0][1]*scale} {cell[0][2]*scale}\n"
-                lines[i + 2] = f"{cell[1][0]*scale} {cell[1][1]*scale} {cell[1][2]*scale}\n"
-                lines[i + 3] = f"{cell[2][0]*scale} {cell[2][1]*scale} {cell[2][2]*scale}\n"
-            if 'K_POINTS' in line:
-                lines[i + 1] = f"{kpoints[0]} {kpoints[1]} {kpoints[2]} 0 0 0\n"
+        tmpAtoms = copy.deepcopy(atom)
+        tmpAtoms.set_cell(atom.cell * scale, scale_atoms=True)
+        
+        kpoints = [
+            2 * ((np.ceil(2 * np.pi / np.linalg.norm(ii) / args['kspacing']).astype(int)) // 2 + 1) for ii in tmpAtoms.cell
+        ]
+        
+        new_file_name = f"{prefix}_scale_{scale:.3f}.pwi"
+        filenameWDir = os.path.join(WORKING_DIRECTORY, new_file_name)
+        write(filenameWDir,
+          tmpAtoms,
+          input_data={
+              'calculation': args['calculation'],
+              'restart_mode': args['restart_mode'],
+              'prefix': args['prefix'],
+              'pseudo_dir': "/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/all_lda_pbe_UPF",
+              'outdir': './out',
+              'disk_io': args['disk_io'],
+              'ibrav': args['ibrav'],
+              'nat': args['nat'],
+              'ntyp': args['ntyp'],
+              'ecutwfc': args['ecutwfc'],
+              'ecutrho': args['ecutrho'],
+              'occupations': args['occupations'],
+              'smearing': args['smearing'],
+              'degauss': args['degauss'],
+              'conv_thr': args['conv_thr'],
+              'electron_maxstep': args['electron_maxstep'],
+              'input_dft': args['input_dft'],
+              **args['additional_input']
+          },
+          format='espresso-in',
+          pseudopotentials=pseudopotentials,
+          kpts=tuple(kpoints))
+        
+        # with open(input_file, 'r') as f:
+        #     lines = f.readlines()
+        # for i, line in enumerate(lines):
+        #     # if 'ecutwfc' in line:
+        #     #     lines[i] = f"    ecutwfc = {ecutwfc},\n"
+        #     # if 'ecutrho' in line:
+        #     #     lines[i] = f"    ecutrho = {ecutwfc*4},\n"
+        #     if 'CELL_PARAMETERS' in line:
+        #         lines[i + 1] = f"{cell[0][0]*scale} {cell[0][1]*scale} {cell[0][2]*scale}\n"
+        #         lines[i + 2] = f"{cell[1][0]*scale} {cell[1][1]*scale} {cell[1][2]*scale}\n"
+        #         lines[i + 3] = f"{cell[2][0]*scale} {cell[2][1]*scale} {cell[2][2]*scale}\n"
+        #     # if 'K_POINTS' in line:
+        #     #     lines[i + 1] = f"{kpoints[0]} {kpoints[1]} {kpoints[2]} 0 0 0\n"
 
-        new_file_name = f"{prefix}_{scale}.pwi"
+        # new_file_name = f"{prefix}_{scale}.pwi"
         scale_for_job[new_file_name] = scale
         job_list.append(new_file_name)
         new_file = os.path.join(WORKING_DIRECTORY, new_file_name)
-        with open(new_file, 'w') as f:
-            f.writelines(lines)
+        # with open(new_file, 'w') as f:
+        #     f.writelines(lines)
+        
 
     job_list = list(set(job_list))
 
     # Build provenance — same set of refs across all scales.
     param_sources: Dict[str, Any] = {"input_file_name": input_file_name_ref}
-    if kspacing_ref:
-        param_sources["kspacing"] = kspacing_ref
-    if ecutwfc_ref:
-        param_sources["ecutwfc"] = ecutwfc_ref
+    # if kspacing_ref:
+    #     param_sources["kspacing"] = kspacing_ref
+    # if ecutwfc_ref:
+    #     param_sources["ecutwfc"] = ecutwfc_ref
 
-    if kspacing_ref != "" and ecutwfc_ref != "":
-        parent_result_ids = [kspacing_ref, ecutwfc_ref, input_file_name_ref]
-    else:
-        parent_result_ids = [input_file_name_ref]
+    # if kspacing_ref != "" and ecutwfc_ref != "":
+    #     parent_result_ids = [kspacing_ref, ecutwfc_ref, input_file_name_ref]
+    # else:
+    parent_result_ids = [input_file_name_ref]
+
+    merged_reasons = _merge_context(context, reasons)
 
     id_dict = {}
     for job in job_list:
         id_dict[job] = CANVAS.register_tool_output(
             tool_name="generate_eos_test",
             args={
-                "input_file_name": job,
-                "kspacing": kspacing,
-                "ecutwfc": ecutwfc,
+                "input_file_name": input_file_name,
+                # "kspacing": kspacing,
+                # "ecutwfc": ecutwfc,
                 "stepSize": stepSize,
-                "scale": scale_for_job[job],
+                # "scale": scale_for_job[job],
             },
             value=job,
             description=f"Generated EOS test job at scale {scale_for_job[job]}.",
-            reasons=reasons,
+            reasons=merged_reasons,
             parent_result_ids=parent_result_ids,
             parent_result_ids_w_args=param_sources,
             metadata={},
@@ -1586,10 +1890,10 @@ def generate_eos_test(
 
     out_id_dict = {
         id_dict[job_name]: {
-            'kspacing': kspacing,
-            'ecutwfc': ecutwfc,
-            'scale': scale_for_job[job_name],
+            # 'kspacing': kspacing,
+            # 'ecutwfc': ecutwfc,
             'job_name': job_name,
+            'scale': scale_for_job[job_name],
         }
         for job_name in job_list
     }
@@ -1751,20 +2055,26 @@ def find_optimal_parameter(
     ],
     reference_file: Annotated[str, "Among the list of files, the reference_file filename corresponding to the most expensive / most accurate reference calculation."],
     threshold: Annotated[float, "Maximum allowed absolute energy difference in eV from the reference energy."],
+    context: Annotated[
+        str,
+        "1-2 sentence describing which study or exploration this tool call "
+        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
+        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+        "'one-off check'). Applies to the entire call and is merged into "
+        "each per-parameter rationale at registration time.",
+    ],
     reasons: Annotated[
         Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-4 sentences "
+        "Per-parameter rationale. For each parameter, write 2-3 sentences "
         "covering: "
-        "(a) WHICH STUDY OR EXPLORATION this tool call is part of (e.g. "
-        "'convergence test for ecutwfc', 'production run for adsorption "
-        "energy', 'sensitivity sweep over n_fixed_layers', 'one-off check'); "
-        "(b) THE ROLE THIS PARAMETER plays in that study (e.g. 'being varied "
-        "now', 'fixed at converged value from prior convergence test', "
-        "'inherited from upstream tool', 'placeholder before a real value "
-        "is obtained'); "
-        "(c) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
+        "(a) THE ROLE THIS PARAMETER plays in the study described in "
+        "`context` (e.g. 'being varied now', 'fixed at converged value from "
+        "prior convergence test', 'inherited from upstream tool', "
+        "'placeholder before a real value is obtained'); "
+        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
         "supports it, and the expected effect on the output. "
-        "The keys must include: 'threshold'.",
+        "The keys must include: 'sweeping_parameter', 'filename', 'parameters',"
+        "'reference_file', 'threshold'.",
     ],
 ) -> Dict[str, Any]:
     """
@@ -1841,6 +2151,8 @@ def find_optimal_parameter(
     }
     parent_result_ids = list(set(bare_filename_refs + bare_parameter_refs))
 
+    merged_reasons = _merge_context(context, reasons)
+
     id = CANVAS.register_tool_output(
         tool_name="find_optimal_parameter",
         args={
@@ -1851,8 +2163,8 @@ def find_optimal_parameter(
             "threshold": threshold,
         },
         value=chosen[1],
-        description=f"The most optimal parameter value for production run based on the reference file {reference_file} and the threshold {threshold}. The chosen parameter value is {chosen[1]} with file name {chosen[0]}",
-        reasons=reasons,
+        description=f"The most optimal parameter value for production run based on the reference file {reference_file} and the threshold {threshold}. The chosen parameter value is {chosen[1]} with file name {chosen[0]}. The tool automatically append .pwo to the all filenames to read the output files.",
+        reasons=merged_reasons,
         parent_result_ids=parent_result_ids,
         parent_result_ids_w_args=param_sources,
         metadata={},
@@ -1876,18 +2188,23 @@ def calculate_formation_E(
         Tuple[str, str],
         "(slab-with-adsorbate calculation file name, source_result_id) pair.",
     ],
+    context: Annotated[
+        str,
+        "1-2 sentence describing which study or exploration this tool call "
+        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
+        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+        "'one-off check'). Applies to the entire call and is merged into "
+        "each per-parameter rationale at registration time.",
+    ],
     reasons: Annotated[
         Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-4 sentences "
+        "Per-parameter rationale. For each parameter, write 2-3 sentences "
         "covering: "
-        "(a) WHICH STUDY OR EXPLORATION this tool call is part of (e.g. "
-        "'convergence test for ecutwfc', 'production run for adsorption "
-        "energy', 'sensitivity sweep over n_fixed_layers', 'one-off check'); "
-        "(b) THE ROLE THIS PARAMETER plays in that study (e.g. 'being varied "
-        "now', 'fixed at converged value from prior convergence test', "
-        "'inherited from upstream tool', 'placeholder before a real value "
-        "is obtained'); "
-        "(c) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
+        "(a) THE ROLE THIS PARAMETER plays in the study described in "
+        "`context` (e.g. 'being varied now', 'fixed at converged value from "
+        "prior convergence test', 'inherited from upstream tool', "
+        "'placeholder before a real value is obtained'); "
+        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
         "supports it, and the expected effect on the output. "
         "The keys must include: 'slabFilePath', 'adsorbateFilePath', "
         "'systemFilePath'.",
@@ -1951,6 +2268,8 @@ def calculate_formation_E(
     }
     parent_result_ids = list({slabFilePath_ref, adsorbateFilePath_ref, systemFilePath_ref})
 
+    merged_reasons = _merge_context(context, reasons)
+
     id = CANVAS.register_tool_output(
         tool_name="calculate_formation_E",
         args={
@@ -1962,8 +2281,9 @@ def calculate_formation_E(
         description=(
             f"The formation energy of the adsorbate on the slab calculated "
             f"using {slabFilePath}, {adsorbateFilePath}, and {systemFilePath}"
+            f"The tool automatically append .pwo to the all filenames to read the output files."
         ),
-        reasons=reasons,
+        reasons=merged_reasons,
         parent_result_ids=parent_result_ids,
         parent_result_ids_w_args=param_sources,
         metadata={},
@@ -1978,18 +2298,23 @@ def calculate_lc(
         List[Tuple[str, str]],
         "List of (filename, source_result_id) pairs. Each filename is the output file used to calculate the lattice constant; the ref is the source_result_id of the previous tool output where that specific filename was generated.",
     ],
+    context: Annotated[
+        str,
+        "1-2 sentence describing which study or exploration this tool call "
+        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
+        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+        "'one-off check'). Applies to the entire call and is merged into "
+        "each per-parameter rationale at registration time.",
+    ],
     reasons: Annotated[
         Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-4 sentences "
+        "Per-parameter rationale. For each parameter, write 2-3 sentences "
         "covering: "
-        "(a) WHICH STUDY OR EXPLORATION this tool call is part of (e.g. "
-        "'convergence test for ecutwfc', 'production run for adsorption "
-        "energy', 'sensitivity sweep over n_fixed_layers', 'one-off check'); "
-        "(b) THE ROLE THIS PARAMETER plays in that study (e.g. 'being varied "
-        "now', 'fixed at converged value from prior convergence test', "
-        "'inherited from upstream tool', 'placeholder before a real value "
-        "is obtained'); "
-        "(c) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
+        "(a) THE ROLE THIS PARAMETER plays in the study described in "
+        "`context` (e.g. 'being varied now', 'fixed at converged value from "
+        "prior convergence test', 'inherited from upstream tool', "
+        "'placeholder before a real value is obtained'); "
+        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
         "supports it, and the expected effect on the output. "
         "The keys must include: 'jobFilenames'.",
     ],
@@ -2058,12 +2383,14 @@ def calculate_lc(
 
     param_sources: Dict[str, Any] = {"jobFilenames": bare_refs}
 
+    merged_reasons = _merge_context(context, reasons)
+
     id = CANVAS.register_tool_output(
         tool_name="calculate_lc",
         args={"jobFilenames": bare_filenames},
         value=lc,
-        description=f"The lattice constant calculated using the job list {bare_filenames}",
-        reasons=reasons,
+        description=f"The lattice constant calculated using the job list {bare_filenames}. The tool automatically append .pwo to the all filenames to read the output files.",
+        reasons=merged_reasons,
         parent_result_ids=list(set(bare_refs)),
         parent_result_ids_w_args=param_sources,
         metadata={},
@@ -2087,18 +2414,23 @@ def analyze_BEEF_result(
         Tuple[str, str],
         "(slab-with-ontop-adsorbate calculation file, source_result_id) pair.",
     ],
+    context: Annotated[
+        str,
+        "1-2 sentence describing which study or exploration this tool call "
+        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
+        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+        "'one-off check'). Applies to the entire call and is merged into "
+        "each per-parameter rationale at registration time.",
+    ],
     reasons: Annotated[
         Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-4 sentences "
+        "Per-parameter rationale. For each parameter, write 2-3 sentences "
         "covering: "
-        "(a) WHICH STUDY OR EXPLORATION this tool call is part of (e.g. "
-        "'convergence test for ecutwfc', 'production run for adsorption "
-        "energy', 'sensitivity sweep over n_fixed_layers', 'one-off check'); "
-        "(b) THE ROLE THIS PARAMETER plays in that study (e.g. 'being varied "
-        "now', 'fixed at converged value from prior convergence test', "
-        "'inherited from upstream tool', 'placeholder before a real value "
-        "is obtained'); "
-        "(c) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
+        "(a) THE ROLE THIS PARAMETER plays in the study described in "
+        "`context` (e.g. 'being varied now', 'fixed at converged value from "
+        "prior convergence test', 'inherited from upstream tool', "
+        "'placeholder before a real value is obtained'); "
+        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
         "supports it, and the expected effect on the output. "
         "The keys must include: 'slabFilePath', 'adsorbateFilePath', "
         "'systemFilePath'.",
@@ -2215,6 +2547,8 @@ def analyze_BEEF_result(
     }
     parent_result_ids = list({slabFilePath_ref, adsorbateFilePath_ref, systemFilePath_ref})
 
+    merged_reasons = _merge_context(context, reasons)
+
     mean_id = CANVAS.register_tool_output(
         tool_name="analyze_BEEF_result",
         args=common_args,
@@ -2222,8 +2556,9 @@ def analyze_BEEF_result(
         description=(
             f"The mean adsorption energy calculated using {slabFilePath}, "
             f"{adsorbateFilePath}, and {systemFilePath}"
+            f"The tool automatically append .pwo to the all filenames to read the output files."
         ),
-        reasons=reasons,
+        reasons=merged_reasons,
         parent_result_ids=parent_result_ids,
         parent_result_ids_w_args=param_sources,
         metadata={},
@@ -2236,8 +2571,9 @@ def analyze_BEEF_result(
         description=(
             f"The standard deviation of adsorption energy calculated using "
             f"{slabFilePath}, {adsorbateFilePath}, and {systemFilePath}"
+            f"The tool automatically append .pwo to the all filenames to read the output files."
         ),
-        reasons=reasons,
+        reasons=merged_reasons,
         parent_result_ids=parent_result_ids,
         parent_result_ids_w_args=param_sources,
         metadata={},
@@ -2670,18 +3006,23 @@ def read_energy_from_output(
         List[Tuple[str, str]],
         "List of (filename, filename_ref_id) pairs. Energy of <filename> will be read and printed, filename_ref_id is the source_result_id of the previous tool output where that specific filename was generated."
     ],
+    context: Annotated[
+        str,
+        "1-2 sentence describing which study or exploration this tool call "
+        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
+        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+        "'one-off check'). Applies to the entire call and is merged into "
+        "each per-parameter rationale at registration time.",
+    ],
     reasons: Annotated[
         Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-4 sentences "
+        "Per-parameter rationale. For each parameter, write 2-3 sentences "
         "covering: "
-        "(a) WHICH STUDY OR EXPLORATION this tool call is part of (e.g. "
-        "'convergence test for ecutwfc', 'production run for adsorption "
-        "energy', 'sensitivity sweep over n_fixed_layers', 'one-off check'); "
-        "(b) THE ROLE THIS PARAMETER plays in that study (e.g. 'being varied "
-        "now', 'fixed at converged value from prior convergence test', "
-        "'inherited from upstream tool', 'placeholder before a real value "
-        "is obtained'); "
-        "(c) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
+        "(a) THE ROLE THIS PARAMETER plays in the study described in "
+        "`context` (e.g. 'being varied now', 'fixed at converged value from "
+        "prior convergence test', 'inherited from upstream tool', "
+        "'placeholder before a real value is obtained'); "
+        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
         "supports it, and the expected effect on the output. "
         "The keys must include: 'jobFilenames'.",
     ],
@@ -2706,6 +3047,8 @@ def read_energy_from_output(
         bare_refs.append(ref)
 
     print(f"actual job list: {bare_filenames}")
+
+    merged_reasons = _merge_context(context, reasons)
 
     result = ""
     for job, ref in zip(bare_filenames, bare_refs):
@@ -2738,8 +3081,8 @@ def read_energy_from_output(
             tool_name="read_energy_from_output",
             args={"jobFilename": job},
             value=atoms.get_potential_energy(),
-            description=f"The energy read from {job} is {atoms.get_potential_energy()} eV",
-            reasons=reasons,
+            description=f"The energy read from {job} is {atoms.get_potential_energy()} eV. The tool automatically append .pwo to the all filenames to read the output files.",
+            reasons=merged_reasons,
             parent_result_ids=[ref],
             parent_result_ids_w_args={"jobFilename": ref},
             metadata={},
@@ -2750,4 +3093,3 @@ def read_energy_from_output(
     print(result)
 
     return result
-

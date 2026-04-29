@@ -57,7 +57,7 @@ class NumericArtifact(BaseModel):
     args: Dict[str, Any]
     description: str
     reasons: Dict[str, str]
-    parent_result_ids_w_args: Dict[str, str] = Field(default_factory=dict)
+    parent_result_ids_w_args: Dict[str, str | List[str]] = Field(default_factory=dict)
     parent_result_ids: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     timeStamp: float = Field(default_factory=lambda: time.time())
@@ -69,7 +69,7 @@ class OtherArtifact(BaseModel):
     args: Dict[str, Any]
     description: str
     reasons: Dict[str, str]
-    parent_result_ids_w_args: Dict[str, str] = Field(default_factory=dict)
+    parent_result_ids_w_args: Dict[str, str | List[str]] = Field(default_factory=dict)
     parent_result_ids: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     timeStamp: float = Field(default_factory=lambda: time.time())
@@ -81,7 +81,7 @@ class ListedArtifact(BaseModel):
     args: Dict[str, Any]
     description: str
     reasons: Dict[str, str]
-    parent_result_ids_w_args: Dict[str, str] = Field(default_factory=dict)
+    parent_result_ids_w_args: Dict[str, str | List[str]] = Field(default_factory=dict)
     parent_result_ids: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     timeStamp: float = Field(default_factory=lambda: time.time())
@@ -207,6 +207,7 @@ class myCANVAS():
         listed_value: bool = False,
         reasons: Dict[str, str] = {},
         parent_result_ids: Optional[List[str]] = None,
+        parent_result_ids_w_args: Optional[Dict[str, str]] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
@@ -226,6 +227,7 @@ class myCANVAS():
                 description=description,
                 reasons=reasons,
                 parent_result_ids=parent_result_ids or [],
+                parent_result_ids_w_args=parent_result_ids_w_args or {},
                 metadata=metadata or {},
             )
             # add duplication check
@@ -246,6 +248,7 @@ class myCANVAS():
                             description=description,
                             reasons=reasons,
                             parent_result_ids=parent_result_ids or [],
+                            parent_result_ids_w_args=parent_result_ids_w_args or {},
                             metadata=metadata or {},
                         ))
                     except:
@@ -257,6 +260,7 @@ class myCANVAS():
                             description=description,
                             reasons=reasons,
                             parent_result_ids=parent_result_ids or [],
+                            parent_result_ids_w_args=parent_result_ids_w_args or {},
                             metadata=metadata or {},
                         ))
                         
@@ -268,6 +272,7 @@ class myCANVAS():
                     description=description,
                     reasons=reasons,
                     parent_result_ids=parent_result_ids or [],
+                    parent_result_ids_w_args=parent_result_ids_w_args or {},
                     metadata=metadata or {},
                 )
                 self.result_registry[result_id] = artifact
@@ -282,6 +287,7 @@ class myCANVAS():
                     description=description,
                     reasons=reasons,
                     parent_result_ids=parent_result_ids or [],
+                    parent_result_ids_w_args=parent_result_ids_w_args or {},
                     metadata=metadata or {},
                 )
                 self.result_registry[result_id] = artifact
@@ -297,6 +303,11 @@ class myCANVAS():
         source_result_id,
         tol: float = 1e-10,
     ) -> tuple[bool, str, Optional[NumericArtifact]]:
+        
+        if source_result_id == "PLACEHOLDER":
+            return True, "Verification success."
+        if len(source_result_id) != 8:
+            return False, f"Invalid result ID format: Tool generated ID would be an 8-character string. Did you mean 'PLACEHOLDER'?"
 
         artifact = self.result_registry.get(source_result_id)
         if artifact is None:
@@ -315,7 +326,7 @@ class myCANVAS():
                 else:
                     if expected_value == sub_artifact.value:
                         return True, f"{source_result_id} Verification success."
-            return False, f"ID {source_result_id} verification failed. \nExpected value: {repr(expected_value)} does not match any of the registered tool outputs {[repr(sub_artifact.value) for sub_artifact in artifact.value]}."
+            return False, f"ID {source_result_id} listed verification failed. \nExpected value: {repr(expected_value)} does not match any of the registered tool outputs {[repr(sub_artifact.value) for sub_artifact in artifact.value]}."
         else:
             if isinstance(artifact.value, (int, float)):
                 try:

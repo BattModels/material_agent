@@ -159,8 +159,12 @@ if __name__ == "__main__":
         print("############")
         print()
         overwrite = False
-        
-    timeTravelToXFrameBefore = 0
+    
+    if len(sys.argv) > 1 and sys.argv[1] != "ow":    
+        timeTravelToXFrameBefore = int(sys.argv[1])
+        print(timeTravelToXFrameBefore)
+    else:
+        timeTravelToXFrameBefore = 0
     
     if overwrite:
         # check if working directory exists, if so delete it

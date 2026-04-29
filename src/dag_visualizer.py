@@ -194,10 +194,21 @@ def build_dag(raw_nodes: list[Any]) -> DAG:
     audit the data if needed.
     """
     nodes: dict[str, DAGNode] = {}
+    
+    # for raw in raw_nodes:
+    #     nid = raw.result_id
+    #     parent_ids = list(raw.parent_result_ids or [])
+    #     nodes[nid] = DAGNode(id=nid, parent_ids=parent_ids, raw=raw)
+        
     for raw in raw_nodes:
-        nid = raw.result_id
-        parent_ids = list(raw.parent_result_ids or [])
-        nodes[nid] = DAGNode(id=nid, parent_ids=parent_ids, raw=raw)
+      nid = raw.result_id
+      if nid == "PLACEHOLDER":          # ← skip placeholder nodes entirely
+          continue
+      parent_ids = [
+          pid for pid in (raw.parent_result_ids or [])
+          if pid != "PLACEHOLDER"       # ← also strip placeholder parent refs
+      ]
+      nodes[nid] = DAGNode(id=nid, parent_ids=parent_ids, raw=raw)
 
     # build child pointers
     for nid, node in nodes.items():

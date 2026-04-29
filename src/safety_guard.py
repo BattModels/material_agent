@@ -43,6 +43,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import time
 from typing import Any, Dict, List, Optional, Literal, Set, Annotated, Tuple
 
 from pydantic import BaseModel, Field
@@ -52,6 +53,19 @@ from src import var
 
 from langchain_anthropic import ChatAnthropic
 
+
+# =========================================================
+# Debug helper
+# =========================================================
+
+_DBG_SLEEP = 2  # seconds to sleep after each debug print
+
+
+def _dbg(msg: str) -> None:
+    """Print a debug message and sleep so logs are easy to follow live."""
+    sleep_time = int(len(f"[DBG] {msg}") * 0.01 * _DBG_SLEEP)
+    print(f"[DBG][{sleep_time}] {msg}", flush=True)
+    # time.sleep(sleep_time)  # longer sleep for longer messages
 
 # =========================================================
 # Module constants
@@ -120,6 +134,27 @@ R3_RULE = (
     "(e.g. 'standard value' with no further detail)."
 )
 
+# Sentinel used in *_ref / *_w_ref arguments and in `parent_result_ids_w_args`
+# to indicate that the agent has explicitly chosen the value as a placeholder
+# at the moment of the tool call. No upstream artifact is required; the
+# verifier judges only whether the chosen placeholder is a reasonable default.
+PLACEHOLDER_REF = "PLACEHOLDER"
+
+R1_PLACEHOLDER_RULE = (
+    "Parameter is sensitive, not being varied for the current target "
+    "quantity, and the agent has explicitly marked it as a placeholder "
+    "(no upstream source artifact yet exists — typically because the "
+    "study has not characterized this parameter yet). "
+    "Provenance is not required. The judgment is: is the chosen "
+    "placeholder value a reasonable default to hold while other "
+    "parameters are being characterized? "
+    "Approve placeholders that are commonly-used safe defaults (e.g. a "
+    "tight kspacing while ecutwfc is being swept) and whose rationale "
+    "clearly identifies the value as provisional. Reject placeholders "
+    "that are unusual choices for a default, or whose rationale fails "
+    "to acknowledge the value as provisional."
+)
+
 PARAM_JUDGE_GUIDANCE = """
 Guidance:
 - A rationale that explicitly situates the parameter within a study
@@ -167,6 +202,26 @@ class QuantitySpec(BaseModel):
             "set directly. Include only parameters actually being varied."
         ),
     )
+    acknowledged_placeholders: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Parameters that the agent explicitly acknowledges were held at "
+            "a placeholder value (PLACEHOLDER_REF) somewhere in the value-"
+            "flow chain to this claim, and that the agent does NOT intend "
+            "to characterize before this claim is reported. The claim is "
+            "thereby declared to be conditional on those held values. "
+            "By contrast, a placeholder on a parameter NOT listed here AND "
+            "not in `varied_parameters` AND not pinned to a real ref by an "
+            "artifact closer to this claim in the chain will fail the "
+            "report. Use this for claims that are themselves the answer to "
+            "characterizing one parameter while other sensitive parameters "
+            "are deliberately held — e.g. an `optimal_ecutwfc` claim that "
+            "holds kspacing at a tight default. For claims that should "
+            "stand alone (production measurements, final results), leave "
+            "this list empty and ensure every sensitive parameter has been "
+            "characterized upstream. Must not overlap with `varied_parameters`."
+        ),
+    )
     unit: Optional[str] = Field(
         default=None, description="Unit string, e.g. 'eV', 'Angstrom', 'GPa'."
     )
@@ -182,6 +237,7 @@ class ReportNumericalClaim(BaseModel):
     unit: Optional[str] = None
     result_id: str
     varied_parameters: List[str] = Field(default_factory=list)
+    acknowledged_placeholders: List[str] = Field(default_factory=list)
     note: str = ""
 
 
@@ -238,16 +294,27 @@ class LLMParameterJudgement(BaseModel):
 # =========================================================
 
 def _get_artifact(result_id: str) -> Any:
+    _dbg(f"_get_artifact: ENTER result_id={result_id!r}")
     artifact = CANVAS.get_artifact(result_id)
     if artifact is None:
+        _dbg(f"_get_artifact: registry returned None for {result_id!r} — about to raise")
         raise ValueError(f"Result id '{result_id}' not found in result_registry.")
+    n_args = len(getattr(artifact, "args", {}) or {})
+    has_pria = bool(getattr(artifact, "parent_result_ids_w_args", {}) or {})
+    _dbg(
+        f"_get_artifact: OK tool_name={artifact.tool_name!r} "
+        f"n_args={n_args} parent_result_ids_w_args_nonempty={has_pria}"
+    )
     return artifact
 
 
 def _flatten_listed_value(artifact: Any) -> Any:
     v = artifact.value
     if isinstance(v, list):
-        return [getattr(item, "value", item) for item in v]
+        out = [getattr(item, "value", item) for item in v]
+        _dbg(f"_flatten_listed_value: list-shaped len={len(out)}")
+        return out
+    _dbg(f"_flatten_listed_value: scalar-shaped type={type(v).__name__}")
     return v
 
 
@@ -261,22 +328,179 @@ def _param_source_ids(artifact: Any) -> Dict[str, Any]:
     Scalar entries are str; list entries are List[str], aligned by index
     with the corresponding entry in `artifact.args`.
     """
-    return getattr(artifact, "parent_result_ids_w_args", {}) or {}
+    pria = getattr(artifact, "parent_result_ids_w_args", {}) or {}
+    shapes = {k: ("list" if isinstance(v, list) else type(v).__name__) for k, v in pria.items()}
+    _dbg(f"_param_source_ids: keys={list(pria.keys())} shapes={shapes}")
+    return pria
 
 
 def _collect_recursive_source_ids(artifact: Any) -> List[str]:
-    """All upstream result_ids referenced by this artifact, flattened."""
-    source_ids: Set[str] = set(artifact.parent_result_ids or [])
+    """All upstream result_ids referenced by this artifact, flattened.
+
+    The PLACEHOLDER_REF sentinel is filtered out — it marks an explicit
+    placeholder declaration, not a real upstream artifact, so the recursive
+    walker must not try to dereference it.
+    """
+    source_ids: Set[str] = set(
+        s for s in (artifact.parent_result_ids or []) if s != PLACEHOLDER_REF
+    )
     for v in _param_source_ids(artifact).values():
         if isinstance(v, list):
-            source_ids.update(s for s in v if isinstance(s, str))
-        elif isinstance(v, str):
+            source_ids.update(
+                s for s in v
+                if isinstance(s, str) and s != PLACEHOLDER_REF
+            )
+        elif isinstance(v, str) and v != PLACEHOLDER_REF:
             source_ids.add(v)
-    return list(source_ids)
+    out = list(source_ids)
+    _dbg(
+        f"_collect_recursive_source_ids: result_id={artifact.result_id!r} "
+        f"collected n={len(out)} ids={out}"
+    )
+    return out
+
+
+def _walk_placeholders_for_claim(
+    result_id: str,
+    seen_real_for_param: Set[str],
+    varied_parameters: Set[str],
+    acknowledged_placeholders: Set[str],
+    visited: Set[str],
+) -> List[Tuple[str, str, str, str]]:
+    """Walk the value-flow chain (parent_result_ids_w_args only) from a claim
+    and surface unresolved placeholders.
+
+    A placeholder on parameter X encountered in artifact A is **resolved** iff:
+      (a) X has been pinned by a real ref on the path closer to the claim
+          (i.e. X is in `seen_real_for_param`), OR
+      (b) X is in the claim's `varied_parameters` (X is being characterized
+          by the claim itself), OR
+      (c) X is in the claim's `acknowledged_placeholders` (the agent has
+          declared the claim conditional on X being held provisional).
+
+    Otherwise it is unresolved.
+
+    Walks only `parent_result_ids_w_args` — not the broad `parent_result_ids`
+    flat list. Artifacts that were upstream-but-not-value-providing (e.g.
+    convergence-sweep input scripts whose values never flowed forward) are
+    not reached and their placeholders are not flagged.
+
+    `seen_real_for_param` is passed by value (a copy is forked at each
+    recursive call), so diamond chains track resolution per traversal path:
+    if any path from the claim to an ancestor passes through an unresolved
+    placeholder, that path's complaint is recorded.
+
+    `visited` is used only to break cycles; it does NOT prevent the same
+    artifact from being judged multiple times under different paths.
+
+    Returns
+    -------
+    List of (artifact_id, param_name, source_repr, message) tuples.
+    Empty list means every placeholder reachable from the claim was resolved.
+    """
+    out: List[Tuple[str, str, str, str]] = []
+
+    if result_id in visited:
+        return out
+    visited = visited | {result_id}
+
+    try:
+        artifact = _get_artifact(result_id)
+    except Exception as e:                            # noqa: BLE001
+        out.append((
+            result_id, "<artifact_lookup_failed>", "",
+            f"Could not load artifact '{result_id}' while walking value-flow "
+            f"chain for placeholder resolution: {e}"
+        ))
+        return out
+
+    sources = _param_source_ids(artifact)
+
+    # Phase 1: identify parameters that THIS artifact pins to real refs.
+    # A list-shaped source counts as pinning only if every element is real;
+    # any PLACEHOLDER_REF inside a list means the parameter as a whole is
+    # not pinned by this artifact.
+    newly_pinned: Set[str] = set()
+    for param, source in sources.items():
+        if isinstance(source, str) and source and source != PLACEHOLDER_REF:
+            newly_pinned.add(param)
+        elif isinstance(source, list) and source and all(
+            isinstance(s, str) and s and s != PLACEHOLDER_REF for s in source
+        ):
+            newly_pinned.add(param)
+            
+    _dbg(f"newly pinned: {newly_pinned!r}")
+
+    # Resolution context that applies to placeholders found AT THIS artifact:
+    # a placeholder on X here is resolved if X is already pinned closer to
+    # the claim (seen_real_for_param), OR X is varied / acknowledged on the
+    # claim. Note: `newly_pinned` is NOT included — pinning at this artifact
+    # cannot resolve a placeholder also at this artifact (that would be a
+    # contradiction in the same source map).
+    resolved_here = (
+        seen_real_for_param | varied_parameters | acknowledged_placeholders
+    )
+    
+    _dbg(f"resolved_here: {resolved_here!r}")
+
+    # Phase 2: surface unresolved placeholders at this artifact.
+    for param, source in sources.items():
+        is_placeholder = source == PLACEHOLDER_REF or (
+            isinstance(source, list) and PLACEHOLDER_REF in source
+        )
+        if is_placeholder and param not in resolved_here:
+            out.append((
+                result_id, param, repr(source),
+                f"Unresolved placeholder: parameter '{param}' is set to "
+                f"PLACEHOLDER on artifact '{result_id}', and no artifact "
+                f"closer to the claim in the value-flow chain has pinned "
+                f"it to a real upstream artifact. The claim has not "
+                f"declared this parameter under `varied_parameters` or "
+                f"`acknowledged_placeholders`, so the placeholder leaks "
+                f"into the claim."
+            ))
+
+    # Phase 3: recurse upstream via real-ref sources only.
+    # Each branch sees `seen_real_for_param | newly_pinned` — the parameters
+    # this artifact pinned are now resolved for any deeper placeholder of
+    # the same name.
+    seen_below = seen_real_for_param | newly_pinned
+
+    upstream_ids: Set[str] = set()
+    for source in sources.values():
+        if isinstance(source, list):
+            upstream_ids.update(
+                s for s in source
+                if isinstance(s, str) and s and s != PLACEHOLDER_REF
+            )
+        elif isinstance(source, str) and source and source != PLACEHOLDER_REF:
+            upstream_ids.add(source)
+
+    for parent_id in upstream_ids:
+        out.extend(_walk_placeholders_for_claim(
+            result_id=parent_id,
+            seen_real_for_param=seen_below,
+            varied_parameters=varied_parameters,
+            acknowledged_placeholders=acknowledged_placeholders,
+            visited=visited,
+        ))
+
+    _dbg(
+        f"_walk_placeholders_for_claim: result_id={result_id!r} "
+        f"newly_pinned={sorted(newly_pinned)} "
+        f"n_unresolved_here={sum(1 for u in out if u[0] == result_id)} "
+        f"n_unresolved_total={len(out)}"
+    )
+    return out
 
 
 def _summarize_artifact(artifact: Any) -> Dict[str, Any]:
     """Compact, JSON-serializable view used inside LLM judge prompts."""
+    value_repr = repr(_flatten_listed_value(artifact))
+    _dbg(
+        f"_summarize_artifact: result_id={artifact.result_id!r} "
+        f"tool_name={artifact.tool_name!r} value_repr_len={len(value_repr)}"
+    )
     return {
         "result_id": artifact.result_id,
         "tool_name": artifact.tool_name,
@@ -285,31 +509,37 @@ def _summarize_artifact(artifact: Any) -> Dict[str, Any]:
         "reasons": artifact.reasons,
         "parent_result_ids": artifact.parent_result_ids,
         "metadata": artifact.metadata,
-        "value_repr": repr(_flatten_listed_value(artifact)),
+        "value_repr": value_repr,
     }
 
 
 def _fold_verdict(current: str, incoming: str) -> str:
     """`fail` > `warning` > `pass`. `info` is non-blocking."""
     if current == "fail" or incoming == "fail":
-        return "fail"
-    if current == "warning" or incoming == "warning":
-        return "warning"
-    return "pass"
+        folded = "fail"
+    elif current == "warning" or incoming == "warning":
+        folded = "warning"
+    else:
+        folded = "pass"
+    _dbg(f"_fold_verdict: ({current!r}, {incoming!r}) -> {folded!r}")
+    return folded
 
 
 def _is_complete_numeric_token(needle: str, haystack: str) -> bool:
     try:
         target = float(needle)
     except (TypeError, ValueError):
+        _dbg(f"_is_complete_numeric_token: needle={needle!r} not parseable as float -> False")
         return False
     for m in _NUMBER_RE.finditer(haystack):
         try:
             if math.isclose(float(m.group()), target,
                             rel_tol=1e-12, abs_tol=1e-12):
+                _dbg(f"_is_complete_numeric_token: needle={needle!r} matched token={m.group()!r} -> True")
                 return True
         except ValueError:
             continue
+    _dbg(f"_is_complete_numeric_token: needle={needle!r} no complete-token match -> False")
     return False
 
 
@@ -328,7 +558,11 @@ def _looks_numeric(value: Any) -> bool:
 def _is_complete_text_token(needle: str, haystack: str) -> bool:
     n = str(needle).strip()
     h = str(haystack)
-    return bool(n) and n in h
+    result = bool(n) and n in h
+    _dbg(
+        f"_is_complete_text_token: needle_len={len(n)} haystack_len={len(h)} -> {result}"
+    )
+    return result
 
 
 def _normalize_to_list_pair(
@@ -349,8 +583,13 @@ def _normalize_to_list_pair(
     """
     val_is_list = isinstance(param_value, list)
     src_is_list = isinstance(source, list)
+    _dbg(
+        f"_normalize_to_list_pair: param={param_name!r} "
+        f"val_is_list={val_is_list} src_is_list={src_is_list}"
+    )
 
     if val_is_list != src_is_list:
+        _dbg(f"_normalize_to_list_pair: SHAPE MISMATCH for param={param_name!r}")
         return False, [], [], (
             f"Parameter '{param_name}': value is "
             f"{'a list' if val_is_list else 'a scalar'} but source is "
@@ -361,14 +600,23 @@ def _normalize_to_list_pair(
 
     if val_is_list:
         if len(param_value) != len(source):
+            _dbg(
+                f"_normalize_to_list_pair: LENGTH MISMATCH param={param_name!r} "
+                f"value_len={len(param_value)} source_len={len(source)}"
+            )
             return False, [], [], (
                 f"Parameter '{param_name}': value list has length "
                 f"{len(param_value)} but source list has length "
                 f"{len(source)}. List-shape mismatch — the producing tool "
                 "registered inconsistent provenance."
             )
+        _dbg(
+            f"_normalize_to_list_pair: list-shape OK param={param_name!r} "
+            f"len={len(param_value)}"
+        )
         return True, list(param_value), list(source), None
 
+    _dbg(f"_normalize_to_list_pair: scalar-shape OK param={param_name!r}")
     return False, [param_value], [source], None
 
 
@@ -433,7 +681,21 @@ Return:
 - fail     : parameter setting is not acceptable
 - warning  : plausible but under-justified or ambiguous
 """
-    return judge.invoke(prompt)
+    _dbg(
+        f"_call_param_judge_llm: INVOKE param={parameter_name!r} "
+        f"value={parameter_value!r} target={target_quantity!r} "
+        f"prompt_len={len(prompt)}"
+    )
+    t0 = time.time()
+    result = judge.invoke(prompt)
+    elapsed = time.time() - t0
+    reasoning_preview = str(result.get("reasoning", ""))[:120]
+    _dbg(
+        f"_call_param_judge_llm: RETURN param={parameter_name!r} "
+        f"verdict={result.get('verdict')!r} elapsed={elapsed:.2f}s "
+        f"reasoning_preview={reasoning_preview!r}"
+    )
+    return result
 
 
 def _call_extraction_judge_llm(
@@ -490,7 +752,20 @@ Return:
 - fail     : the value is wrong OR the source is inappropriate for the purpose
 - warning  : ambiguous
 """
-    return judge.invoke(prompt)
+    _dbg(
+        f"_call_extraction_judge_llm: INVOKE extracted={extracted_value!r} "
+        f"source_tool={source_tool!r} prompt_len={len(prompt)}"
+    )
+    t0 = time.time()
+    result = judge.invoke(prompt)
+    elapsed = time.time() - t0
+    reasoning_preview = str(result.get("reasoning", ""))[:120]
+    _dbg(
+        f"_call_extraction_judge_llm: RETURN extracted={extracted_value!r} "
+        f"verdict={result.get('verdict')!r} elapsed={elapsed:.2f}s "
+        f"reasoning_preview={reasoning_preview!r}"
+    )
+    return result
 
 
 # =========================================================
@@ -498,6 +773,7 @@ Return:
 # =========================================================
 @tool
 def generate_structured_report(
+    report_name: Annotated[str, "Name for this report."],
     overall_goal: Annotated[str, "Overall goal of the study. Required and non-empty."],
     quantity_specs: Annotated[
         List[QuantitySpec],
@@ -507,9 +783,51 @@ def generate_structured_report(
     conclusion: Annotated[str, "Prose conclusion."] = "",
     strict: Annotated[bool, "Strict mode for orphan-number detection."] = True,
 ) -> Dict[str, Any]:
-    """Generate a structured report from (value, result_id) claims."""
+    """
+    Build a structured scientific report from numerical claims, each backed
+    by a registered artifact. 
+
+    Always at the end of a study, before declaring the work done.
+    Optionally mid-project, to lock down an intermediate finding before
+    moving on — a mid-project report is verified just like a final one and
+    must stand on its own. 
+
+    YOU ARE RESPONSIBLE FOR EVERY NUMBER YOU CLAIM.
+      * Every QuantitySpec must point at a real `result_id`. If you want
+        a number you don't have an artifact for, run the tool that produces
+        it first.
+      * Do not paraphrase numbers from memory or from raw tool output. If
+        a tool printed a value but it isn't yet a registered artifact, use
+        the extraction tools to register it, then cite the new artifact.
+      * Never do math/calculations yourself. Use the math tool, which produces 
+        artifacts you can cite.
+      * In prose: numbers that are measurements must be cited via
+        `{claim:<quantity_name>}`. Non-measurement numbers (run counts,
+        indices, dates, figure refs) must be wrapped as `{lit:<number>}`.
+      * `overall_goal` is required and non-empty. It is threaded into every
+        per-parameter check; a vague goal weakens the whole verification.
+
+    The function raises (not silently degrades) on: empty overall_goal,
+    duplicate quantity_name, value/artifact mismatch, undeclared citations,
+    or — when strict=True — un-cited numbers in prose. Treat each as a real
+    failure to fix at the source, not to work around.
+    """
+    _dbg(
+        f"generate_structured_report: ENTER report_name={report_name!r} "
+        f"overall_goal: {overall_goal} n_specs={len(quantity_specs)} "
+        f"strict={strict}"
+    )
+
+    if report_name in var.All_Report_Names:
+        _dbg(
+            f"generate_structured_report: name collision — existing names: "
+            f"{sorted(var.All_Report_Names)}"
+        )
+        raise ValueError(f"Report name '{report_name}' already exists. "
+                         "Choose a unique name for each report.")
 
     if not overall_goal or not overall_goal.strip():
+        _dbg("generate_structured_report: overall_goal empty — about to raise")
         raise ValueError(
             "overall_goal is required and must be non-empty. It describes the "
             "study's purpose and is used by the verifier to provide context "
@@ -517,21 +835,56 @@ def generate_structured_report(
         )
 
     parsed_specs = [QuantitySpec.model_validate(x) for x in quantity_specs]
+    _dbg(f"generate_structured_report: parsed {len(parsed_specs)} QuantitySpec(s)")
 
     names = [s.quantity_name for s in parsed_specs]
     dupes = sorted({n for n in names if names.count(n) > 1})
     if dupes:
+        _dbg(f"generate_structured_report: duplicate quantity_names found: {dupes}")
         raise ValueError(
             f"Duplicate quantity_name(s): {dupes}. Each must be unique — "
             "it is the citation handle."
         )
+    _dbg("generate_structured_report: duplicate-name check passed")
+
+    # Per-spec validation: varied_parameters and acknowledged_placeholders
+    # are mutually exclusive scopes. A parameter cannot simultaneously be
+    # being varied and being held at a placeholder for the same claim.
+    for spec in parsed_specs:
+        overlap = set(spec.varied_parameters) & set(spec.acknowledged_placeholders)
+        if overlap:
+            _dbg(
+                f"generate_structured_report: overlap between varied_parameters "
+                f"and acknowledged_placeholders for quantity={spec.quantity_name!r}: "
+                f"{sorted(overlap)}"
+            )
+            raise ValueError(
+                f"Quantity '{spec.quantity_name}': parameters "
+                f"{sorted(overlap)} appear in both `varied_parameters` and "
+                "`acknowledged_placeholders`. These are mutually exclusive — "
+                "a parameter cannot be both intentionally swept AND held at "
+                "a placeholder for the same claim. Place each parameter in "
+                "exactly one list."
+            )
+    _dbg("generate_structured_report: varied/acknowledged overlap check passed")
 
     quantities_sought: List[Dict[str, Any]] = []
     numerical_results: List[ReportNumericalClaim] = []
 
     for spec in parsed_specs:
+        _dbg(
+            f"generate_structured_report: verifying spec quantity={spec.quantity_name!r} "
+            f"value={spec.value!r} result_id={spec.result_id!r}"
+        )
         _get_artifact(spec.result_id)
+        _dbg(
+            f"generate_structured_report: calling CANVAS.verify_artifact "
+            f"value={spec.value!r} result_id={spec.result_id!r}"
+        )
         ok, msg = CANVAS.verify_artifact(spec.value, spec.result_id)
+        _dbg(
+            f"generate_structured_report: verify_artifact -> ok={ok} msg={msg!r}"
+        )
         if not ok:
             raise ValueError(
                 f"Quantity '{spec.quantity_name}': claimed value {spec.value!r} "
@@ -540,6 +893,7 @@ def generate_structured_report(
         quantities_sought.append({
             "quantity_name": spec.quantity_name,
             "varied_parameters": spec.varied_parameters,
+            "acknowledged_placeholders": spec.acknowledged_placeholders,
             "result_id": spec.result_id,
             "unit": spec.unit,
             "note": spec.note,
@@ -550,15 +904,24 @@ def generate_structured_report(
             unit=spec.unit,
             result_id=spec.result_id,
             varied_parameters=spec.varied_parameters,
+            acknowledged_placeholders=spec.acknowledged_placeholders,
             note=spec.note,
         ))
 
     by_name = {c.quantity_name: c for c in numerical_results}
+    _dbg(
+        f"generate_structured_report: all specs verified — "
+        f"by_name keys={list(by_name.keys())}"
+    )
 
     for field_name, text in (("qualitative_findings", qualitative_findings),
                              ("conclusion", conclusion)):
         used = set(_CLAIM_TAG.findall(text))
         missing = used - set(by_name)
+        _dbg(
+            f"generate_structured_report: tag-check field={field_name!r} "
+            f"used_tags={sorted(used)} missing={sorted(missing)}"
+        )
         if missing:
             raise ValueError(
                 f"{field_name} references undeclared quantity_name(s): "
@@ -571,6 +934,10 @@ def generate_structured_report(
             stripped = _CLAIM_TAG.sub("", text)
             stripped = _LIT_TAG.sub("", stripped)
             orphans = _NUMBER_RE.findall(stripped)
+            _dbg(
+                f"generate_structured_report: orphan-number check field={field_name!r} "
+                f"n_orphans={len(orphans)} orphans={orphans}"
+            )
             if orphans:
                 raise ValueError(
                     f"{field_name} contains un-cited numbers: {orphans}. "
@@ -580,14 +947,40 @@ def generate_structured_report(
                     "strict=False only as a last resort."
                 )
 
+    _dbg("generate_structured_report: rendering markdown")
     rendered = _render_report_markdown(
         overall_goal=overall_goal,
         quantities=numerical_results,
         qualitative_findings=qualitative_findings,
         conclusion=conclusion,
     )
-
-    return StructuredScientificReport(
+    _dbg(f"generate_structured_report: rendered markdown len={len(rendered)}")
+    
+    parent_result_ids = list({c.result_id for c in numerical_results})
+    _dbg(
+        f"generate_structured_report: parent_result_ids fingerprint "
+        f"n={len(parent_result_ids)} ids={parent_result_ids}"
+    )
+    
+    id = CANVAS.register_tool_output(
+        tool_name="generate_structured_report",
+        description=f"Structured scientific report with {len(numerical_results)} numerical claims.",
+        value=rendered,
+        args={
+            "overall_goal": overall_goal,
+            "quantity_specs": [s.model_dump() for s in parsed_specs],
+            "qualitative_findings": qualitative_findings,
+            "conclusion": conclusion,
+        },
+        reasons={},
+        parent_result_ids=parent_result_ids,
+        metadata={"report": True},    
+    )
+    _dbg(f"generate_structured_report: register_tool_output returned id={id!r}")
+    
+    var.reportName = report_name
+    
+    tmpReport = StructuredScientificReport(
         overall_goal=overall_goal,
         quantities_sought=quantities_sought,
         numerical_results=numerical_results,
@@ -595,6 +988,19 @@ def generate_structured_report(
         conclusion=conclusion,
         rendered_markdown=rendered,
     ).model_dump()
+    
+    CANVAS.canvas[report_name] = tmpReport
+    print(tmpReport)
+    _dbg(
+        f"generate_structured_report: canvas[{report_name!r}] written. "
+        f"All canvas keys now: {list(CANVAS.canvas.keys())}"
+    )
+
+    _dbg(
+        f"generate_structured_report: RETURN n_quantities={len(numerical_results)} "
+        f"report_name={report_name!r}"
+    )
+    return tmpReport
 
 
 def _render_report_markdown(
@@ -605,8 +1011,15 @@ def _render_report_markdown(
     conclusion: str,
 ) -> str:
     by_name = {c.quantity_name: c for c in quantities}
+    _dbg(
+        f"_render_report_markdown: ENTER n_quantities={len(quantities)} "
+        f"qf_len={len(qualitative_findings)} conclusion_len={len(conclusion)}"
+    )
+
+    sub_count = {"claim": 0, "lit": 0}
 
     def _sub(m: "re.Match[str]") -> str:
+        sub_count["claim"] += 1
         c = by_name[m.group(1)]
         val = f"{c.value:g}"
         if c.unit:
@@ -614,7 +1027,10 @@ def _render_report_markdown(
         return f"{val} [^{c.quantity_name}]"
 
     def _unwrap_lit(text: str) -> str:
-        return _LIT_TAG.sub(lambda m: m.group(1), text)
+        def _u(m: "re.Match[str]") -> str:
+            sub_count["lit"] += 1
+            return m.group(1)
+        return _LIT_TAG.sub(_u, text)
 
     lines: List[str] = [
         "# Scientific Report", "",
@@ -646,7 +1062,13 @@ def _render_report_markdown(
             f"[^{c.quantity_name}]: **{c.quantity_name}** = {c.value:g}{unit}, "
             f"source artifact `{c.result_id}`{note}"
         )
-    return "\n".join(lines).rstrip() + "\n"
+    final = "\n".join(lines).rstrip() + "\n"
+    _dbg(
+        f"_render_report_markdown: RETURN line_count={len(lines)} "
+        f"final_char_len={len(final)} claim_subs={sub_count['claim']} "
+        f"lit_unwraps={sub_count['lit']}"
+    )
+    return final
 
 
 # =========================================================
@@ -662,18 +1084,32 @@ def verify_artifact_parameterization(
     judge,
 ) -> Dict[str, Any]:
     """Verify one artifact locally."""
+    _dbg(
+        f"verify_artifact_parameterization: ENTER result_id={result_id!r} "
+        f"target_quantity={target_quantity!r} "
+        f"varied={varied_parameters} sensitive={sensitive_parameters}"
+    )
     artifact = _get_artifact(result_id)
     args = artifact.args or {}
     reasons = artifact.reasons or {}
     param_source_ids = _param_source_ids(artifact)
     artifact_summary = _summarize_artifact(artifact)
     is_info_tool = artifact.tool_name in INFO_TOOLS
+    _dbg(
+        f"verify_artifact_parameterization: tool_name={artifact.tool_name!r} "
+        f"is_info_tool={is_info_tool} n_args={len(args)} "
+        f"n_reasons={len(reasons)} n_param_sources={len(param_source_ids)}"
+    )
 
     checks: List[ParamCheckResult] = []
     overall: str = "pass"
 
     # R0 — extraction tool special case.
     if artifact.tool_name in EXTRACTION_TOOL_NAMES:
+        _dbg(
+            f"verify_artifact_parameterization: R0 path — extraction tool "
+            f"{artifact.tool_name!r}"
+        )
         for c in _verify_extraction_behavior(
             artifact=artifact, args=args,
             param_source_ids=param_source_ids,
@@ -684,18 +1120,97 @@ def verify_artifact_parameterization(
 
     # Per-parameter checks.
     for param_name, param_value in args.items():
+        _dbg(
+            f"verify_artifact_parameterization: --- param loop --- "
+            f"name={param_name!r} value={param_value!r}"
+        )
         # Reason lookup: per-param key first, then the singleton "reasons"
         # fallback used by tools whose `reasons: str` was wrapped as
         # `{"reasons": "..."}` at registration time.
+        if param_name in reasons:
+            reason_source_key = param_name
+        elif "reasons" in reasons:
+            reason_source_key = "reasons (fallback)"
+        else:
+            reason_source_key = "(none — empty reason)"
         reason = reasons.get(param_name, "") or reasons.get("reasons", "")
+        _dbg(
+            f"verify_artifact_parameterization: reason lookup for "
+            f"{param_name!r} -> source_key={reason_source_key!r} "
+            f"reason_len={len(reason)}"
+        )
         source = param_source_ids.get(param_name)
 
-        is_sensitive = param_name in sensitive_parameters
+        # Detect explicit placeholder declaration. The agent declares a
+        # placeholder by passing PLACEHOLDER_REF as the *_ref / *_w_ref
+        # value at the producing tool call. For list-shaped sources, any
+        # PLACEHOLDER_REF entry triggers the placeholder branch for the
+        # whole parameter (partial placeholders are not modelled).
+        is_placeholder = source == PLACEHOLDER_REF or (
+            isinstance(source, list) and PLACEHOLDER_REF in source
+        )
+
+        # Match either bare `<param>` (applies to every tool) or scoped
+        # `<tool>.<param>` (applies only to this tool).
+        is_sensitive = (
+            param_name in sensitive_parameters
+            or f"{artifact.tool_name}.{param_name}" in sensitive_parameters
+        )        
         is_varied = param_name in varied_parameters
+        if is_sensitive and not is_varied and is_placeholder:
+            _branch_label = "R1-placeholder"
+        elif is_sensitive and not is_varied:
+            _branch_label = "R1"
+        elif is_sensitive and is_varied:
+            _branch_label = "R2"
+        else:
+            _branch_label = "R3"
+        _dbg(
+            f"verify_artifact_parameterization: branch decision for "
+            f"{param_name!r}: is_sensitive={is_sensitive} is_varied={is_varied} "
+            f"is_placeholder={is_placeholder} is_info_tool={is_info_tool} "
+            f"has_reason={bool(reason.strip())} -> rule={_branch_label}"
+        )
+
+        # R1-placeholder — sensitive, not varied, agent acknowledged
+        # placeholder. No upstream source required; judgment is on whether
+        # the chosen placeholder is a reasonable provisional default.
+        if is_sensitive and not is_varied and is_placeholder:
+            _dbg(
+                f"verify_artifact_parameterization: R1-placeholder path — "
+                f"calling judge for {param_name!r} (no source recovery)"
+            )
+            judgement = _call_param_judge_llm(
+                overall_goal=overall_goal,
+                target_quantity=target_quantity,
+                varied_parameters=varied_parameters,
+                sensitive_parameters=sensitive_parameters,
+                artifact_summary=artifact_summary,
+                parameter_name=param_name, parameter_value=param_value,
+                reason=reason, source_artifact_summary=None,
+                rule_to_apply=R1_PLACEHOLDER_RULE, judge=judge,
+            )
+            _dbg(
+                f"verify_artifact_parameterization: judge verdict for "
+                f"{param_name!r} -> {judgement['verdict']!r}"
+            )
+            checks.append(ParamCheckResult(
+                parameter_name=param_name, parameter_value=param_value,
+                verdict=judgement["verdict"],
+                rule_applied=R1_PLACEHOLDER_RULE,
+                source_result_id=source,
+                reasoning=judgement["reasoning"],
+            ))
+            overall = _fold_verdict(overall, judgement["verdict"])
+            continue
 
         # R1 — sensitive and not varied: must be sourced.
         if is_sensitive and not is_varied:
             if source is None:
+                _dbg(
+                    f"verify_artifact_parameterization: R1 — no source "
+                    f"recorded for {param_name!r} -> FAIL"
+                )
                 checks.append(ParamCheckResult(
                     parameter_name=param_name, parameter_value=param_value,
                     verdict="fail", rule_applied=R1_RULE,
@@ -709,6 +1224,10 @@ def verify_artifact_parameterization(
                 overall = _fold_verdict(overall, "fail")
                 continue
 
+            _dbg(
+                f"verify_artifact_parameterization: R1 path — calling "
+                f"_verify_sourced_param for {param_name!r}"
+            )
             checks_to_add, branch_verdict = _verify_sourced_param(
                 param_name=param_name, param_value=param_value,
                 source=source, rule=R1_RULE,
@@ -732,6 +1251,10 @@ def verify_artifact_parameterization(
 
         # R3 lenient path for information-only tools with empty reasons.
         if (not is_sensitive) and is_info_tool and not reason.strip():
+            _dbg(
+                f"verify_artifact_parameterization: R3 lenient info-tool path "
+                f"for {param_name!r} on tool {artifact.tool_name!r} -> info"
+            )
             checks.append(ParamCheckResult(
                 parameter_name=param_name, parameter_value=param_value,
                 verdict="info", rule_applied=rule,
@@ -747,11 +1270,20 @@ def verify_artifact_parameterization(
         # element-by-element (list shape) or directly (scalar shape).
         source_summary: Optional[Any] = None
         if source is not None:
+            _dbg(
+                f"verify_artifact_parameterization: optional source declared "
+                f"for {param_name!r} — running belt-and-braces match"
+            )
             checks_to_add, branch_verdict, source_summary = (
                 _verify_optional_source_match(
                     param_name=param_name, param_value=param_value,
                     source=source, rule=rule,
                 )
+            )
+            _dbg(
+                f"verify_artifact_parameterization: belt-and-braces result "
+                f"for {param_name!r}: branch_verdict={branch_verdict!r} "
+                f"n_extra_checks={len(checks_to_add)}"
             )
             if checks_to_add:
                 checks.extend(checks_to_add)
@@ -761,6 +1293,10 @@ def verify_artifact_parameterization(
                 overall = _fold_verdict(overall, branch_verdict)
 
         # LLM judgment.
+        _dbg(
+            f"verify_artifact_parameterization: invoking judge for "
+            f"{param_name!r} under rule={'R2' if rule is R2_RULE else 'R3'}"
+        )
         judgement = _call_param_judge_llm(
             overall_goal=overall_goal,
             target_quantity=target_quantity,
@@ -774,6 +1310,10 @@ def verify_artifact_parameterization(
             rule_to_apply=rule, 
             judge=judge,
         )
+        _dbg(
+            f"verify_artifact_parameterization: judge verdict for "
+            f"{param_name!r} -> {judgement['verdict']!r}"
+        )
         checks.append(ParamCheckResult(
             parameter_name=param_name, parameter_value=param_value,
             verdict=judgement["verdict"], rule_applied=rule,
@@ -781,6 +1321,11 @@ def verify_artifact_parameterization(
             reasoning=judgement["reasoning"],
         ))
         overall = _fold_verdict(overall, judgement["verdict"])
+
+    _dbg(
+        f"verify_artifact_parameterization: DONE result_id={result_id!r} "
+        f"overall={overall!r} n_checks={len(checks)}"
+    )
 
     return ArtifactVerificationResult(
         result_id=result_id,
@@ -813,10 +1358,15 @@ def _verify_sourced_param(
 ) -> Tuple[List[ParamCheckResult], str]:
     """R1 path: must be sourced. Element-by-element value match, then a
     single LLM judge call evaluating the source(s) collectively."""
+    _dbg(
+        f"_verify_sourced_param: ENTER param={param_name!r} "
+        f"value={param_value!r} source={source!r}"
+    )
     is_list, values, sources, err = _normalize_to_list_pair(
         param_value, source, param_name
     )
     if err is not None:
+        _dbg(f"_verify_sourced_param: shape error -> FAIL ({err!r})")
         return [ParamCheckResult(
             parameter_name=param_name, parameter_value=param_value,
             verdict="fail", rule_applied=rule,
@@ -825,9 +1375,17 @@ def _verify_sourced_param(
 
     # Value-match each element.
     for i, (v, ref) in enumerate(zip(values, sources)):
+        _dbg(
+            f"_verify_sourced_param: value-match element idx={i} "
+            f"value={v!r} ref={ref!r}"
+        )
         ok, msg = CANVAS.verify_artifact(v, ref)
+        _dbg(
+            f"_verify_sourced_param: verify_artifact -> ok={ok} msg={msg!r}"
+        )
         if not ok:
             label = f"{param_name}[{i}]" if is_list else param_name
+            _dbg(f"_verify_sourced_param: element {label} FAILED value-match")
             return [ParamCheckResult(
                 parameter_name=label, parameter_value=v,
                 verdict="fail", rule_applied=rule,
@@ -839,8 +1397,13 @@ def _verify_sourced_param(
         source_summary: Any = [
             _summarize_artifact(_get_artifact(ref)) for ref in sources
         ]
+        _dbg(
+            f"_verify_sourced_param: built list source_summary "
+            f"n_entries={len(source_summary)}"
+        )
     else:
         source_summary = _summarize_artifact(_get_artifact(sources[0]))
+        _dbg("_verify_sourced_param: built scalar source_summary")
 
     judgement = _call_param_judge_llm(
         overall_goal=overall_goal,
@@ -851,6 +1414,10 @@ def _verify_sourced_param(
         parameter_name=param_name, parameter_value=param_value,
         reason=reason, source_artifact_summary=source_summary,
         rule_to_apply=rule, judge=judge,
+    )
+    _dbg(
+        f"_verify_sourced_param: RETURN param={param_name!r} "
+        f"verdict={judgement['verdict']!r}"
     )
     return [ParamCheckResult(
         parameter_name=param_name, parameter_value=param_value,
@@ -869,10 +1436,15 @@ def _verify_optional_source_match(
 ) -> Tuple[List[ParamCheckResult], str, Optional[Any]]:
     """R2/R3 belt-and-braces. Returns checks (failures only), branch verdict,
     and the source summary to pass to the judge if value-match passes."""
+    _dbg(
+        f"_verify_optional_source_match: ENTER param={param_name!r} "
+        f"value={param_value!r} source={source!r}"
+    )
     is_list, values, sources, err = _normalize_to_list_pair(
         param_value, source, param_name
     )
     if err is not None:
+        _dbg(f"_verify_optional_source_match: shape error -> FAIL ({err!r})")
         return [ParamCheckResult(
             parameter_name=param_name, parameter_value=param_value,
             verdict="fail", rule_applied=rule,
@@ -880,9 +1452,21 @@ def _verify_optional_source_match(
         )], "fail", None
 
     for i, (v, ref) in enumerate(zip(values, sources)):
+        _dbg(
+            f"_verify_optional_source_match: value-match element idx={i} "
+            f"value={v!r} ref={ref!r}"
+        )
         ok, msg = CANVAS.verify_artifact(v, ref)
+        _dbg(
+            f"_verify_optional_source_match: verify_artifact -> ok={ok} "
+            f"msg={msg!r}"
+        )
         if not ok:
             label = f"{param_name}[{i}]" if is_list else param_name
+            _dbg(
+                f"_verify_optional_source_match: element {label} FAILED "
+                "value-match"
+            )
             return [ParamCheckResult(
                 parameter_name=label, parameter_value=v,
                 verdict="fail", rule_applied=rule,
@@ -890,10 +1474,23 @@ def _verify_optional_source_match(
             )], "fail", None
 
     if is_list:
-        return [], "pass", [
-            _summarize_artifact(_get_artifact(ref)) for ref in sources
+        summary: Any = [
+            (None if ref == PLACEHOLDER_REF
+             else _summarize_artifact(_get_artifact(ref)))
+            for ref in sources
         ]
-    return [], "pass", _summarize_artifact(_get_artifact(sources[0]))
+        _dbg(
+            f"_verify_optional_source_match: PASS list-shape "
+            f"n_entries={len(summary)} "
+            f"n_placeholders={sum(1 for s in summary if s is None)}"
+        )
+        return [], "pass", summary
+    if sources[0] == PLACEHOLDER_REF:
+        _dbg("_verify_optional_source_match: PASS scalar-shape (placeholder)")
+        return [], "pass", None
+    summary = _summarize_artifact(_get_artifact(sources[0]))
+    _dbg("_verify_optional_source_match: PASS scalar-shape")
+    return [], "pass", summary
 
 
 def _verify_extraction_behavior(
@@ -911,27 +1508,51 @@ def _verify_extraction_behavior(
     fall back to other recovery paths for hypothetical future extraction
     tools.
     """
+    _dbg(
+        f"_verify_extraction_behavior: ENTER result_id={artifact.result_id!r} "
+        f"tool={artifact.tool_name!r}"
+    )
     extraction_rationale = artifact.description
 
     source_text: Optional[str] = (
         args.get("source_text") or args.get("text") or args.get("content")
+    )
+    _dbg(
+        f"_verify_extraction_behavior: source_text from args? "
+        f"{source_text is not None}"
     )
 
     source_id_for_ref: Optional[str] = None
     canonical = param_source_ids.get("source_tool_call_id")
     if isinstance(canonical, str) and canonical:
         source_id_for_ref = canonical
+        _dbg(
+            f"_verify_extraction_behavior: source recovery — canonical key "
+            f"hit -> {source_id_for_ref!r}"
+        )
     if source_id_for_ref is None:
         for candidate in ("source", "source_file", "file", "filename",
                           "file_path", "input_file", "path"):
             v = param_source_ids.get(candidate)
+            _dbg(
+                f"_verify_extraction_behavior: source recovery — fallback try "
+                f"{candidate!r} -> {v!r}"
+            )
             if isinstance(v, str) and v:
                 source_id_for_ref = v
+                _dbg(
+                    f"_verify_extraction_behavior: source recovery — fallback "
+                    f"hit on {candidate!r} -> {source_id_for_ref!r}"
+                )
                 break
     if source_id_for_ref is None and len(param_source_ids) == 1:
         only = next(iter(param_source_ids.values()))
         if isinstance(only, str):
             source_id_for_ref = only
+            _dbg(
+                f"_verify_extraction_behavior: source recovery — single-entry "
+                f"fallback -> {source_id_for_ref!r}"
+            )
 
     source_description = ""
     source_tool = ""
@@ -949,10 +1570,23 @@ def _verify_extraction_behavior(
             source_description = src.description
             source_tool = src.tool_name
             source_args_json = json.dumps(src.args, indent=2, default=str)
-        except Exception:
+            _dbg(
+                f"_verify_extraction_behavior: parent artifact loaded — "
+                f"tool={source_tool!r} src_text_len="
+                f"{len(source_text) if source_text else 0}"
+            )
+        except Exception as e:
+            _dbg(
+                f"_verify_extraction_behavior: parent artifact load FAILED — "
+                f"{type(e).__name__}: {e}"
+            )
             pass
 
     if not source_text:
+        _dbg(
+            "_verify_extraction_behavior: no source text recoverable — "
+            "emitting WARNING"
+        )
         return [ParamCheckResult(
             parameter_name="<extracted_value>",
             parameter_value=_flatten_listed_value(artifact),
@@ -972,13 +1606,25 @@ def _verify_extraction_behavior(
         ]
     else:
         elements = [("<extracted_value>", artifact.value)]
+    _dbg(
+        f"_verify_extraction_behavior: element count = {len(elements)} "
+        f"(listed={_is_listed(artifact)})"
+    )
 
     out: List[ParamCheckResult] = []
     source_text_str = str(source_text)
 
     for label, value in elements:
+        _dbg(
+            f"_verify_extraction_behavior: checking element {label} "
+            f"value={value!r}"
+        )
         if _looks_numeric(value):
             if not _is_complete_numeric_token(str(value), source_text_str):
+                _dbg(
+                    f"_verify_extraction_behavior: numeric token check "
+                    f"FAILED for {label}"
+                )
                 out.append(ParamCheckResult(
                     parameter_name=label, parameter_value=value,
                     verdict="fail",
@@ -996,6 +1642,10 @@ def _verify_extraction_behavior(
                 continue
         else:
             if not _is_complete_text_token(str(value), source_text_str):
+                _dbg(
+                    f"_verify_extraction_behavior: text token check "
+                    f"FAILED for {label}"
+                )
                 out.append(ParamCheckResult(
                     parameter_name=label, parameter_value=value,
                     verdict="fail",
@@ -1010,6 +1660,10 @@ def _verify_extraction_behavior(
                 ))
                 continue
 
+        _dbg(
+            f"_verify_extraction_behavior: token check PASSED for {label} — "
+            "invoking extraction judge"
+        )
         judgement = _call_extraction_judge_llm(
             overall_goal=overall_goal,
             source_description=source_description,
@@ -1019,6 +1673,10 @@ def _verify_extraction_behavior(
             extracted_value=value,
             extraction_rationale=extraction_rationale,
             judge=judge,
+        )
+        _dbg(
+            f"_verify_extraction_behavior: judge verdict for {label} -> "
+            f"{judgement['verdict']!r}"
         )
         out.append(ParamCheckResult(
             parameter_name=label, parameter_value=value,
@@ -1032,6 +1690,10 @@ def _verify_extraction_behavior(
             reasoning=judgement["reasoning"],
         ))
 
+    _dbg(
+        f"_verify_extraction_behavior: RETURN n_results={len(out)} "
+        f"verdicts={[c.verdict for c in out]}"
+    )
     return out
 
 
@@ -1050,8 +1712,18 @@ def _verify_one_artifact_recursive(
     artifact_results: List[ArtifactVerificationResult],
     issues: List[ReportVerificationIssue],
     judge,
+    depth: int = 0,
 ) -> None:
+    indent = "  " * depth
+    _dbg(
+        f"{indent}_verify_one_artifact_recursive: ENTER depth={depth} "
+        f"result_id={result_id!r} target_quantity={target_quantity!r}"
+    )
     if result_id in visited:
+        _dbg(
+            f"{indent}_verify_one_artifact_recursive: already visited "
+            f"{result_id!r} — skipping"
+        )
         return
     visited.add(result_id)
 
@@ -1062,8 +1734,18 @@ def _verify_one_artifact_recursive(
     # through it sees the leaf verdicts before the parent that depends on
     # them — matching how a human auditor would walk the chain.
     children = _collect_recursive_source_ids(artifact)
+    children_total = len(children)
+    children_failed = 0
+    _dbg(
+        f"{indent}_verify_one_artifact_recursive: result_id={result_id!r} "
+        f"has {children_total} children: {children}"
+    )
     children_checked: List[str] = []
     for child_id in children:
+        _dbg(
+            f"{indent}_verify_one_artifact_recursive: descending into child "
+            f"{child_id!r} (parent={result_id!r})"
+        )
         try:
             _verify_one_artifact_recursive(
                 result_id=child_id,
@@ -1075,15 +1757,32 @@ def _verify_one_artifact_recursive(
                 artifact_results=artifact_results,
                 issues=issues,
                 judge=judge,
+                depth=depth + 1,
             )
             children_checked.append(child_id)
+            _dbg(
+                f"{indent}_verify_one_artifact_recursive: returned from child "
+                f"{child_id!r}"
+            )
         except Exception as e:                        # noqa: BLE001
+            children_failed += 1
+            _dbg(
+                f"{indent}_verify_one_artifact_recursive: child {child_id!r} "
+                f"raised {type(e).__name__}: {e}"
+            )
             issues.append(ReportVerificationIssue(
                 level="artifact",
                 location=f"result_id={result_id} -> child={child_id}",
                 verdict="fail",
                 message=str(e),
             ))
+
+    _dbg(
+        f"{indent}_verify_one_artifact_recursive: post-order summary for "
+        f"{result_id!r} — children_total={children_total} "
+        f"children_checked={len(children_checked)} "
+        f"children_failed={children_failed}"
+    )
 
     local_dict = verify_artifact_parameterization(
         target_quantity=target_quantity,
@@ -1096,8 +1795,26 @@ def _verify_one_artifact_recursive(
     local_result = ArtifactVerificationResult.model_validate(local_dict)
     local_result.recursive_children_checked = children_checked
     artifact_results.append(local_result)
+    _dbg(
+        f"{indent}_verify_one_artifact_recursive: appended local result for "
+        f"{result_id!r} verdict={local_result.overall_verdict!r}"
+    )
 
     if local_result.overall_verdict != "pass":
+        _dbg(
+            f"{indent}_verify_one_artifact_recursive: appending issue for "
+            f"{result_id!r} verdict={local_result.overall_verdict!r}"
+        )
+        
+        nonpassMSG = f"{local_result.summary}\n"
+        for check in local_result.checks:
+            if check.verdict != "pass":
+                nonpassMSG += (
+                    f"- Parameter '{check.parameter_name}': "
+                    f"{check.verdict.upper()} (reason: {check.reasoning})\n"
+                )
+        nonpassMSG += "--------------------------------------\n"
+        
         issues.append(ReportVerificationIssue(
             level="artifact",
             location=f"result_id={result_id}",
@@ -1112,16 +1829,37 @@ def verify_structured_report(
     judge,
 ) -> Dict[str, Any]:
     """Verify a structured report end-to-end."""
+    _dbg(
+        f"verify_structured_report: ENTER reportName={reportName!r} "
+        f"sensitive_parameters={sensitive_parameters}"
+    )
     if reportName not in CANVAS.canvas:
+        _dbg(
+            f"verify_structured_report: canvas key not found. "
+            f"Available keys: {list(CANVAS.canvas.keys())}"
+        )
         raise ValueError(f"Canvas key '{reportName}' not found.")
 
     raw = CANVAS.canvas[reportName]
     if isinstance(raw, StructuredScientificReport):
+        _dbg(
+            "verify_structured_report: canvas entry was already a "
+            "StructuredScientificReport instance"
+        )
         parsed_report = raw
     else:
+        _dbg(
+            f"verify_structured_report: canvas entry is "
+            f"{type(raw).__name__} — re-validating into "
+            "StructuredScientificReport"
+        )
         try:
             parsed_report = StructuredScientificReport.model_validate(raw)
         except Exception as e:
+            _dbg(
+                f"verify_structured_report: model_validate FAILED — "
+                f"{type(e).__name__}: {e}"
+            )
             raise ValueError(
                 f"Canvas entry '{reportName}' is not a valid "
                 f"StructuredScientificReport: {e}"
@@ -1132,7 +1870,16 @@ def verify_structured_report(
     all_visited: Set[str] = set()
 
     overall_goal = parsed_report.overall_goal
+    _dbg(
+        f"verify_structured_report: parsed report — overall_goal_len="
+        f"{len(overall_goal)} n_claims="
+        f"{len(parsed_report.numerical_results)}"
+    )
     if not overall_goal or not overall_goal.strip():
+        _dbg(
+            "verify_structured_report: overall_goal empty — emitting "
+            "report-level FAIL and short-circuiting"
+        )
         issues.append(ReportVerificationIssue(
             level="report",
             location="overall_goal",
@@ -1152,9 +1899,18 @@ def verify_structured_report(
         ).model_dump()
 
     for claim in parsed_report.numerical_results:
+        _dbg(
+            f"verify_structured_report: ===== claim "
+            f"{claim.quantity_name!r} ===== value={claim.value!r} "
+            f"result_id={claim.result_id!r} varied={claim.varied_parameters}"
+        )
         try:
             _get_artifact(claim.result_id)
         except Exception as e:                        # noqa: BLE001
+            _dbg(
+                f"verify_structured_report: claim {claim.quantity_name!r} "
+                f"artifact lookup FAILED — {type(e).__name__}: {e}"
+            )
             issues.append(ReportVerificationIssue(
                 level="claim",
                 location=f"quantity={claim.quantity_name}",
@@ -1164,6 +1920,10 @@ def verify_structured_report(
             continue
 
         ok, msg = CANVAS.verify_artifact(claim.value, claim.result_id)
+        _dbg(
+            f"verify_structured_report: claim {claim.quantity_name!r} "
+            f"value-match -> ok={ok} msg={msg!r}"
+        )
         if not ok:
             issues.append(ReportVerificationIssue(
                 level="claim",
@@ -1173,10 +1933,49 @@ def verify_structured_report(
             ))
             continue
 
+        # Placeholder-resolution check. Walk the value-flow chain (only via
+        # parent_result_ids_w_args) and surface any placeholder source that
+        # is not resolved by:
+        #   (a) a real ref pinning the same parameter closer to the claim,
+        #   (b) the parameter being in claim.varied_parameters, or
+        #   (c) the parameter being in claim.acknowledged_placeholders.
+        _dbg(
+            f"verify_structured_report: claim {claim.quantity_name!r} — "
+            f"running placeholder-resolution walk "
+            f"(varied={list(claim.varied_parameters)} "
+            f"acknowledged={list(claim.acknowledged_placeholders)})"
+        )
+        unresolved = _walk_placeholders_for_claim(
+            result_id=claim.result_id,
+            seen_real_for_param=set(),
+            varied_parameters=set(claim.varied_parameters),
+            acknowledged_placeholders=set(claim.acknowledged_placeholders),
+            visited=set(),
+        )
+        _dbg(
+            f"verify_structured_report: claim {claim.quantity_name!r} — "
+            f"placeholder walk found n={len(unresolved)} unresolved entries"
+        )
+        for artifact_id, param_name, source_repr, message in unresolved:
+            issues.append(ReportVerificationIssue(
+                level="claim",
+                location=(
+                    f"quantity={claim.quantity_name}, "
+                    f"artifact={artifact_id}, param={param_name}"
+                ),
+                verdict="fail",
+                message=message,
+            ))
+
         # Per-claim visited scope: the same upstream artifact reachable from
         # two different claims gets verified twice, under each claim's own
         # `varied_parameters`.
         visited: Set[str] = set()
+        visited_before = len(visited)
+        _dbg(
+            f"verify_structured_report: claim {claim.quantity_name!r} — "
+            f"starting recursive descent (visited size before={visited_before})"
+        )
         _verify_one_artifact_recursive(
             result_id=claim.result_id,
             target_quantity=claim.quantity_name,
@@ -1188,6 +1987,11 @@ def verify_structured_report(
             issues=issues,
             judge=judge,
         )
+        _dbg(
+            f"verify_structured_report: claim {claim.quantity_name!r} — "
+            f"recursive descent complete (blast radius={len(visited)} "
+            f"artifacts)"
+        )
         all_visited.update(visited)
 
     if any(i.verdict == "fail" for i in issues):
@@ -1196,6 +2000,20 @@ def verify_structured_report(
         overall = "warning"
     else:
         overall = "pass"
+
+    # Issue breakdown by level for log readability.
+    level_counts: Dict[str, int] = {}
+    for i in issues:
+        level_counts[i.level] = level_counts.get(i.level, 0) + 1
+    n_pass = sum(1 for r in artifact_results if r.overall_verdict == "pass")
+    n_warn = sum(1 for r in artifact_results if r.overall_verdict == "warning")
+    n_fail = sum(1 for r in artifact_results if r.overall_verdict == "fail")
+    _dbg(
+        f"verify_structured_report: AGGREGATE overall={overall!r} "
+        f"n_artifacts_checked={len(all_visited)} "
+        f"artifact_verdicts(pass/warn/fail)={n_pass}/{n_warn}/{n_fail} "
+        f"issues_by_level={level_counts}"
+    )
 
     return ReportVerificationResult(
         overall_verdict=overall,
