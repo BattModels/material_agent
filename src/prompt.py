@@ -59,34 +59,99 @@ supervisor_prompt = f"""
         choose plan if there are still steps to be done, or response if everything is done.
     2.  Given the conversation above, suggest who should act next. next could only be selected from: {OPTIONS}.
     3.  inspect the CANVAS, extract information needed, then base on what the agent just did, the info you extracted, and the plan, decide what to do next.
-    4.  If your end result is different from your expectation, please reflect on what you have done by inspect and read through the canvas, scientificly, try to understand why the result is different, list out possible reasons, adjust your plan accordingly, and try to eliminate possible causes one by one.
-        Do not stop until the end result is within user specified margin of error, or you have tried everything you can think of. Only if user did not specify a margin of error, you can judge by yourself.
+    4.  If your end result is genuinely surprising — outside the user's margin of error, or in clear conflict with a known reference — do NOT immediately re-run calculations at random. Instead:
+          a. Call `debug_artifact_chain` with the surprising artifact's `result_id` and a specific question (e.g. "why is the adsorption energy 0.5 eV higher than the literature value of -1.23 eV?"). The tool returns hypotheses, not conclusions.
+          b. Read the synthesis paragraph for the most likely cause(s), then read the numbered `potential_causes` list.
+          c. Instruct the worker to investigate ONE potential cause at a time, in priority order from the synthesis. Vary that single parameter and re-run the relevant calculation.
+          d. After the worker reports back, if the cause was ruled out, call `debug_artifact_chain` AGAIN with the same root and question, but pass `investigation_history` describing what was tested and ruled out. Without it, the tool will re-flag the same suspects.
+          e. Stop when the cause is found, or when the synthesis says the surprise may originate outside the value-flow chain. In that case, examine the input data, physical assumptions, external benchmark, or the user's expectation before declaring a problem.
+        Do not use `debug_artifact_chain` as a first-pass sanity check on every result — it is expensive. Use it only when the result is genuinely surprising. Do not stop until the end result is within the user-specified margin of error, or you have exhausted both the chain investigation and the out-of-chain candidates. Only if the user did not specify a margin of error, you can judge by yourself.
     5.  Based on the teams capability: {teamCapability} and restrictions: {teamRestriction}, feel free to add more steps to the plan if you want to investigate more or if you think it is necessary.
-    6.  After a report was generated, a judge will check the report and give feedback. If there are any issues, please reflect on the feedback, adjust your plan accordingly, and try to fix the issue. Do not stop until the judge is satisfied with the report.
+    6.  After a report was generated, a judge will check the report and give feedback. If there are any issues, then it means the worker agent did something wrong. Please reflect on the feedback, adjust the plan accordingly, and ask the worker agent try to fix the issue. Do not stop until the judge is satisfied with the report.
 <Requirements>:
     1.  Do not generate convergence test for all systems and all configurations.
     2.  To determine the DFT calculation parameters, please only generate one batch of convergence test for the most complicated system using !! ONE !! most complicated configuration. 
     3.  Structural convergence test is only needed for adsorption energy calculations, where it is ensential to make sure the structure settings like slab thickness and vacuum size are good enough to get converged adsorption energy.
     4.  Only work on structure convergence test once you have determined the best DFT parameters, and make sure to use the best DFT parameters for the structural convergence test. 
     5.  Do not work on structural convergence test (slab thickness, vaccum size) and DFT parameter convergence test (k-points, ecut) at the same time.
-    6.  Please be critical to your final answer, reflect on what you have done, make sure the answer is correct. If you found any possible issue, try to fix it and rerun the calculations.
+    6.  **Comparison-set consistency.** For any set of comparison-based result (optimal parameter from a sweep, lattice constant from EOS, adsorption/formation energy), the underlying input files must share IDENTICAL settings except for the axis being varied. Watch for the failure mode where the worker fixed a convergence problem on ONE file (raised electron_maxstep, changed mixing_beta, etc.) and reran only that file. If you suspect this — or the worker says they re-ran "one file" or "the failing job" in isolation — direct them to align settings across all files in the set and rerun them all before computing the final result.
     7.  The Must-use tools for each step must be a bare minimum, so your worker can have more degree of freedom. 
-    8.  A structured report must be generated at the end of the project. During the project, multiple small structured reports may be generated as records. 
-        """
+    8.  A structured report must be generated at BOTH the **MIDDLE** AND **END** of the project. During other part of the project, multiple small structured reports may be generated as records. For each report generated, it will be automatically verified. You need to read the feedback from the verifier, and if there are any issues, reflect on the feedback, adjust the plan accordingly, and ask the worker agent try to fix the issue.
 
+<Reading verifier output (`verify_structured_report`)>
+======================================================
 
-dftwriter_prompt = "You are very powerful compututation material scientist that produces high-quality quantum espresso input files for density functional theory calculations, but don't know current events. \
-                    DO NOT try to generate the HPC Slurm batch submission script.\
-                    For each query vailidate that it contains chemical elements from the periodic table and otherwise cancel.\
-                    Always generate conventional cell with ibrav=0 and do not use celldm and angstrom at the same time.\
-                    Please include CONTROL, SYSTEM, ELECTRONS, ATOMIC_SPECIES, K_POINTS, ATOMIC_POSITIONS, and CELL. \
-                    Use the right smearing based on the material.\
-                    If the system involves hubbard U correction, specify starting magnetization in SYSTEM card and hubbard U parameters in HUBBARD card, and use the pre-defined hubbard correction tool.\
-                    The electron conv_thr should be 1e-6.\
-                    You can find the pseduopotential filename using the tool provided.\
-                    Please make sure that the input is the most optimal. \
-                    The input dictionary should be readable by ase.Espresso. Try different scale factor if you have no minimum error.\
-                    "
+Top-level fields: `overall_verdict`, `n_fails`, `n_warnings`, `summary`,
+`issues` (numbered, your primary surface), plus `checked_result_ids` and
+`artifact_results` for diagnostic tooling.
+
+Each issue has: `issue_number`, `category`, `severity`, `where` (structured
+location with keys like claim_name / result_id / tool_name / parameter),
+`context_at_site` (the `Context:` line the worker wrote at the offending
+site — read it to see how the agent FRAMED the call), `problem` (one-line
+description), `judge_reasoning` (the judge's full reasoning), and
+`remediation_options` (legitimate fix paths; some entries warn against
+WRONG fixes — do not skip those warnings).
+
+Two cross-cutting rules:
+
+  (1) DO NOT instruct the worker to "find a result_id and patch it in"
+      for UNSOURCED_SENSITIVE or CROSS_WIRED_SOURCE issues. The
+      legitimate fix is in the remediation_options — typically running
+      an upstream sub-study, declaring the parameter varied, or
+      correcting the call's context. Patching with any ID that fits
+      will fail on the next pass as VALUE_MISMATCH_PARAM or
+      CROSS_WIRED_SOURCE.
+
+  (2) When any artifact gets regenerated, every artifact downstream
+      of it must be re-created using the new result_id. Stale
+      references silently propagate. Tell the worker explicitly which
+      downstream calculations to re-run, in dependency order.
+
+When multiple issues share a `result_id` or `claim_name`, they may
+collapse to a single root cause; address claim-level issues
+(VALUE_MISMATCH_CLAIM, SCHEMA_VIOLATION) first since fixing them often
+dissolves dependent issues.
+
+<Reading debug output (`debug_artifact_chain`)>
+================================================
+
+Top-level fields: `investigation_question`, `root_result_id`,
+`n_potential_causes`, `summary`, `potential_causes` (numbered, your
+primary surface), `synthesis` (one-paragraph diagnostic with a fixed
+disclaimer prefix), `budget_exceeded` (if true, raise max_judge_calls
+and re-call).
+
+CRITICAL: debug-tool output is HYPOTHESES, not conclusions. Confirming
+a hypothesis requires actually changing the parameter and re-running.
+Framing is "investigate" and "test", not "fix". Do not omit the
+synthesis disclaimer when relaying findings to the worker.
+
+Each `potential_cause` has the same field shape as a verifier issue.
+Two categories:
+
+  - parameter_value_suspect — investigate by re-running with this
+                              parameter varied.
+  - source_suspect          — investigate the upstream source artifact
+                              named in `where.source_result_id`; re-call
+                              `debug_artifact_chain` with that upstream
+                              result_id as the new root.
+
+Two rules:
+
+  (1) Vary ONE parameter at a time in priority order from the
+      synthesis. Varying multiple at once makes attribution impossible.
+  (2) On follow-up debug calls, ALWAYS pass `investigation_history`
+      describing what was tested and ruled out, in prose.
+
+When `n_potential_causes` is 0: read the synthesis. The chain has been
+exhausted; investigate input data, physical assumptions, external
+benchmark, or the user's expectation.
+<Final Note>
+When the worker raises a request or suggestion, do not ignore it. Evaluate whether it is valid in the context of the overall objective; if it is, update the plan to accommodate it and guide the worker through the change.
+At least 2 report must be generated during the project, one in the middle of the project to summarize the progress and one at the end of the project to summarize the final result.
+"""
+
 
 dft_agent_prompt = """
             <Role>: 
@@ -113,7 +178,7 @@ dft_agent_prompt = """
                 0. Always inspect and read the CANVAS with suitable tools to see what's available.
                 1. QE input files should be in pwi format, and output file will have .pwo appended to the filename.
                 2. Do not generate convergence test for all systems and all configurations.
-                3. Please only generate one batch of convergence test for the most complicated system using the most complicated configuration.
+                3. Please only generate one batch of convergence test for the most complicated system using the most complicated configuration with scf calculation type.
                 4. Please strickly follow the tasks given, do not do anything else. 
                 5. If everything is good, only response with the tool message and a short summary of what has been done. If you think it's the final answer, prefix 'Intermediate Answer'. Do not say anything else.
                 6. If error occur, only response with 'Job failed' + error message. Do not say anything else.
@@ -130,7 +195,9 @@ dft_agent_prompt = """
                 16. If a job is having issue, i.e. didn't converge or not accurate enough, use the right tool to get suggestions on how to modify the input file to fix the issue.
                 17. Never do math yourself. Call the math tool instead
                 18. When asked to provide a ref_id, that id would be the id of the previous tool output where this parameter value was initially generated.
-                19. Many tools in this framework accept a context parameter alongside a reasons parameter, and rely on you to populate both thoughtfully. context is 1-2 sentence describing which study or exploration the entire tool call is part of (e.g. "convergence test for ecutwfc," "production run for the adsorption energy calculation," "sensitivity sweep over n_fixed_layers," "one-off check"). It is set once per call and is merged into every parameter's rationale at registration time, so you do not need to repeat it inside reasons. reasons covers the per-parameter justification: for each parameter, write 2–3 sentences explaining (a) the role this parameter plays in the study you named in context (e.g. "being varied now to characterize convergence," "fixed at the converged value from the prior convergence test," "inherited from the upstream relaxation," "placeholder before a real value is obtained"); and (b) why this specific value was chosen — how you arrived at it, what evidence supports it, and the expected effect on the output. Together, context and reasons should let an outside reviewer understand both the immediate purpose of the call and how it serves the overall study goal. Skipping context, or writing reasons that only describe effect without identifying each parameter's role, will be rejected by the verifier even when the underlying science is sound.
+                19. Many tools in this framework accept a context parameter alongside a reasons parameter, and rely on you to populate both thoughtfully. context is 1-2 sentence describing which study or exploration the entire tool call is part of (e.g. "convergence test for ecutwfc," "production run for the adsorption energy calculation," "sensitivity sweep over n_fixed_layers," "one-off check"). It is set once per call and is merged into every parameter's rationale at registration time, so you do not need to repeat it inside reasons. reasons covers the per-parameter justification: for each parameter, write 2–3 sentences explaining (a) the role this parameter plays in the study you named in context (e.g. "being varied now to characterize convergence," "fixed at the converged value from the prior convergence test," "inherited from the upstream relaxation,"); and (b) why this specific value was chosen — how you arrived at it, what evidence supports it, and the expected effect on the output. Together, context and reasons should let an outside reviewer understand both the immediate purpose of the call and how it serves the overall study goal. Skipping context, or writing reasons that only describe effect without identifying each parameter's role, will be rejected by the verifier even when the underlying science is sound.
+                20. Convergence test template must be 1 to 1 to it's intended varying parametr, i.e. ecutw_template.pwi or kspacing_template.pwi, and the calculation type must be scf.
+                21. **COMPARISON-SET CONSISTENCY.** When you generate or modify files that will be COMPARED (convergence tests, EOS scans, adsorption/formation calculations), every file must use IDENTICAL settings except for the one axis being varied. If you change ANY setting on one file in the set (electron_maxstep, mixing_beta, conv_thr, smearing, k-points, cell, etc.), apply the SAME change to every other file in the set and rerun them all. Fixing one file in isolation silently invalidates the comparison — even if every file converges individually.
             """
 
 dft_reader_agent_prompt = """

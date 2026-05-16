@@ -30,7 +30,7 @@ from src.safety_guard import generate_structured_report
 from src.prompt import dft_agent_prompt,hpc_agent_prompt,supervisor_prompt, judge_agent_prompt
 from src import var
 from src.myCANVAS import CANVAS
-from src.safety_guard import verify_structured_report
+from src.safety_guard import verify_structured_report, debug_artifact_chain
 
 import sqlite3
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -261,6 +261,8 @@ The overall goal is: {state['inputs']}.
 Nothing has been done yet and there is no plan yet. 
 
 Please inspect and extract related information from CANVAS, then only update the plan accordingly if needed.
+
+A mid-project report before production run and a final report at the very end are needed. Feel free to ask worker agent to generate other intermediate report if you think it's necessary to let judge evaluate what has been done.
         """
     else:
         supervisorMessage =  f"""
@@ -575,7 +577,8 @@ def create_planning_graph(config: dict) -> StateGraph:
     supervisor_tools = [
         inspect_my_canvas,
         read_my_canvas,
-        supervisor_get_available_report_names
+        supervisor_get_available_report_names,
+        debug_artifact_chain
         ]
     
     supervisor_agent = create_agent(
@@ -613,7 +616,8 @@ def create_planning_graph(config: dict) -> StateGraph:
         extract_numeric_from_tool_output,
         extract_text_from_tool_output,
         math_expression_tool,
-        generate_structured_report
+        generate_structured_report,
+        list_referenceable_inputs
         # get_ase_atoms_property,
         # inspect_ase_atoms,
         ]

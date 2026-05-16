@@ -106,7 +106,7 @@ if __name__ == "__main__":
     Please use PBE pseudopotential and Bayesian Error Estimation Functional (BEEF) exchange correlation function."""
     
     userMessage_13 = """please find the adsorption energy difference between the most favorable configurations (different adsorbate orientations 0, 90, 180) at fcc site and most favorable configuration (different adsorbate orientations 0, 90, 180) at ontop site for CO on Pt(111) surface with p(2x2) adsorbate overlayer (1/4 coverage).
-    Please use LDA pseudopotential."""
+    Please use PBE pseudopotential."""
     
     testMessage = '''
     please generate a Pt(111) surface structure for p(2x2) adsorbate overlayer (1/4 coverage).
@@ -208,7 +208,7 @@ if __name__ == "__main__":
         
         if overwrite:
             inputs = {
-                "inputs": f"{userMessage_6}",
+                "inputs": f"{userMessage_13}",
                 "plan": [],
                 "past_steps": [],
                 "canvas": CANVAS.canvas
@@ -251,12 +251,12 @@ if __name__ == "__main__":
             ):
             
             if "__end__" not in s:
-                print(s)
-                print("----")
-                if eval(config["SAVE_DIALOGUE"]):
-                    with open(f"{WORKING_DIRECTORY}/his.txt", "a") as f:
-                        f.write(repr(s) + "\n")
-                        f.write("----\n")
+                # print(s)
+                # print("----")
+                # if eval(config["SAVE_DIALOGUE"]):
+                #     with open(f"{WORKING_DIRECTORY}/his.txt", "a") as f:
+                #         f.write(repr(s) + "\n")
+                #         f.write("----\n")
                 
                 # time.sleep(5)
                 # Print to console

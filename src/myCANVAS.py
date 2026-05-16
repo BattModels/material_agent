@@ -8,6 +8,7 @@ import string
 import random
 import copy
 from src.dag_visualizer import build_dag, generate_html, save_html
+import numpy as np
 
 from pydantic import BaseModel, Field
 from langchain_core.tools import tool
@@ -296,50 +297,148 @@ class myCANVAS():
         
     def get_artifact(self, result_id: str):
         return self.result_registry.get(result_id, None)
-    
+
+    def _compare_to(self, expected_value: Any, actual_value: Any, tol: float):
+        """Type-aware value comparison used by verify_artifact for both
+        bare-ref and dotted-ref code paths. Returns (ok, mismatch_msg).
+        mismatch_msg is the empty string on success."""
+        if isinstance(actual_value, (int, float)):
+            try:
+                ev = float(expected_value)
+                if math.isclose(ev, float(actual_value), rel_tol=0.0, abs_tol=tol):
+                    return True, ""
+                return False, (
+                    f"Expected value: {repr(expected_value)} does not "
+                    f"match registered value {repr(actual_value)}."
+                )
+            except (ValueError, TypeError):
+                return False, (
+                    f"Expected value: {repr(expected_value)} cannot be "
+                    f"compared numerically to {repr(actual_value)}."
+                )
+        if isinstance(actual_value, np.ndarray):
+            try:
+                ev = np.array(expected_value)
+                if np.all(np.isclose(actual_value, ev, rtol=0.0, atol=tol)):
+                    return True, ""
+                return False, (
+                    f"Expected value: {repr(expected_value)} does not "
+                    f"match registered value {repr(actual_value)}."
+                )
+            except Exception:
+                return False, (
+                    f"Expected value: {repr(expected_value)} cannot be "
+                    f"compared elementwise to {repr(actual_value)}."
+                )
+        # Fallback: exact equality.
+        if expected_value == actual_value:
+            return True, ""
+        return False, (
+            f"Expected value: {repr(expected_value)} does not match "
+            f"registered value {repr(actual_value)}."
+        )
+
     def verify_artifact(
         self,
         expected_value: Any,
         source_result_id,
-        tol: float = 1e-10,
+        tol: float = 1e-7,
     ) -> tuple[bool, str, Optional[NumericArtifact]]:
-        
-        if source_result_id == "PLACEHOLDER":
-            return True, "Verification success."
+        if not isinstance(source_result_id, str) or not source_result_id:
+            return False, "Invalid ref ID: must be a non-empty string."
+
+        # ---- Dotted-ref path: '<8-char-id>.<args-key>' ----
+        # Use this to reference a SPECIFIC INPUT PARAMETER of a past tool
+        # call, rather than the call's output. Only top-level args keys
+        # are addressable; nested dict/list fields are not.
+        if "." in source_result_id:
+            parts = source_result_id.split(".")
+            if len(parts) != 2:
+                return False, (
+                    f"Malformed dotted ref '{source_result_id}'. Expected "
+                    f"'<8-char-id>.<input-param-name>' — exactly one dot, "
+                    f"with the bare id on the left and a single args key "
+                    f"on the right. Nested args fields are not "
+                    f"addressable."
+                )
+            bare_id, field = parts
+            if len(bare_id) != 8:
+                return False, (
+                    f"Malformed dotted ref '{source_result_id}': the part "
+                    f"before the dot must be an 8-character result_id."
+                )
+            if not field:
+                return False, (
+                    f"Malformed dotted ref '{source_result_id}': the part "
+                    f"after the dot (the input-param name) is empty."
+                )
+
+            artifact = self.result_registry.get(bare_id)
+            if artifact is None:
+                return False, (
+                    f"ID {bare_id} (from dotted ref '{source_result_id}') "
+                    f"does not exist in CANVAS. Confirm the bare id is "
+                    f"correct."
+                )
+
+            args = artifact.args or {}
+            if field not in args:
+                arg_names = list(args.keys())
+                if not arg_names:
+                    arg_list_str = "<no args recorded on this artifact>"
+                elif len(arg_names) == 1:
+                    arg_list_str = repr(arg_names[0])
+                elif len(arg_names) == 2:
+                    arg_list_str = f"{arg_names[0]!r} and {arg_names[1]!r}"
+                else:
+                    arg_list_str = (
+                        ", ".join(repr(n) for n in arg_names[:-1])
+                        + f", and {arg_names[-1]!r}"
+                    )
+                return False, (
+                    f"Dotted ref '{source_result_id}': artifact "
+                    f"'{bare_id}' has no input parameter named '{field}'. "
+                    f"Available args are {arg_list_str}."
+                )
+
+            actual = args[field]
+            ok, msg = self._compare_to(expected_value, actual, tol)
+            if ok:
+                return True, (
+                    f"{source_result_id} Verification success (input "
+                    f"parameter '{field}' of artifact '{bare_id}')."
+                )
+            return False, (
+                f"Dotted ref '{source_result_id}' verification failed. "
+                f"{msg}"
+            )
+
+        # ---- Bare-ref path: existing behavior, unchanged in semantics. ----
         if len(source_result_id) != 8:
-            return False, f"Invalid result ID format: Tool generated ID would be an 8-character string. Did you mean 'PLACEHOLDER'?"
+            return False, f"Invalid ref ID format: Tool generated ID would be an 8-character string. Please check CANVAS and find the correct ID to reference."
 
         artifact = self.result_registry.get(source_result_id)
         if artifact is None:
-            return False, f"ID {source_result_id} does not exist."
+            return False, f"ID {source_result_id} does not exist. Please check CANVAS and find the correct ID to reference."
 
         if isinstance(artifact, ListedArtifact):
-            # as long as one of the artifacts in the list matches the expected value, we consider it a success
+            # As long as one of the artifacts in the list matches the
+            # expected value, we consider it a success.
             for sub_artifact in artifact.value:
-                if isinstance(sub_artifact.value, (int, float)):
-                    try:
-                        expected_value = float(expected_value)
-                        if math.isclose(float(expected_value), sub_artifact.value, rel_tol=0.0, abs_tol=tol):
-                            return True, f"{source_result_id} Verification success."
-                    except ValueError:
-                        continue
-                else:
-                    if expected_value == sub_artifact.value:
-                        return True, f"{source_result_id} Verification success."
-            return False, f"ID {source_result_id} listed verification failed. \nExpected value: {repr(expected_value)} does not match any of the registered tool outputs {[repr(sub_artifact.value) for sub_artifact in artifact.value]}."
-        else:
-            if isinstance(artifact.value, (int, float)):
-                try:
-                    expected_value = float(expected_value)
-                    if not math.isclose(float(expected_value), artifact.value, rel_tol=0.0, abs_tol=tol):
-                        return False, f"ID {source_result_id} verification failed. \nExpected value: {repr(expected_value)} does not match registered tool output {repr(artifact.value)}."
-                except ValueError:
-                    return False, f"ID {source_result_id} verification failed. \nExpected value: {repr(expected_value)} does not match registered tool output {repr(artifact.value)}."
-            else:
-                if expected_value != artifact.value:
-                    return False, f"ID {source_result_id} verification failed. \nExpected value: {repr(expected_value)} does not match registered tool output {repr(artifact.value)}."
-                
+                ok, _ = self._compare_to(expected_value, sub_artifact.value, tol)
+                if ok:
+                    return True, f"{source_result_id} Verification success."
+            return False, (
+                f"ID {source_result_id} listed verification failed. "
+                f"\nExpected value: {repr(expected_value)} does not match "
+                f"any of the registered tool outputs "
+                f"{[repr(sub_artifact.value) for sub_artifact in artifact.value]}."
+            )
+
+        ok, msg = self._compare_to(expected_value, artifact.value, tol)
+        if ok:
             return True, f"{source_result_id} Verification success."
+        return False, f"ID {source_result_id} verification failed. \n{msg}"
 
         
     def rest_curr_round_result_ids(self):
@@ -381,7 +480,3 @@ CANVAS = myCANVAS()
 #     loaded = pickle.load(open('canvas.pickle', 'rb'))
 #     myDictPP(pickle.load(open('canvas.pickle', 'rb')))
 #     print(loaded == CANVAS.canvas)
-    
-    
-
-    

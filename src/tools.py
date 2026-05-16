@@ -6,7 +6,7 @@ from math import e
 from networkx import predecessor
 import pandas as pd
 from src.utils import *
-from src.myCANVAS import CANVAS
+from src.myCANVAS import CANVAS, ListedArtifact
 from ase import Atoms, Atom
 from langchain.tools import tool
 from langchain_anthropic import ChatAnthropic
@@ -14,7 +14,7 @@ from langchain_anthropic import ChatAnthropic
 import math
 import os
 import copy
-from typing import Annotated, Dict, Literal, Optional, Sequence, Tuple, Any
+from typing import Annotated, Dict, List, Literal, Optional, Sequence, Tuple, Union, Any
 import numpy as np
 from ase.lattice.cubic import FaceCenteredCubic
 import ast
@@ -130,7 +130,10 @@ def math_expression_tool(
         List[Tuple[float, str]],
         "List of (value, ref_result_id) pairs. They will be mapped in order to "
         "x0, x1, x2, ... When you obtain a value from a tool, you will be "
-        "given the ref_result_id; place the (value, ref_result_id) pair here.",
+        "given the ref_result_id; place the (value, ref_result_id) pair here. "
+        "Each ref_result_id accepts an 8-char id to reference the output, or "
+        "`<8-char-id>.<param_name>` to reference an input parameter of a "
+        "past tool call (see `list_referenceable_inputs`).",
     ],
     expression: Annotated[
         str,
@@ -141,8 +144,7 @@ def math_expression_tool(
         "1-2 sentence describing which study or exploration this tool call "
         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'). Applies to the entire call and is merged into "
-        "each per-parameter rationale at registration time.",
+        "'one-off check'), and the reason why you call this tool."
     ],
     reasons: Annotated[
         str,
@@ -220,6 +222,62 @@ def write_my_canvas(key: Annotated[str, "key"],
 
 
 @tool
+def list_referenceable_inputs(
+    result_id: Annotated[
+        str,
+        "8-character result_id of the past tool call whose input "
+        "parameters you want to enumerate and see the corresponding value."
+    ],
+):
+    """List the input parameter names and corresponding value of a past tool call so you can
+    cross-reference them in a downstream tool call. 
+
+    Returns a multi-line string. Only top-level args keys are
+    referenceable; nested dict/list fields are not addressable via
+    dotted refs.
+    """
+    try:
+        artifact = CANVAS.get_artifact(result_id)
+    except Exception as e:                                  # noqa: BLE001
+        return (
+            f"Could not load artifact '{result_id}': {e}. "
+            f"Confirm the result_id is correct (an 8-character string "
+            f"returned by a past tool call) and try again."
+        )
+
+    args = artifact.args or {}
+    if not args:
+        return (
+            f"Artifact '{result_id}' (tool: {artifact.tool_name}) has no "
+            f"recorded input arguments — nothing is referenceable via "
+            f"dotted addressing on this artifact."
+        )
+
+    lines = [
+        f"Input parameters of artifact '{result_id}' "
+        f"(tool: {artifact.tool_name}):",
+        "",
+    ]
+    for name, value in args.items():
+        v_preview = repr(value)
+        if len(v_preview) > 100:
+            v_preview = v_preview[:97] + "..."
+        lines.append(
+            f"  - `{name}` = {v_preview}"
+        )
+        lines.append(
+            f"      → reference as `{result_id}.{name}`"
+        )
+    lines.append("")
+    lines.append(
+        "To use one of these as a source for a downstream tool's "
+        "`*_ref` parameter, copy the dotted reference string above "
+        "into that `*_ref` argument."
+    )
+    return "\n".join(lines)
+
+
+@tool
 def extract_numeric_from_tool_output(
     source_tool_call_id: Annotated[
         str,
@@ -246,8 +304,7 @@ def extract_numeric_from_tool_output(
         "1-2 sentence describing which study or exploration this tool call "
         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'). Applies to the entire call and is merged into "
-        "each per-parameter rationale at registration time.",
+        "'one-off check'), and the reason why you call this tool."
     ],
     reasons: Annotated[
         str,
@@ -281,9 +338,11 @@ def extract_numeric_from_tool_output(
         )
     
     raw_text = ""
-    if record.listed_value:
-        for v in record.value:
-            raw_text += str(v) + "\n"
+    
+    
+    if isinstance(record, ListedArtifact):
+        for arti in record.value:
+            raw_text += repr(arti.value) + "\n"
     else:
         raw_text = record.value
 
@@ -377,8 +436,7 @@ def extract_text_from_tool_output(
         "1-2 sentence describing which study or exploration this tool call "
         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'). Applies to the entire call and is merged into "
-        "each per-parameter rationale at registration time.",
+        "'one-off check'), and the reason why you call this tool."
     ],
     reasons: Annotated[
         str,
@@ -558,15 +616,16 @@ def inspect_ase_atoms(
         str,
         "The source_result_id for atomsFilename. Required: every inspection "
         "must trace back to a registered upstream artifact (the tool that "
-        "produced the file or wrote its path).",
+        "produced the file or wrote its path). Accepts an 8-char id to reference the output, or "
+        "`<8-char-id>.<param_name>` to reference an input parameter of a "
+        "past tool call (see `list_referenceable_inputs`).",
     ],
     context: Annotated[
         str,
         "1-2 sentence describing which study or exploration this tool call "
         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'). Applies to the entire call and is merged into "
-        "each per-parameter rationale at registration time.",
+        "'one-off check'), and the reason why you call this tool."
     ],
     reasons: Annotated[
         str,
@@ -677,7 +736,9 @@ def get_ase_atoms_property(
         str,
         "The source_result_id for atomsFilename. Required: every property "
         "extraction must trace back to a registered upstream artifact (the "
-        "tool that produced the file or wrote its path).",
+        "tool that produced the file or wrote its path). Accepts an 8-char "
+        "id, or `<8-char-id>.<param_name>` to reference an input parameter "
+        "of a past tool call (see `list_referenceable_inputs`).",
     ],
     property_name: Annotated[
         str,
@@ -689,8 +750,7 @@ def get_ase_atoms_property(
         "1-2 sentence describing which study or exploration this tool call "
         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'). Applies to the entire call and is merged into "
-        "each per-parameter rationale at registration time.",
+        "'one-off check'), and the reason why you call this tool."
     ],
     reasons: Annotated[
         str,
@@ -808,8 +868,7 @@ def init_structure_data(
         "1-2 sentence describing which study or exploration this tool call "
         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'). Applies to the entire call and is merged into "
-        "each per-parameter rationale at registration time.",
+        "'one-off check'), and the reason why you call this tool."
     ],
     reasons: Annotated[
         Dict[str, str],
@@ -818,7 +877,7 @@ def init_structure_data(
         "(a) THE ROLE THIS PARAMETER plays in the study described in "
         "`context` (e.g. 'being varied now', 'fixed at converged value from "
         "prior convergence test', 'inherited from upstream tool', "
-        "'placeholder before a real value is obtained'); "
+        "'held fixed by design while a sub-study is in progress'); "
         "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
         "supports it, and the expected effect on the output. "
         "The keys must include: 'element', 'lattice', 'a', 'b', 'c'.",
@@ -864,13 +923,15 @@ def generateSurface_and_getPossibleSite(
     n_fixed_layers: Annotated[int, "typically 3. Number of fixed layers in the slab. A larger number can better approximate the bulk property of the surface, but too much fixed layers lower the number of relaxed layers and may lead to less accurate surface property."],
     vacuum: Annotated[float, "typically 10.0. Vacuum size in Angstrom. Larger vacuum can avoid the interaction between periodic images, but also increase the computational cost."],
     surfaceFilename: Annotated[str, "Name (not a path) of the surface file to be saved in traj format"],
+    supercell_dim_z_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of supercell_dim_z value was generated. Accepts either an 8-char id (referencing a past tool output) or `<8-char-id>.<param_name>` (referencing a specific input parameter of a past tool call — useful when this value should match a value used as input to an earlier call; call `list_referenceable_inputs` to see available param names). If not provided (left empty), you can only play around and see the effect of input parameter settings to output result of this tool, but you cannot use the output directly to calculate the final result."],
+    n_fixed_layers_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of n_fixed_layers value was generated. Accepts either an 8-char id (referencing a past tool output) or `<8-char-id>.<param_name>` (referencing a specific input parameter of a past tool call — useful when this value should match a value used as input to an earlier call; call `list_referenceable_inputs` to see available param names). If not provided (left empty), you can only play around and see the effect of input parameter settings to output result of this tool, but you cannot use the output directly to calculate the final result."],
+    vacuum_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of vacuum size value was generated. Accepts either an 8-char id (referencing a past tool output) or `<8-char-id>.<param_name>` (referencing a specific input parameter of a past tool call — useful when this value should match a value used as input to an earlier call; call `list_referenceable_inputs` to see available param names). If not provided (left empty), you can only play around and see the effect of input parameter settings to output result of this tool, but you cannot use the output directly to calculate the final result."],
     context: Annotated[
         str,
         "1-2 sentence describing which study or exploration this tool call "
         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'). Applies to the entire call and is merged into "
-        "each per-parameter rationale at registration time.",
+        "'one-off check'), and the reason why you call this tool."
     ],
     reasons: Annotated[
         Dict[str, str],
@@ -879,18 +940,15 @@ def generateSurface_and_getPossibleSite(
         "(a) THE ROLE THIS PARAMETER plays in the study described in "
         "`context` (e.g. 'being varied now', 'fixed at converged value from "
         "prior convergence test', 'inherited from upstream tool', "
-        "'placeholder before a real value is obtained'); "
+        "'held fixed by design while a sub-study is in progress'); "
         "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
         "supports it, and the expected effect on the output. "
         "The keys must include: 'species', 'crystal_structures', 'facets',"
         "'supercell_dim_xy', 'supercell_dim_z', 'n_fixed_layers', 'vacuum',"
         "and 'surfaceFilename'.",
     ],
-    supercell_dim_z_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of supercell_dim_z value was generated. If not provided, you can only play around and see the effect of input parameter settings to output result of this tool, but you cannot use the output directly to calculate the final result"] = "",
-    n_fixed_layers_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of n_fixed_layers value was generated. If not provided, you can only play around and see the effect of input parameter settings to output result of this tool, but you cannot use the output directly to calculate the final result"] = "",
-    vacuum_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of vacuum size value was generated. If not provided, you can only play around and see the effect of input parameter settings to output result of this tool, but you cannot use the output directly to calculate the final result"] = "",
 ):
-    """Generate a surface structure and get the available adsorption sites. 
+    """Generate the bulk surface structure and get the available adsorption sites. 
     You can try out different supercell_dim_z, n_fixed_layers and vacuum size to see the effect.
     However, only when you specify the source_result_id reference for these parameters, the result will be registered in the canvas and you can use them in the production run.
     Otherwise, the tool will still execute and return the generated surface structure and available adsorption sites, but you can't use them in the production run to obtain the final result
@@ -997,10 +1055,8 @@ def generateSurface_and_getPossibleSite(
         parent_result_ids_w_args=param_sources,
         metadata={},
     )
-    if supercell_dim_z_ref != "" and n_fixed_layers_ref != "" and vacuum_ref != "":
-        return f"the surface generated is saved at surface/{surfaceFilename}, Path_ID={path_id}\navailable adsorbate sites are: {repr(mySites)}"
-
-    return f"the surface generated is saved at surface/{surfaceFilename}\navailable adsorbate sites are: {repr(mySites_copy)}"
+    # if supercell_dim_z_ref != "" and n_fixed_layers_ref != "" and vacuum_ref != "":
+    return f"the surface generated is saved at surface/{surfaceFilename}, Path_ID={path_id}\navailable adsorbate sites are: {repr(mySites)}"
 
 
 @tool
@@ -1014,8 +1070,7 @@ def generate_myAdsorbate(
         "1-2 sentence describing which study or exploration this tool call "
         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'). Applies to the entire call and is merged into "
-        "each per-parameter rationale at registration time.",
+        "'one-off check'), and the reason why you call this tool."
     ],
     reasons: Annotated[
         Dict[str, str],
@@ -1024,7 +1079,7 @@ def generate_myAdsorbate(
         "(a) THE ROLE THIS PARAMETER plays in the study described in "
         "`context` (e.g. 'being varied now', 'fixed at converged value from "
         "prior convergence test', 'inherited from upstream tool', "
-        "'placeholder before a real value is obtained'); "
+        "'held fixed by design while a sub-study is in progress'); "
         "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
         "supports it, and the expected effect on the output. "
         "The keys must include: 'symbols', 'positions', 'vaccum', 'AdsorbateFileName'.",
@@ -1063,17 +1118,17 @@ def generate_myAdsorbate(
 def add_myAdsorbate(
     mySurfacePath: Annotated[str, "Path to the surface structure"],
     adsorbatePath: Annotated[str, "Path to the adsorbate structure"],
-    mySites: Annotated[List[List[float]], "List of adsorption sites you want to put adsorbates on, e.g. [[x1, y1], [x2, y2], ...]"],
-    rotations: Annotated[List[Tuple[float, str]], "List of rotations for the ith adsorbates, e.g. [[90.0, 'x'], [180.0, 'y'], ...]"],
-    surfaceWithAdsorbateFileName: Annotated[str, "Name (not a path) of the surface adsorbated with adsorbate to be saved in traj format"],
+    mySites: Annotated[List[float], "Adsorption sites you want to put adsorbates on, e.g. [x1, y1]]"],
+    rotations: Annotated[Tuple[float, str], "Rotations for the adsorbate, e.g. [90.0, 'x'] or [180.0, 'y'] or ..."],
+    surfaceWithAdsorbateFileName: Annotated[str, "filename (not a path) of the surface adsorbated with adsorbate to be saved as surface/<filename>.traj format"],
     context: Annotated[
         str,
         "1-2 sentence describing which study or exploration this tool call "
         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'). Applies to the entire call and is merged into "
-        "each per-parameter rationale at registration time.",
+        "'one-off check'), and the reason why you call this tool."
     ],
+    mySites_ref: Annotated[str, "source_result_id for mySites. Accepts an 8-char id to reference the output, or `<8-char-id>.<param_name>` to reference an input parameter of a past tool call (see `list_referenceable_inputs`)."],
     reasons: Annotated[
         Dict[str, str],
         "Per-parameter rationale. For each parameter, write 2-3 sentences "
@@ -1081,13 +1136,12 @@ def add_myAdsorbate(
         "(a) THE ROLE THIS PARAMETER plays in the study described in "
         "`context` (e.g. 'being varied now', 'fixed at converged value from "
         "prior convergence test', 'inherited from upstream tool', "
-        "'placeholder before a real value is obtained'); "
+        "'held fixed by design while a sub-study is in progress'); "
         "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
         "supports it, and the expected effect on the output. "
         "The keys must include: 'mySurfacePath', 'adsorbatePath', 'mySites', "
         "'rotations', 'surfaceWithAdsorbateFileName'.",
     ],
-    mySites_ref: Annotated[str, "Optional source_result_id for mySites."] = "",
 ):
     """
     Add adsorbate to the surface structure and save it.
@@ -1123,7 +1177,7 @@ def add_myAdsorbate(
 
     myAdsorbate = read(adsorbatePath)
 
-    for oneSites, oneRotation in zip(mySites, rotations):
+    for oneSites, oneRotation in zip([mySites], [rotations]):
         print(oneSites, oneRotation)
         _myAdsorbate = myAdsorbate.copy()
         _myAdsorbate.rotate(float(oneRotation[0]), oneRotation[1], center="COP")
@@ -1165,8 +1219,8 @@ def add_myAdsorbate(
         parent_result_ids_w_args=param_sources,
         metadata={},
     )
-    if mySites_ref != "":
-        outStr += f" Path_ID={id}"
+    # if mySites_ref != "":
+    outStr += f" Path_ID={id}"
 
     return outStr
 
@@ -1174,11 +1228,11 @@ def add_myAdsorbate(
 @tool
 def write_QE_script_w_ASE(
     listofElements: Annotated[List[str], "List of distinct element symbols in the unit cell"],
-    ppfiles_w_ref: Annotated[List[Tuple[str, str]], "List of (pseudopotential filename, source_result_id) pairs in the order of the elements."],
+    ppfiles_w_ref: Annotated[List[Tuple[str, str]], "List of (pseudopotential filename, source_result_id) pairs in the order of the elements. Each source_result_id accepts an 8-char id to reference the output, or `<8-char-id>.<param_name>` to reference an input parameter of a past tool call (see `list_referenceable_inputs`)."],
     filename: Annotated[str, "Name of the Quantum Espresso input file, end with .pwi"],
-    inputAtomsDir_w_ref: Annotated[Tuple[str, str], "Tuple of (input_atoms_dir, source_result_id). value at index 0 is the Directory of the input Atoms object (i.e. traj or xyz), or the name of the job that contains the relaxed structure (i.e. xxxx.pwi); value at index 1 is the reference source_result_id of the previous tool output where the structure was generated."],
+    inputAtomsDir_w_ref: Annotated[Tuple[str, str], "Tuple of (input_atoms_dir, source_result_id). value at index 0 is the Directory of the input Atoms object (i.e. traj or xyz), or the name of the job that contains the relaxed structure (i.e. xxxx.pwi); value at index 1 is the reference source_result_id of the previous tool output where the structure was generated. The source_result_id accepts an 8-char id to reference the output, or `<8-char-id>.<param_name>` to reference an input parameter of a past tool call (see `list_referenceable_inputs`)."],
     ensembleCalculation: Annotated[bool, "Whether this calculation is ensemble calculation"],
-    calculation: Annotated[str, "Type of calculation to perform, e.g. 'scf', 'relax', or 'ensemble'. Set to 'ensemble', when running ensemble calculation"],
+    calculation: Annotated[str, "Type of calculation to perform, e.g. 'scf', 'relax', or 'ensemble'. Set to 'ensemble', when running ensemble calculation, set to 'scf' when generating template for convergence test."],
     restart_mode: Annotated[Literal['from_scratch', 'restart'], "Restart mode"],
     prefix: Annotated[str, "Prefix for the output files"],
     disk_io: Annotated[Literal['none'], "Disk I/O level"],
@@ -1194,13 +1248,14 @@ def write_QE_script_w_ASE(
     electron_maxstep: Annotated[int, "Maximum number of SCF iterations"],
     kspacing: Annotated[float, "K-point spacing (in Angstrom^-1). Lower value means more k-points and better accuracy."],
     input_dft: Annotated[Literal['LDA', 'PBE', 'BEEF-vdW'], "DFT functional. You'll be told which functional to use"],
+    ecutwfc_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of ecutwfc value was generated. Accepts either an 8-char id (referencing a past tool output) or `<8-char-id>.<param_name>` (referencing a specific input parameter of a past tool call — useful when this value should match a value used as input to an earlier call; call `list_referenceable_inputs` to see available param names). If not provided (left empty), you can only play around and see the effect of input parameter settings to output result of this tool, but you cannot use the output directly to calculate the final result."],
+    kspacing_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of kspacing value was generated. Accepts either an 8-char id (referencing a past tool output) or `<8-char-id>.<param_name>` (referencing a specific input parameter of a past tool call — useful when this value should match a value used as input to an earlier call; call `list_referenceable_inputs` to see available param names). If not provided (left empty), you can only play around and see the effect of input parameter settings to output result of this tool, but you cannot use the output directly to calculate the final result."],
     context: Annotated[
         str,
         "1-2 sentence describing which study or exploration this tool call "
         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'). Applies to the entire call and is merged into "
-        "each per-parameter rationale at registration time.",
+        "'one-off check'), and the reason why you call this tool."
     ],
     reasons: Annotated[
         Dict[str, str],
@@ -1209,7 +1264,7 @@ def write_QE_script_w_ASE(
         "(a) THE ROLE THIS PARAMETER plays in the study described in "
         "`context` (e.g. 'being varied now', 'fixed at converged value from "
         "prior convergence test', 'inherited from upstream tool', "
-        "'placeholder before a real value is obtained'); "
+        "'held fixed by design while a sub-study is in progress'); "
         "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
         "supports it, and the expected effect on the output. "
         "The keys must include: 'listofElements', 'ppfiles', 'filename',"
@@ -1221,10 +1276,10 @@ def write_QE_script_w_ASE(
     ],
     ready_to_run_job: Annotated[bool, "True if the job is intended to be run directly without further modification, False if this file is intended to be used to generate other files"] = False,
     additional_input: Annotated[Dict[str, Any], "Additional input parameters to be added to the input script. Should be in the format of a flat dict, {'input_parameter_1': parameter_1, 'input_parameter_2': parameter_2, ...}, parameter_x remain in their native type, str, float, bool, etc. Do not use unless you know what you are doing."] = {},
-    ecutwfc_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of ecutwfc value was generated. If not provided, you can only play around and see the effect of input parameter settings to output result of this tool, but you cannot use the output directly to calculate the final result"] = "",
-    kspacing_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of kspacing value was generated. If not provided, you can only play around and see the effect of input parameter settings to output result of this tool, but you cannot use the output directly to calculate the final result"] = "",
 ):
     """Write a Quantum Espresso input script using ASE. Bool value have no quote around them. For smearing start with methfessel-paxton. For ecutwfc choose between 30-100 Ry. When asked to run ensemble calculation, set calculation to 'ensemble'. When generating template for convergence test, use scf calculation and set ready_to_run_job to False.
+    Convergence test template must be 1 to 1 to it's intended varying parametr, i.e. ecutw_template.pwi or kspacing_template.pwi. Leave the ref of the only varying parameter empty (''), and for any other sensitive parameter for which you don't yet have an upstream characterization, set its value deliberately (a tight default for the sub-study being run) and explain in the per-parameter rationale why this value was chosen as a fixed-by-design hold for this sub-study.
+    For production runs, or other test runs that is not varying input parameters, you must specify the correct refs that can be traced back to where you determind the value for each parameter.
     reference_id in the output ties with: saved QE input script filepath/name, str"""
 
     assert isinstance(additional_input, dict), "additional_input must be a dictionary"
@@ -1430,7 +1485,7 @@ def find_pseudopotential(element: str) -> str:
 #         "1-2 sentence describing which study or exploration this tool call "
 #         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
 #         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-#         "'one-off check'). Applies to the entire call and is merged into "
+#         "'one-off check'), and the reason why you call this tool."
 #         "each per-parameter rationale at registration time.",
 #     ],
 #     reasons: Annotated[
@@ -1440,7 +1495,7 @@ def find_pseudopotential(element: str) -> str:
 #         "(a) THE ROLE THIS PARAMETER plays in the study described in "
 #         "`context` (e.g. 'being varied now', 'fixed at converged value from "
 #         "prior convergence test', 'inherited from upstream tool', "
-#         "'placeholder before a real value is obtained'); "
+#         "'held fixed by design while a sub-study is in progress'); "
 #         "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
 #         "supports it, and the expected effect on the output. "
 #         "The keys must include: 'input_file_name', 'kspacing', 'ecutwfc'.",
@@ -1564,19 +1619,285 @@ def find_pseudopotential(element: str) -> str:
 #     return f"Job list is saved scucessfully. \nIDs for each generated files and their varying parameters are shown below:\n{out_id_dict}. Please tell the supervisor in your response that convergence job has generated sucessfully, please continue to submit the jobs"
 
 
+# @tool
+# def generate_convergence_test(
+#     input_file_name: Annotated[str, "Name of the template quantum espresso input file. The template's QE parameters (ecutwfc, kspacing, smearing, etc.) are inherited by every generated job; only the parameter named in `varying_parameter_name` is replaced per job."],
+#     varying_parameter_name: Annotated[
+#         Literal["ecutwfc", "degauss", "kspacing", "inputAtomsDir"],
+#         "Name of the parameter to be varied in the convergence test. "
+#         "Use 'ecutwfc', 'degauss', or 'kspacing' for a numerical sweep "
+#         "of one DFT parameter on a single fixed structure. Use "
+#         "'inputAtomsDir' for a STRUCTURAL sweep — varying the input "
+#         "geometry across multiple structures (e.g. slab thickness, "
+#         "vacuum size) while holding all DFT parameters fixed at the "
+#         "template's values. You must generate the upstream structures "
+#         "first and supply their (path, ref) pairs in `varying_parameter_values`.",
+#     ],
+#     varying_parameter_values: Annotated[
+#         Union[List[float], List[Tuple[str, str]]],
+#         "List of values for the parameter to be tested. SHAPE depends on "
+#         "`varying_parameter_name`: "
+#         "  * For 'ecutwfc' / 'degauss' / 'kspacing' — a List[float] of "
+#         "    sweep values. Typical ranges: kspacing 0.1-0.4; ecutwfc "
+#         "    40-100. "
+#         "  * For 'inputAtomsDir' — a List[Tuple[str, str]] of (path, "
+#         "    source_result_id) pairs, one tuple per structure to test. "
+#         "    Each path is the file produced by an upstream tool "
+#         "    source_result_id of the previous tool output id where this path was generated"
+#     ],
+#     input_file_name_ref: Annotated[str, "The source_result_id of the previous tool output where this input_file_name value was generated."],
+#     context: Annotated[
+#         str,
+#         "1-2 sentence describing which study or exploration this tool call "
+#         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
+#         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+#         "'one-off check'), and the reason why you call this tool."
+#     ],
+#     reasons: Annotated[
+#         Dict[str, str],
+#         "Per-parameter rationale. For each parameter, write 2-3 sentences "
+#         "covering: "
+#         "(a) THE ROLE THIS PARAMETER plays in the study described in "
+#         "`context` (e.g. 'being varied now', 'fixed at converged value from "
+#         "prior convergence test', 'inherited from upstream tool', "
+#         "'held fixed by design while a sub-study is in progress'); "
+#         "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
+#         "supports it, and the expected effect on the output. "
+#         "The keys must include: 'input_file_name', 'varying_parameter_name', 'varying_parameter_values'.",
+#     ],
+# ):
+#     '''
+#     Using another QE input file as a template, generate convergence test input scripts by varying ONE thing while keeping everything else the same, and save the job list. 
+#     Two modes: numerical parameter sweep ('ecutwfc' / 'degauss' / 'kspacing') reuses the template structure across jobs and varies only the named DFT parameter; 
+#     structural sweep ('inputAtomsDir') uses a different upstream-generated structure per job with all DFT parameters inherited from the template, 
+#     and kpoints recomputed per-job from each structure's cell using the template's kspacing.
+
+#     reference_id in the output ties with: generated convergence-test job list, list[str]
+#     '''
+#     ok, msg = CANVAS.verify_artifact(input_file_name, input_file_name_ref)
+#     if not ok:
+#         return msg
+
+#     is_structural = varying_parameter_name == "inputAtomsDir"
+
+#     # Validate the shape of varying_parameter_values against the mode.
+#     if is_structural:
+#         if not all(
+#             isinstance(v, (tuple, list)) and len(v) == 2
+#             and isinstance(v[0], str) and isinstance(v[1], str)
+#             for v in varying_parameter_values
+#         ):
+#             return (
+#                 "When varying_parameter_name='inputAtomsDir', "
+#                 "varying_parameter_values must be a list of (path, "
+#                 "source_result_id) tuples — got entries that are not "
+#                 "(str, str) pairs."
+#             )
+#         # Verify each upstream structure ref before generating any jobs.
+#         for path, ref in varying_parameter_values:
+#             ok, msg = CANVAS.verify_artifact(path, ref)
+#             if not ok:
+#                 return f"Structure '{path}' failed verification: {msg}"
+#         # Detect basename collisions early — two structures with the
+#         # same basename would silently overwrite each other's job file.
+#         basenames = [
+#             os.path.splitext(os.path.basename(path))[0]
+#             for path, _ in varying_parameter_values
+#         ]
+#         if len(set(basenames)) != len(basenames):
+#             return (
+#                 "Two or more structures in varying_parameter_values have "
+#                 "the same basename; job filenames would collide. Rename "
+#                 "one of the upstream structure files to disambiguate."
+#             )
+#     else:
+#         if not all(isinstance(v, (int, float)) for v in varying_parameter_values):
+#             return (
+#                 f"When varying_parameter_name={varying_parameter_name!r}, "
+#                 "varying_parameter_values must be a list of floats."
+#             )
+
+#     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+#     input_file = os.path.join(WORKING_DIRECTORY, input_file_name)
+#     try:
+#         template_atom = read(input_file)
+#     except:
+#         return f"Invalid input file, please inspect CANVAS and select the correct template file."
+
+#     merged_reasons = _merge_context(context, reasons)
+
+#     job_list_dict = CANVAS.canvas.get('jobs_K_and_ecut', {})
+#     job_list = []
+#     prefix = input_file_name.split('.')[0]
+#     original_args = CANVAS.get_artifact(input_file_name_ref).args
+
+#     id_dict = {}
+#     for value in varying_parameter_values:
+#         # Resolve the per-job atom, the per-job filename, the args dict,
+#         # and the per-job parent provenance based on which mode we're in.
+#         if is_structural:
+#             struct_path, struct_ref = value[0], value[1]
+#             struct_full = os.path.join(WORKING_DIRECTORY, struct_path)
+#             try:
+#                 this_atom = read(struct_full)
+#             except Exception as e:                              # noqa: BLE001
+#                 return (
+#                     f"Could not read structure '{struct_path}' for "
+#                     f"structural convergence test: {e}"
+#                 )
+#             sanitized = os.path.splitext(os.path.basename(struct_path))[0]
+#             new_file_name = f'{prefix}_inputAtomsDir_{sanitized}.pwi'
+#             args = copy.deepcopy(original_args)
+#             # All DFT parameters inherited from the template; the
+#             # structure provides only geometry. No `args[name] = value`
+#             # substitution here.
+#             display_value: Any = struct_path
+#             this_parent_ids = [input_file_name_ref, struct_ref]
+#             this_param_sources = {
+#                 "input_file_name": input_file_name_ref,
+#                 "varying_parameter_values": struct_ref,
+#             }
+#         else:
+#             this_atom = template_atom
+#             new_file_name = f'{prefix}_{varying_parameter_name}_{value}.pwi'
+#             args = copy.deepcopy(original_args)
+#             args[varying_parameter_name] = value
+#             if varying_parameter_name == "ecutwfc":
+#                 args["ecutrho"] = value * 4
+#             display_value = value
+#             this_parent_ids = [input_file_name_ref]
+#             this_param_sources = {"input_file_name": input_file_name_ref}
+
+#         print(new_file_name)
+#         job_list_dict[new_file_name] = {varying_parameter_name: display_value}
+#         new_input_file = os.path.join(WORKING_DIRECTORY, new_file_name)
+#         job_list.append(new_file_name)
+
+#         # kpoints from THIS job's cell, using THIS job's kspacing.
+#         # In structural mode, each structure has its own cell and we
+#         # use the template's kspacing. In numerical mode, the template
+#         # cell is reused across jobs and (for the kspacing sweep)
+#         # kspacing varies per job.
+#         kpoints = [
+#             2 * ((np.ceil(2 * np.pi / np.linalg.norm(ii) / args['kspacing']).astype(int)) // 2 + 1)
+#             for ii in this_atom.cell
+#         ]
+
+#         pseudopotentials = {}
+#         for element, pseudo in zip(args['listofElements'], args['ppfiles']):
+#             if not os.path.exists(os.path.join("/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/all_lda_pbe_UPF", pseudo)):
+#                 return f"Invalid pseudopotential file: {pseudo}. Make sure to supply the correct pseudopotential file name."
+#             pseudopotentials[element] = pseudo
+
+#         write(new_input_file,
+#           this_atom,
+#           input_data={
+#               'calculation': args['calculation'],
+#               'restart_mode': args['restart_mode'],
+#               'prefix': args['prefix'],
+#               'pseudo_dir': "/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/all_lda_pbe_UPF",
+#               'outdir': './out',
+#               'disk_io': args['disk_io'],
+#               'ibrav': args['ibrav'],
+#               'nat': args['nat'],
+#               'ntyp': args['ntyp'],
+#               'ecutwfc': args['ecutwfc'],
+#               'ecutrho': args['ecutrho'],
+#               'occupations': args['occupations'],
+#               'smearing': args['smearing'],
+#               'degauss': args['degauss'],
+#               'conv_thr': args['conv_thr'],
+#               'electron_maxstep': args['electron_maxstep'],
+#               'input_dft': args['input_dft'],
+#               **args['additional_input']
+#           },
+#           format='espresso-in',
+#           pseudopotentials=pseudopotentials,
+#           kpts=tuple(kpoints))
+
+#         id_dict[new_file_name] = CANVAS.register_tool_output(
+#             tool_name="generate_convergence_test",
+#             args={
+#                 "input_file_name": input_file_name,
+#                 "varying_parameter_name": varying_parameter_name,
+#                 "varying_parameter_values": varying_parameter_values,
+#             },
+#             value=[new_file_name, varying_parameter_name, display_value],
+#             listed_value=True,
+#             description=(
+#                 f"Generated convergence test job using template "
+#                 f"{input_file_name} with {varying_parameter_name}="
+#                 f"{display_value}."
+#             ),
+#             reasons=merged_reasons,
+#             parent_result_ids=this_parent_ids,
+#             parent_result_ids_w_args=this_param_sources,
+#             metadata={},
+#         )
+
+#     job_list = list(set(job_list))
+
+#     job_list_dict_for_canvas = {job_name: id_dict[job_name] for job_name in job_list}
+#     job_list_dict_for_canvas = copy.deepcopy(CANVAS.canvas.get('ready_to_run_job_list', {})) | job_list_dict_for_canvas
+#     CANVAS.write('ready_to_run_job_list', job_list_dict_for_canvas, overwrite=True)
+#     CANVAS.write('jobs_K_and_ecut', job_list_dict_for_canvas)
+
+#     out_id_dict = {
+#         id_dict[job_name]: (
+#             job_name,
+#             varying_parameter_name,
+#             job_list_dict[job_name][varying_parameter_name],
+#         )
+#         for job_name in job_list
+#     }
+
+#     return f"Job list is saved scucessfully. \nIDs for each generated files and their varying parameters are shown below:\n{out_id_dict}. Please tell the supervisor in your response that convergence job has generated sucessfully, please continue to submit the jobs"
+
 @tool
 def generate_convergence_test(
-    input_file_name: Annotated[str, "Name of the template quantum espresso input file"],
-    kspacing: Annotated[list[float], "List of kspacing to be tested. Typically between 0.1-0.4"],
-    ecutwfc: Annotated[list[int], "List of ecutwfc to be tested. Typically between 40-100"],
-    input_file_name_ref: Annotated[str, "The source_result_id of the previous tool output where this input_file_name value was generated."],
+    input_file_name: Annotated[str, "Name of the template quantum espresso input file. The template's QE parameters (ecutwfc, kspacing, smearing, etc.) are inherited by every generated job; only the parameter named in `varying_parameter_name` is replaced per job."],
+    varying_parameter_name: Annotated[
+        Literal["ecutwfc", "degauss", "kspacing", "inputAtomsDir"],
+        "Name of the parameter to be varied in the convergence test. "
+        "Use 'ecutwfc', 'degauss', or 'kspacing' for a numerical sweep "
+        "of one DFT parameter on a single fixed structure. Use "
+        "'inputAtomsDir' for a STRUCTURAL sweep — varying the input "
+        "geometry across multiple structures (e.g. slab thickness, "
+        "vacuum size) while holding all DFT parameters fixed at the "
+        "template's values. You must generate the upstream structures "
+        "first with structure generation tools with one argument varied"
+        "and supply their (path, ref) pairs in `varying_parameter_values`."
+    ],
+    varying_parameter_values: Annotated[
+        Union[List[float], List[Tuple[str, str]], List[Tuple[str, str, float]]],
+        "List of values for the parameter to be tested. SHAPE depends on "
+        "`varying_parameter_name`: "
+        "  * For 'ecutwfc' / 'degauss' / 'kspacing' — a List[float] of "
+        "    sweep values. Typical ranges: kspacing 0.1-0.4; ecutwfc "
+        "    40-100. "
+        "  * For 'inputAtomsDir' — primary form is a List[Tuple[str, "
+        "    str]] of (path, dotted_ref) pairs, one tuple per structure "
+        "    to test. Each path is the structure file produced by an "
+        "    upstream tool. Each dotted_ref is `<8-char-id>.<axis_field>`"
+        "    where <8-char-id> pointing at the upstream tool output that produced the structure file, and "
+        "    the <axis_field> pointting at the same upstream tool's input parameter,"
+        "    which will be used to define the swept axis. "
+        "    All dotted_refs in the list must reference the SAME field — "
+        "    that field's name becomes the swept axis name"
+        "    ESCAPE HATCH: if the searchable axis is not a direct "
+        "    top-level args key on the upstream artifact, "
+        "    pass 3-tuples (path, 8-char-id-ref, value) instead. "
+        "    where <8-char-id> pointing at the upstream tool output that produced the structure file"
+        "    and The supplied `value` is used as the numeric axis value for that entry, "
+        "    overriding any args-lookup."
+    ],
+    input_file_name_ref: Annotated[str, "The source_result_id of the previous tool output where this input_file_name value was generated. Accepts an 8-char id, or `<8-char-id>.<param_name>` to reference an input parameter of a past tool call (see `list_referenceable_inputs`)."],
     context: Annotated[
         str,
         "1-2 sentence describing which study or exploration this tool call "
         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'). Applies to the entire call and is merged into "
-        "each per-parameter rationale at registration time.",
+        "'one-off check'), and the reason why you call this tool."
     ],
     reasons: Annotated[
         Dict[str, str],
@@ -1585,112 +1906,339 @@ def generate_convergence_test(
         "(a) THE ROLE THIS PARAMETER plays in the study described in "
         "`context` (e.g. 'being varied now', 'fixed at converged value from "
         "prior convergence test', 'inherited from upstream tool', "
-        "'placeholder before a real value is obtained'); "
+        "'held fixed by design while a sub-study is in progress'); "
         "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
         "supports it, and the expected effect on the output. "
-        "The keys must include: 'input_file_name', 'kspacing', 'ecutwfc'.",
+        "The keys must include: 'input_file_name', 'varying_parameter_name', 'varying_parameter_values'.",
     ],
 ):
     '''
-    Generate the convergence test input scripts for quantum espresso calculation using another quantum espresso input file as a template and save the job list.
+    Using another QE input file as a template, generate convergence test
+    input scripts by varying ONE thing while keeping everything else the
+    same, and save the job list. Two modes: numerical parameter sweep
+    ('ecutwfc' / 'degauss' / 'kspacing') reuses the template structure
+    across jobs and varies only the named DFT parameter; structural sweep
+    ('inputAtomsDir') uses a different upstream-generated structure per
+    job with all DFT parameters inherited from the template, and kpoints
+    recomputed per-job from each structure's cell using the template's
+    kspacing.
+
     reference_id in the output ties with: generated convergence-test job list, list[str]
     '''
     ok, msg = CANVAS.verify_artifact(input_file_name, input_file_name_ref)
     if not ok:
         return msg
 
+    is_structural = varying_parameter_name == "inputAtomsDir"
+
+    # Validate the shape of varying_parameter_values against the mode,
+    # and (in structural mode) resolve the per-entry searchable axis
+    # name + numeric value. `resolved_entries` holds, per job:
+    # (path, ref, axis_name, axis_value).
+    resolved_entries: List[Tuple[str, str, str, Any]] = []
+
+    if is_structural:
+        # Two accepted shapes in structural mode:
+        #   (path, dotted_ref)               — value read from args
+        #   (path, ref, value)               — 3-tuple escape hatch
+        # Mixed lists are allowed; each entry is resolved independently.
+        # However, all dotted refs that appear must agree on the
+        # axis field name (otherwise the registered axis is ambiguous).
+        seen_axis_names = set()
+        for entry in varying_parameter_values:
+            if not isinstance(entry, (tuple, list)):
+                return (
+                    "Structural-mode varying_parameter_values entries "
+                    "must be (path, dotted_ref) 2-tuples or "
+                    f"(path, ref, value) 3-tuples; got {entry!r}."
+                )
+
+            if len(entry) == 2:
+                path, ref = entry[0], entry[1]
+                if not (isinstance(path, str) and isinstance(ref, str)):
+                    return (
+                        "Structural-mode 2-tuple entries must have "
+                        f"(str, str) shape; got {entry!r}."
+                    )
+                # The 2-tuple form REQUIRES a dotted ref — the axis
+                # name and value both come from the upstream artifact's
+                # args via the dotted-field portion. A bare ref carries
+                # no axis information, so reject it here with a clear
+                # explanation pointing at the escape hatch.
+                if "." not in ref or len(ref.split(".", 1)[1].strip()) == 0:
+                    return (
+                        f"Structural-mode 2-tuple entry {entry!r}: "
+                        f"ref '{ref}' is not a dotted reference "
+                        f"('<8-char-id>.<axis_field>'). The 2-tuple "
+                        f"form requires a dotted ref so the tool can "
+                        f"infer the swept axis name and read its value "
+                        f"from the upstream artifact's args. If the "
+                        f"axis is not a top-level args key on the "
+                        f"upstream, use the 3-tuple escape hatch "
+                        f"(path, ref, value) instead."
+                    )
+                bare_id, axis_field = ref.split(".", 1)
+                
+                ok, msg = CANVAS.verify_artifact(path, bare_id)
+                if not ok:
+                    return msg
+                
+                # Verify the dotted ref end-to-end via CANVAS so the
+                # standard error messages (artifact missing, field
+                # missing, value mismatch) come from one place.
+                try:
+                    upstream_args = CANVAS.get_artifact(bare_id).args or {}
+                except Exception as e:                          # noqa: BLE001
+                    return (
+                        f"Structural entry {entry!r}: could not load "
+                        f"upstream artifact '{bare_id}': {e}"
+                    )
+                if axis_field not in upstream_args:
+                    return (
+                        f"Structural entry {entry!r}: upstream "
+                        f"artifact '{bare_id}' has no input parameter "
+                        f"named '{axis_field}'. Available args keys: "
+                        f"{sorted(upstream_args.keys())}. Either use a "
+                        f"different axis field that IS a top-level "
+                        f"args key, or use the 3-tuple escape hatch "
+                        f"(path, ref, value) to supply the value "
+                        f"directly."
+                    )
+                axis_value = upstream_args[axis_field]
+                seen_axis_names.add(axis_field)
+                resolved_entries.append((path, ref, axis_field, axis_value))
+
+            elif len(entry) == 3:
+                path, ref, axis_value = entry[0], entry[1], entry[2]
+                if not (isinstance(path, str) and isinstance(ref, str)):
+                    return (
+                        "Structural-mode 3-tuple entries must have "
+                        f"(str, str, value) shape; got {entry!r}."
+                    )
+                # 3-tuple escape hatch: agent supplies axis_value
+                # directly. If the ref happens to be dotted, record
+                # the dotted field as a candidate axis name (the
+                # supplied value is still authoritative). If the ref
+                # is bare or empty, fall back to a placeholder axis
+                # name; we'll resolve at the end based on
+                # `seen_axis_names`.
+                # if "." in ref:
+                #     candidate_field = ref.split(".", 1)[1].strip()
+                #     if candidate_field:
+                #         seen_axis_names.add(candidate_field)
+                #         axis_field_for_entry: Optional[str] = candidate_field
+                #     else:
+                #         axis_field_for_entry = None
+                # else:
+                #     axis_field_for_entry = None
+                ok, msg = CANVAS.verify_artifact(path, ref)
+                if not ok:
+                    return msg
+                
+                resolved_entries.append(
+                    (path, ref, None, axis_value)
+                )
+
+            else:
+                return (
+                    "Structural-mode varying_parameter_values entries "
+                    "must be (path, dotted_ref) 2-tuples or "
+                    f"(path, ref, value) 3-tuples; got {entry!r}."
+                )
+
+        # All dotted refs in the list must agree on the axis name.
+        # If only some entries are dotted, the axis name is inferred
+        # from those; bare-ref 3-tuple entries inherit it. If no
+        # entries are dotted, fall back to 'inputAtomsDir' as the
+        # axis name (the agent is using the escape hatch exclusively).
+        if len(seen_axis_names) > 1:
+            return (
+                "Structural-mode varying_parameter_values has dotted "
+                f"refs pointing at multiple different axis fields: "
+                f"{sorted(seen_axis_names)}. All dotted refs in one "
+                f"sweep must reference the SAME field (the swept "
+                f"axis). Either align the refs or split into separate "
+                f"convergence-test calls."
+            )
+        inferred_axis_name = (
+            next(iter(seen_axis_names)) if seen_axis_names
+            else "inputAtomsDir"
+        )
+        # Backfill the axis name on entries whose ref was bare /
+        # didn't contain a field hint.
+        resolved_entries = [
+            (path, ref, (axis or inferred_axis_name), axis_value)
+            for (path, ref, axis, axis_value) in resolved_entries
+        ]
+
+        # Each path must be readable as a structure. Verify all up
+        # front; on the first failure abort before generating any
+        # files. Also detect basename collisions so two structures
+        # don't silently overwrite each other's job files.
+        WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+        basenames: List[str] = []
+        for path, ref, _axis_name, _axis_value in resolved_entries:
+            struct_full = os.path.join(WORKING_DIRECTORY, path)
+            try:
+                read(struct_full)
+            except Exception as e:                              # noqa: BLE001
+                return (
+                    f"Could not read structure '{path}' for "
+                    f"structural convergence test: {e}"
+                )
+            basenames.append(os.path.splitext(os.path.basename(path))[0])
+        if len(set(basenames)) != len(basenames):
+            return (
+                "Two or more structures in varying_parameter_values "
+                "have the same basename; job filenames would collide. "
+                "Rename one of the upstream structure files to "
+                "disambiguate."
+            )
+    else:
+        if not all(isinstance(v, (int, float)) for v in varying_parameter_values):
+            return (
+                f"When varying_parameter_name={varying_parameter_name!r}, "
+                "varying_parameter_values must be a list of floats."
+            )
+
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     input_file = os.path.join(WORKING_DIRECTORY, input_file_name)
     try:
-        atom = read(input_file)
+        template_atom = read(input_file)
     except:
         return f"Invalid input file, please inspect CANVAS and select the correct template file."
 
-    cell = atom.cell
-    ecutwfc_max = max(ecutwfc)
-    kspacing_min = min(kspacing)
-    job_list_dict = CANVAS.canvas.get('jobs_K_and_ecut', {})
-    job_list = []
-
-    for k in kspacing:
-        kpoints = [
-            2 * ((np.ceil(2 * np.pi / np.linalg.norm(ii) / k).astype(int)) // 2 + 1) for ii in cell
-        ]
-        for i in range(len(kpoints)):
-            if kpoints[i] % 2 == 0:
-                if kpoints[i] > 1:
-                    kpoints[i] -= 1
-                else:
-                    kpoints[i] += 1
-
-        with open(input_file, 'r') as f:
-            lines = f.readlines()
-            for i, line in enumerate(lines):
-                if 'ecutwfc' in line:
-                    lines[i] = f'    ecutwfc = {ecutwfc_max},\n'
-                if 'ecutrho' in line:
-                    lines[i] = f"    ecutrho = {ecutwfc_max*4},\n"
-                if 'K_POINTS' in line:
-                    lines[i + 1] = ' '.join(map(str, kpoints)) + ' 0 0 0' + '\n'
-
-            tmpName = os.path.splitext(input_file_name)[0].split('_k_')[0]
-            new_file_name = f'{tmpName}_k_{k}_ecutwfc_{ecutwfc_max}.pwi'
-            print(new_file_name)
-            job_list_dict[new_file_name] = {'k': k, 'ecutwfc': ecutwfc_max}
-            new_input_file = os.path.join(WORKING_DIRECTORY, new_file_name)
-            job_list.append(new_file_name)
-            with open(new_input_file, 'w') as f:
-                f.writelines(lines)
-
-    for e in ecutwfc:
-        kpoints = [
-            2 * ((np.ceil(2 * np.pi / np.linalg.norm(ii) / kspacing_min).astype(int)) // 2 + 1) for ii in cell
-        ]
-        for i in range(len(kpoints)):
-            if kpoints[i] % 2 == 0:
-                if kpoints[i] > 1:
-                    kpoints[i] -= 1
-                else:
-                    kpoints[i] += 1
-
-        with open(input_file, 'r') as f:
-            lines = f.readlines()
-            for i, line in enumerate(lines):
-                if 'ecutwfc' in line:
-                    lines[i] = f'    ecutwfc = {e},\n'
-                if 'ecutrho' in line:
-                    lines[i] = f"    ecutrho = {e*4},\n"
-                if 'K_POINTS' in line:
-                    lines[i + 1] = ' '.join(map(str, kpoints)) + ' 0 0 0' + '\n'
-
-            new_file_name = f'{os.path.splitext(input_file_name)[0]}_k_{kspacing_min}_ecutwfc_{e}.pwi'
-            job_list_dict[new_file_name] = {'k': kspacing_min, 'ecutwfc': e}
-            new_input_file = os.path.join(WORKING_DIRECTORY, new_file_name)
-            job_list.append(new_file_name)
-            with open(new_input_file, 'w') as f:
-                f.writelines(lines)
-
-    job_list = list(set(job_list))
-
     merged_reasons = _merge_context(context, reasons)
 
+    job_list_dict = CANVAS.canvas.get('jobs_K_and_ecut', {})
+    job_list = []
+    prefix = input_file_name.split('.')[0]
+    original_args = CANVAS.get_artifact(input_file_name_ref).args
+
+    # In structural mode, the registered axis-name label is the
+    # inferred field (e.g. 'n_fixed_layers'). In numerical mode it's
+    # the QE parameter being varied.
+    if is_structural:
+        stored_param_name = (
+            resolved_entries[0][2] if resolved_entries else "inputAtomsDir"
+        )
+    else:
+        stored_param_name = varying_parameter_name
+
     id_dict = {}
-    for job in job_list:
-        id_dict[job] = CANVAS.register_tool_output(
+    iterable = resolved_entries if is_structural else varying_parameter_values
+
+    for entry in iterable:
+        if is_structural:
+            struct_path, struct_ref, _axis_name, searchable_value = entry
+            struct_full = os.path.join(WORKING_DIRECTORY, struct_path)
+            this_atom = read(struct_full)
+            sanitized = os.path.splitext(os.path.basename(struct_path))[0]
+            new_file_name = (
+                f'{prefix}_{stored_param_name}_{searchable_value}_'
+                f'{sanitized}.pwi'
+            )
+            args = copy.deepcopy(original_args)
+            # All DFT parameters inherited from the template; the
+            # structure provides only geometry. No `args[name] = value`
+            # substitution here.
+            display_value: Any = searchable_value
+            # Provenance: include both the template and the bare id
+            # of the dotted/bare ref this entry sourced from. The
+            # per-param map records the ref EXACTLY as supplied
+            # (dotted form preserved) so the verifier's R1_DOTTED
+            # rule fires on the right entries.
+            struct_bare_id = (
+                struct_ref.split(".", 1)[0] if "." in struct_ref
+                else struct_ref
+            )
+            this_parent_ids = [input_file_name_ref]
+            if struct_bare_id:
+                this_parent_ids.append(struct_bare_id)
+            this_param_sources = {
+                "input_file_name": input_file_name_ref,
+                "varying_parameter_values": struct_ref,
+            }
+        else:
+            value = entry
+            this_atom = template_atom
+            new_file_name = f'{prefix}_{stored_param_name}_{value}.pwi'
+            args = copy.deepcopy(original_args)
+            args[stored_param_name] = value
+            if stored_param_name == "ecutwfc":
+                args["ecutrho"] = value * 4
+            display_value = value
+            this_parent_ids = [input_file_name_ref]
+            this_param_sources = {"input_file_name": input_file_name_ref}
+
+        print(new_file_name)
+        job_list_dict[new_file_name] = {stored_param_name: display_value}
+        new_input_file = os.path.join(WORKING_DIRECTORY, new_file_name)
+        job_list.append(new_file_name)
+
+        # kpoints from THIS job's cell, using THIS job's kspacing.
+        # In structural mode, each structure has its own cell and we
+        # use the template's kspacing. In numerical mode, the template
+        # cell is reused across jobs and (for the kspacing sweep)
+        # kspacing varies per job.
+        kpoints = [
+            2 * ((np.ceil(2 * np.pi / np.linalg.norm(ii) / args['kspacing']).astype(int)) // 2 + 1)
+            for ii in this_atom.cell
+        ]
+
+        pseudopotentials = {}
+        for element, pseudo in zip(args['listofElements'], args['ppfiles']):
+            if not os.path.exists(os.path.join("/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/all_lda_pbe_UPF", pseudo)):
+                return f"Invalid pseudopotential file: {pseudo}. Make sure to supply the correct pseudopotential file name."
+            pseudopotentials[element] = pseudo
+
+        write(new_input_file,
+          this_atom,
+          input_data={
+              'calculation': args['calculation'],
+              'restart_mode': args['restart_mode'],
+              'prefix': args['prefix'],
+              'pseudo_dir': "/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/all_lda_pbe_UPF",
+              'outdir': './out',
+              'disk_io': args['disk_io'],
+              'ibrav': args['ibrav'],
+              'nat': args['nat'],
+              'ntyp': args['ntyp'],
+              'ecutwfc': args['ecutwfc'],
+              'ecutrho': args['ecutrho'],
+              'occupations': args['occupations'],
+              'smearing': args['smearing'],
+              'degauss': args['degauss'],
+              'conv_thr': args['conv_thr'],
+              'electron_maxstep': args['electron_maxstep'],
+              'input_dft': args['input_dft'],
+              **args['additional_input']
+          },
+          format='espresso-in',
+          pseudopotentials=pseudopotentials,
+          kpts=tuple(kpoints))
+
+        id_dict[new_file_name] = CANVAS.register_tool_output(
             tool_name="generate_convergence_test",
             args={
                 "input_file_name": input_file_name,
-                "kspacing": job_list_dict[job]['k'],
-                "ecutwfc": job_list_dict[job]['ecutwfc'],
+                "varying_parameter_name": varying_parameter_name,
+                "varying_parameter_values": display_value,
             },
-            value=[job, job_list_dict[job]['k'], job_list_dict[job]['ecutwfc']],
+            value=[new_file_name, stored_param_name, display_value],
             listed_value=True,
-            description=f"Generated convergence test job with its corresponding kspacing and ecutwfc values.",
+            description=(
+                f"Generated convergence test job using template "
+                f"{input_file_name} with {stored_param_name}="
+                f"{display_value}."
+            ),
             reasons=merged_reasons,
-            parent_result_ids=[input_file_name_ref],
-            parent_result_ids_w_args={"input_file_name": input_file_name_ref},
+            parent_result_ids=this_parent_ids,
+            parent_result_ids_w_args=this_param_sources,
             metadata={},
         )
+
+    job_list = list(set(job_list))
 
     job_list_dict_for_canvas = {job_name: id_dict[job_name] for job_name in job_list}
     job_list_dict_for_canvas = copy.deepcopy(CANVAS.canvas.get('ready_to_run_job_list', {})) | job_list_dict_for_canvas
@@ -1698,16 +2246,342 @@ def generate_convergence_test(
     CANVAS.write('jobs_K_and_ecut', job_list_dict_for_canvas)
 
     out_id_dict = {
-        id_dict[job_name]: {
-            'kspacing': job_list_dict[job_name]['k'],
-            'ecutwfc': job_list_dict[job_name]['ecutwfc'],
-            'job_name': job_name,
-        }
+        id_dict[job_name]: (
+            job_name,
+            stored_param_name,
+            job_list_dict[job_name][stored_param_name],
+        )
         for job_name in job_list
     }
 
     return f"Job list is saved scucessfully. \nIDs for each generated files and their varying parameters are shown below:\n{out_id_dict}. Please tell the supervisor in your response that convergence job has generated sucessfully, please continue to submit the jobs"
 
+
+# @tool
+# def generate_convergence_test(
+#     input_file_name: Annotated[str, "Name of the template quantum espresso input file. The template's QE parameters (ecutwfc, kspacing, smearing, etc.) are inherited by every generated job; only the parameter named in `varying_parameter_name` is replaced per job."],
+#     varying_parameter_name: Annotated[
+#         Literal["ecutwfc", "degauss", "kspacing", "inputAtomsDir"],
+#         "Name of the parameter to be varied in the convergence test. "
+#         "Use 'ecutwfc', 'degauss', or 'kspacing' for a numerical sweep "
+#         "of one DFT parameter on a single fixed structure. Use "
+#         "'inputAtomsDir' for a STRUCTURAL sweep — varying the input "
+#         "geometry across multiple structures (e.g. slab thickness, "
+#         "vacuum size) while holding all DFT parameters fixed at the "
+#         "template's values. You must generate the upstream structures "
+#         "first with structure generation tools with one argument varied"
+#         "and supply their (path, ref) pairs in `varying_parameter_values`."
+#     ],
+#     varying_parameter_values: Annotated[
+#         Union[List[float], List[Tuple[str, str]], List[Tuple[str, str, float]]],
+#         "List of values for the parameter to be tested. SHAPE depends on "
+#         "`varying_parameter_name`: "
+#         "  * For 'ecutwfc' / 'degauss' / 'kspacing' — a List[float] of "
+#         "    sweep values. Typical ranges: kspacing 0.1-0.4; ecutwfc "
+#         "    40-100. "
+#         "  * For 'inputAtomsDir' — a List[Tuple[str, str]] of (path, "
+#         "    source_result_id) pairs, one tuple per structure to test. "
+#         "    Each path is the file produced by an upstream tool "
+#         "    (typically generateSurface_and_getPossibleSite); the ref "
+#         "    is the source_result_id of that tool's output. The "
+#         "    searchable numeric value for each structure (e.g. the "
+#         "    layer count) is read automatically from the upstream "
+#         "    artifact's args using `varying_structural_parameter_name` "
+#         "    as the key. "
+#         "    ESCAPE HATCH: if the searchable axis is not a direct args "
+#         "    key on the upstream artifact (e.g. it's derived), pass "
+#         "    3-tuples (path, source_result_id, value) instead and the "
+#         "    supplied value overrides the args lookup for that entry. "
+#         "    Each ref is verified before the job is generated; the call "
+#         "    fails on the first ref that does not verify.",
+#     ],
+#     input_file_name_ref: Annotated[str, "The source_result_id of the previous tool output where this input_file_name value was generated. Accepts an 8-char id to reference the output, or `<8-char-id>.<param_name>` to reference an input parameter of a past tool call (see `list_referenceable_inputs`)."],
+#     context: Annotated[
+#         str,
+#         "1-2 sentence describing which study or exploration this tool call "
+#         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
+#         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+#         "'one-off check'), and the reason why you call this tool."
+#     ],
+#     reasons: Annotated[
+#         Dict[str, str],
+#         "Per-parameter rationale. For each parameter, write 2-3 sentences "
+#         "covering: "
+#         "(a) THE ROLE THIS PARAMETER plays in the study described in "
+#         "`context` (e.g. 'being varied now', 'fixed at converged value from "
+#         "prior convergence test', 'inherited from upstream tool', "
+#         "'held fixed by design while a sub-study is in progress'); "
+#         "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
+#         "supports it, and the expected effect on the output. "
+#         "The keys must include: 'input_file_name', 'varying_parameter_name', 'varying_parameter_values'.",
+#     ],
+#     varying_structural_parameter_name: Annotated[
+#         Optional[str],
+#         "REQUIRED when varying_parameter_name='inputAtomsDir'. Names the "
+#         "actual characterization axis being swept across the structures — "
+#         "Must be a key present in each upstream structure artifact's args"
+#         "The 3-tuple escape hatch in "
+#         "varying_parameter_values overrides this lookup per-entry when "
+#         "the axis is not a direct args key on the upstream artifact. "
+#         "Ignored for numerical sweeps.",
+#     ] = None,
+# ):
+#     '''
+#     Using another QE input file as a template, generate convergence test
+#     input scripts by varying ONE thing while keeping everything else the
+#     same, and save the job list. Two modes: numerical parameter sweep
+#     ('ecutwfc' / 'degauss' / 'kspacing') reuses the template structure
+#     across jobs and varies only the named DFT parameter; structural sweep
+#     ('inputAtomsDir') uses a different upstream-generated structure per
+#     job with all DFT parameters inherited from the template, and kpoints
+#     recomputed per-job from each structure's cell using the template's
+#     kspacing.
+
+#     reference_id in the output ties with: generated convergence-test job list, list[str]
+#     '''
+#     ok, msg = CANVAS.verify_artifact(input_file_name, input_file_name_ref)
+#     if not ok:
+#         return msg
+
+#     is_structural = varying_parameter_name == "inputAtomsDir"
+
+#     # Validate the shape of varying_parameter_values against the mode,
+#     # and (in structural mode) resolve the per-entry searchable value.
+#     # `resolved_entries` holds, per job: (path, ref, searchable_value).
+#     resolved_entries: List[Tuple[str, str, Any]] = []
+
+#     if is_structural:
+#         if not varying_structural_parameter_name or not varying_structural_parameter_name.strip():
+#             return (
+#                 "When varying_parameter_name='inputAtomsDir', "
+#                 "`varying_structural_parameter_name` is required (e.g. "
+#                 "'n_fixed_layers'). It names the actual characterization "
+#                 "axis being swept across the structures and provides the "
+#                 "key under which each structure's searchable numeric "
+#                 "value is registered for downstream tools."
+#             )
+
+#         for entry in varying_parameter_values:
+#             # Accept (path, ref) 2-tuples or (path, ref, value) 3-tuples.
+#             if isinstance(entry, (tuple, list)) and len(entry) == 2:
+#                 path, ref = entry
+#                 if not (isinstance(path, str) and isinstance(ref, str)):
+#                     return (
+#                         "Structural-mode varying_parameter_values entries "
+#                         "must be (path, ref) string pairs or (path, ref, "
+#                         f"value) triples; got {entry!r}."
+#                     )
+#                 # Primary path: read the searchable value from the
+#                 # upstream artifact's args.
+#                 try:
+#                     upstream_args = CANVAS.get_artifact(ref).args
+#                 except Exception as e:                          # noqa: BLE001
+#                     return (
+#                         f"Could not load upstream artifact for "
+#                         f"structure '{path}' (ref={ref}): {e}"
+#                     )
+#                 if varying_structural_parameter_name not in upstream_args:
+#                     return (
+#                         f"Upstream artifact for structure '{path}' does "
+#                         f"not have a '{varying_structural_parameter_name}' "
+#                         f"key in its args. Available args keys: "
+#                         f"{sorted(upstream_args.keys())}. "
+#                         f"Either re-generate the structure with a tool "
+#                         f"that records this parameter, or pass a 3-tuple "
+#                         f"(path, ref, value) to supply the searchable "
+#                         f"value directly."
+#                     )
+#                 searchable_value = upstream_args[varying_structural_parameter_name]
+#             elif isinstance(entry, (tuple, list)) and len(entry) == 3:
+#                 path, ref, searchable_value = entry
+#                 if not (isinstance(path, str) and isinstance(ref, str)):
+#                     return (
+#                         "Structural-mode 3-tuple entries must have "
+#                         "(str, str, value) shape; got "
+#                         f"{entry!r}."
+#                     )
+#             else:
+#                 return (
+#                     "Structural-mode varying_parameter_values entries "
+#                     "must be (path, ref) 2-tuples or (path, ref, value) "
+#                     f"3-tuples; got {entry!r}."
+#                 )
+
+#             # Verify the path/ref pair against CANVAS.
+#             ok, msg = CANVAS.verify_artifact(path, ref)
+#             if not ok:
+#                 return f"Structure '{path}' failed verification: {msg}"
+
+#             resolved_entries.append((path, ref, searchable_value))
+
+#         # Detect basename collisions early — two structures with the
+#         # same basename would silently overwrite each other's job file.
+#         basenames = [
+#             os.path.splitext(os.path.basename(path))[0]
+#             for path, _, _ in resolved_entries
+#         ]
+#         if len(set(basenames)) != len(basenames):
+#             return (
+#                 "Two or more structures in varying_parameter_values have "
+#                 "the same basename; job filenames would collide. Rename "
+#                 "one of the upstream structure files to disambiguate."
+#             )
+#     else:
+#         if not all(isinstance(v, (int, float)) for v in varying_parameter_values):
+#             return (
+#                 f"When varying_parameter_name={varying_parameter_name!r}, "
+#                 "varying_parameter_values must be a list of floats."
+#             )
+
+#     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+#     input_file = os.path.join(WORKING_DIRECTORY, input_file_name)
+#     try:
+#         template_atom = read(input_file)
+#     except:
+#         return f"Invalid input file, please inspect CANVAS and select the correct template file."
+
+#     merged_reasons = _merge_context(context, reasons)
+
+#     job_list_dict = CANVAS.canvas.get('jobs_K_and_ecut', {})
+#     job_list = []
+#     prefix = input_file_name.split('.')[0]
+#     original_args = CANVAS.get_artifact(input_file_name_ref).args
+
+#     # Choose the parameter name that gets stored in the per-job artifact
+#     # value triple and in the canvas job-list dict. For structural mode,
+#     # this is the agent-supplied characterization axis (e.g.
+#     # 'n_fixed_layers'), NOT 'inputAtomsDir'. That way downstream
+#     # selection tools see the searchable axis directly.
+#     stored_param_name = (
+#         varying_structural_parameter_name if is_structural
+#         else varying_parameter_name
+#     )
+
+#     id_dict = {}
+#     # Use resolved_entries for structural mode (carries the searchable
+#     # value); use the raw values for numerical mode.
+#     iterable = resolved_entries if is_structural else varying_parameter_values
+
+#     for entry in iterable:
+#         if is_structural:
+#             struct_path, struct_ref, searchable_value = entry
+#             struct_full = os.path.join(WORKING_DIRECTORY, struct_path)
+#             try:
+#                 this_atom = read(struct_full)
+#             except Exception as e:                              # noqa: BLE001
+#                 return (
+#                     f"Could not read structure '{struct_path}' for "
+#                     f"structural convergence test: {e}"
+#                 )
+#             sanitized = os.path.splitext(os.path.basename(struct_path))[0]
+#             new_file_name = f'{prefix}_{stored_param_name}_{searchable_value}_{sanitized}.pwi'
+#             args = copy.deepcopy(original_args)
+#             # All DFT parameters inherited from the template; the
+#             # structure provides only geometry. No `args[name] = value`
+#             # substitution here.
+#             display_value: Any = searchable_value
+#             this_parent_ids = [input_file_name_ref, struct_ref]
+#             this_param_sources = {
+#                 "input_file_name": input_file_name_ref,
+#                 "varying_parameter_values": struct_ref,
+#             }
+#         else:
+#             value = entry
+#             this_atom = template_atom
+#             new_file_name = f'{prefix}_{stored_param_name}_{value}.pwi'
+#             args = copy.deepcopy(original_args)
+#             args[stored_param_name] = value
+#             if stored_param_name == "ecutwfc":
+#                 args["ecutrho"] = value * 4
+#             display_value = value
+#             this_parent_ids = [input_file_name_ref]
+#             this_param_sources = {"input_file_name": input_file_name_ref}
+
+#         print(new_file_name)
+#         job_list_dict[new_file_name] = {stored_param_name: display_value}
+#         new_input_file = os.path.join(WORKING_DIRECTORY, new_file_name)
+#         job_list.append(new_file_name)
+
+#         # kpoints from THIS job's cell, using THIS job's kspacing.
+#         # In structural mode, each structure has its own cell and we
+#         # use the template's kspacing. In numerical mode, the template
+#         # cell is reused across jobs and (for the kspacing sweep)
+#         # kspacing varies per job.
+#         kpoints = [
+#             2 * ((np.ceil(2 * np.pi / np.linalg.norm(ii) / args['kspacing']).astype(int)) // 2 + 1)
+#             for ii in this_atom.cell
+#         ]
+
+#         pseudopotentials = {}
+#         for element, pseudo in zip(args['listofElements'], args['ppfiles']):
+#             if not os.path.exists(os.path.join("/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/all_lda_pbe_UPF", pseudo)):
+#                 return f"Invalid pseudopotential file: {pseudo}. Make sure to supply the correct pseudopotential file name."
+#             pseudopotentials[element] = pseudo
+
+#         write(new_input_file,
+#           this_atom,
+#           input_data={
+#               'calculation': args['calculation'],
+#               'restart_mode': args['restart_mode'],
+#               'prefix': args['prefix'],
+#               'pseudo_dir': "/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/all_lda_pbe_UPF",
+#               'outdir': './out',
+#               'disk_io': args['disk_io'],
+#               'ibrav': args['ibrav'],
+#               'nat': args['nat'],
+#               'ntyp': args['ntyp'],
+#               'ecutwfc': args['ecutwfc'],
+#               'ecutrho': args['ecutrho'],
+#               'occupations': args['occupations'],
+#               'smearing': args['smearing'],
+#               'degauss': args['degauss'],
+#               'conv_thr': args['conv_thr'],
+#               'electron_maxstep': args['electron_maxstep'],
+#               'input_dft': args['input_dft'],
+#               **args['additional_input']
+#           },
+#           format='espresso-in',
+#           pseudopotentials=pseudopotentials,
+#           kpts=tuple(kpoints))
+
+#         id_dict[new_file_name] = CANVAS.register_tool_output(
+#             tool_name="generate_convergence_test",
+#             args={
+#                 "input_file_name": input_file_name,
+#                 "varying_parameter_name": varying_parameter_name,
+#                 "varying_parameter_values": display_value,
+#                 "varying_structural_parameter_name": varying_structural_parameter_name,
+#             },
+#             value=[new_file_name, stored_param_name, display_value],
+#             listed_value=True,
+#             description=(
+#                 f"Generated convergence test job using template "
+#                 f"{input_file_name} with {stored_param_name}="
+#                 f"{display_value}."
+#             ),
+#             reasons=merged_reasons,
+#             parent_result_ids=this_parent_ids,
+#             parent_result_ids_w_args=this_param_sources,
+#             metadata={},
+#         )
+
+#     job_list = list(set(job_list))
+
+#     job_list_dict_for_canvas = {job_name: id_dict[job_name] for job_name in job_list}
+#     job_list_dict_for_canvas = copy.deepcopy(CANVAS.canvas.get('ready_to_run_job_list', {})) | job_list_dict_for_canvas
+#     CANVAS.write('ready_to_run_job_list', job_list_dict_for_canvas, overwrite=True)
+#     CANVAS.write('jobs_K_and_ecut', job_list_dict_for_canvas)
+
+#     out_id_dict = {
+#         id_dict[job_name]: (
+#             job_name,
+#             stored_param_name,
+#             job_list_dict[job_name][stored_param_name],
+#         )
+#         for job_name in job_list
+#     }
+
+#     return f"Job list is saved scucessfully. \nIDs for each generated files and their varying parameters are shown below:\n{out_id_dict}. Please tell the supervisor in your response that convergence job has generated sucessfully, please continue to submit the jobs"
 
 @tool
 def generate_eos_test(
@@ -1720,8 +2594,7 @@ def generate_eos_test(
         "1-2 sentence describing which study or exploration this tool call "
         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'). Applies to the entire call and is merged into "
-        "each per-parameter rationale at registration time.",
+        "'one-off check'), and the reason why you call this tool."
     ],
     reasons: Annotated[
         Dict[str, str],
@@ -1730,14 +2603,14 @@ def generate_eos_test(
         "(a) THE ROLE THIS PARAMETER plays in the study described in "
         "`context` (e.g. 'being varied now', 'fixed at converged value from "
         "prior convergence test', 'inherited from upstream tool', "
-        "'placeholder before a real value is obtained'); "
+        "'held fixed by design while a sub-study is in progress'); "
         "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
         "supports it, and the expected effect on the output. "
         "The keys must include: 'input_file_name', "
         # "'kspacing', 'ecutwfc', "
         "'stepSize'.",
     ],
-    input_file_name_ref: Annotated[str, "The source_result_id of the previous tool output where the name of the template quantum espresso input file was generated."],
+    input_file_name_ref: Annotated[str, "The source_result_id of the previous tool output where the name of the template quantum espresso input file was generated. Accepts an 8-char id to reference the output, or `<8-char-id>.<param_name>` to reference an input parameter of a past tool call (see `list_referenceable_inputs`)."],
     # kspacing_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of kspacing value was generated. If not provided, you can only play around and see the effect of input parameter settings to output result of this tool, but you cannot use the output directly to calculate the final result"] = "",
     # ecutwfc_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of ecutwfc value was generated. If not provided, you can only play around and see the effect of input parameter settings to output result of this tool, but you cannot use the output directly to calculate the final result"] = "",
 ):
@@ -2047,11 +2920,11 @@ def find_optimal_parameter(
     sweeping_parameter: Annotated[str, "Name of the sweeping parameter, e.g. 'ecutwfc', 'kspacing', and etc."],
     filename_w_ref: Annotated[
         List[Tuple[str, str]],
-        "List of (filename, source_result_id) pairs. Each filename is the output file corresponding to one swept setting; the ref is the source_result_id of the previous tool output where that specific filename was generated. Aligned by index with `parameters_w_ref`.",
+        "List of (filename, source_result_id) pairs. Each filename is the output file corresponding to one swept setting; the ref is the source_result_id of the previous tool output where that specific filename was generated. Aligned by index with `parameters_w_ref`. Each source_result_id accepts an 8-char id to reference the output, or `<8-char-id>.<param_name>` to reference an input parameter of a past tool call (see `list_referenceable_inputs`).",
     ],
     parameters_w_ref: Annotated[
         List[Tuple[float, str]],
-        "List of (parameter_value, source_result_id) pairs. Each parameter_value is the swept value used in the corresponding filename. Aligned by index with `filename_w_ref`.",
+        "List of (parameter_value, source_result_id) pairs. Each parameter_value is the swept value used in the corresponding filename. Aligned by index with `filename_w_ref`. Each source_result_id accepts an 8-char id to reference the output, or `<8-char-id>.<param_name>` to reference an input parameter of a past tool call (see `list_referenceable_inputs`).",
     ],
     reference_file: Annotated[str, "Among the list of files, the reference_file filename corresponding to the most expensive / most accurate reference calculation."],
     threshold: Annotated[float, "Maximum allowed absolute energy difference in eV from the reference energy."],
@@ -2060,8 +2933,7 @@ def find_optimal_parameter(
         "1-2 sentence describing which study or exploration this tool call "
         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'). Applies to the entire call and is merged into "
-        "each per-parameter rationale at registration time.",
+        "'one-off check'), and the reason why you call this tool."
     ],
     reasons: Annotated[
         Dict[str, str],
@@ -2070,7 +2942,7 @@ def find_optimal_parameter(
         "(a) THE ROLE THIS PARAMETER plays in the study described in "
         "`context` (e.g. 'being varied now', 'fixed at converged value from "
         "prior convergence test', 'inherited from upstream tool', "
-        "'placeholder before a real value is obtained'); "
+        "'held fixed by design while a sub-study is in progress'); "
         "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
         "supports it, and the expected effect on the output. "
         "The keys must include: 'sweeping_parameter', 'filename', 'parameters',"
@@ -2103,6 +2975,9 @@ def find_optimal_parameter(
     bare_parameter_refs: List[str] = []
 
     for (fname, fname_ref), (pval, pval_ref) in zip(filename_w_ref, parameters_w_ref):
+        # remove trailing .pwo if exists for artifact verification
+        if fname.endswith('.pwo'):
+            fname = fname[:-4]
         ok, msg = CANVAS.verify_artifact(fname, fname_ref)
         if not ok:
             raise ValueError(f"Verification failed for filename {fname}: {msg}")
@@ -2135,13 +3010,31 @@ def find_optimal_parameter(
     reference_energy = read(os.path.join(WORKING_DIRECTORY, reference_file)).get_potential_energy()
 
     acceptable: List[Tuple[str, float]] = []
+    Ediff = []
     for filename, param_value in Filename_n_parameters:
-        energy = read(os.path.join(WORKING_DIRECTORY, filename)).get_potential_energy()
-        if abs(energy - reference_energy) <= threshold:
+        tmpAtom = read(os.path.join(WORKING_DIRECTORY, filename))
+        energy = tmpAtom.get_potential_energy()
+        Ediff.append(abs(energy - reference_energy)/len(tmpAtom))
+        if abs(energy - reference_energy)/len(tmpAtom) <= threshold:
             acceptable.append((filename, param_value))
+        
+    plt.figure()
+    plt.plot(bare_parameters, Ediff, marker='o')
+    plt.xlabel(sweeping_parameter)
+    plt.ylabel('Absolute Energy Difference (eV)')
+    plt.title(f'Energy Difference from Reference vs {sweeping_parameter}')
+    plt.axhline(y=threshold, color='r', linestyle='--', label='Threshold')
+    plt.legend()
+    plt.savefig(os.path.join(WORKING_DIRECTORY, f'{sweeping_parameter}_convergence_plot.png'))
+    plt.close()
 
     if len(acceptable) == 1:
-        return "Only the reference file is within threshold. No acceptable cheaper setting found. Please consider increasing the calculation settings to increase the accuracy of the calculation."
+        # ask the worker to do more run with more accurate settings
+        return """Only the reference file is within threshold. No acceptable cheaper setting found. 
+    You MUST treat the current sweep as insufficient. Leave a note on the CANVAS and Return Immediately with success=False, 
+    then reqest more runs with higher-accuracy settings beyond the current reference value, rerun the convergence tests, 
+    and then repeat the optimal-setting selection. However, if the parameter value is already quite extreme, 
+    then this may be caused by some other reason, you may suggest the supervisor to try out something else."""
 
     chosen = max(acceptable, key=lambda x: abs(x[1] - reference_param))
 
@@ -2178,23 +3071,31 @@ def calculate_formation_E(
     slabFilePath_w_ref: Annotated[
         Tuple[str, str],
         "(slab calculation file name, source_result_id) pair. "
-        "value at index 0 is the file name; value at index 1 is the ref.",
+        "value at index 0 is the file name; value at index 1 is the ref. "
+        "The source_result_id accepts an 8-char id to reference the output, or "
+        "`<8-char-id>.<param_name>` to reference an input parameter of a "
+        "past tool call (see `list_referenceable_inputs`).",
     ],
     adsorbateFilePath_w_ref: Annotated[
         Tuple[str, str],
-        "(adsorbate calculation file name, source_result_id) pair.",
+        "(adsorbate calculation file name, source_result_id) pair. The "
+        "source_result_id accepts an 8-char id to reference the output, or "
+        "`<8-char-id>.<param_name>` to reference an input parameter of a "
+        "past tool call (see `list_referenceable_inputs`).",
     ],
     systemFilePath_w_ref: Annotated[
         Tuple[str, str],
-        "(slab-with-adsorbate calculation file name, source_result_id) pair.",
+        "(slab-with-adsorbate calculation file name, source_result_id) pair. "
+        "The source_result_id accepts an 8-char id to reference the output, or "
+        "`<8-char-id>.<param_name>` to reference an input parameter of a "
+        "past tool call (see `list_referenceable_inputs`).",
     ],
     context: Annotated[
         str,
         "1-2 sentence describing which study or exploration this tool call "
         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'). Applies to the entire call and is merged into "
-        "each per-parameter rationale at registration time.",
+        "'one-off check'), and the reason why you call this tool."
     ],
     reasons: Annotated[
         Dict[str, str],
@@ -2203,7 +3104,7 @@ def calculate_formation_E(
         "(a) THE ROLE THIS PARAMETER plays in the study described in "
         "`context` (e.g. 'being varied now', 'fixed at converged value from "
         "prior convergence test', 'inherited from upstream tool', "
-        "'placeholder before a real value is obtained'); "
+        "'held fixed by design while a sub-study is in progress'); "
         "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
         "supports it, and the expected effect on the output. "
         "The keys must include: 'slabFilePath', 'adsorbateFilePath', "
@@ -2296,15 +3197,14 @@ def calculate_formation_E(
 def calculate_lc(
     jobFilenames_w_ref: Annotated[
         List[Tuple[str, str]],
-        "List of (filename, source_result_id) pairs. Each filename is the output file used to calculate the lattice constant; the ref is the source_result_id of the previous tool output where that specific filename was generated.",
+        "List of (filename, source_result_id) pairs. Each filename is the output file used to calculate the lattice constant; the ref is the source_result_id of the previous tool output where that specific filename was generated. Each source_result_id accepts an 8-char id to reference the output, or `<8-char-id>.<param_name>` to reference an input parameter of a past tool call (see `list_referenceable_inputs`).",
     ],
     context: Annotated[
         str,
         "1-2 sentence describing which study or exploration this tool call "
         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'). Applies to the entire call and is merged into "
-        "each per-parameter rationale at registration time.",
+        "'one-off check'), and the reason why you call this tool."
     ],
     reasons: Annotated[
         Dict[str, str],
@@ -2313,7 +3213,7 @@ def calculate_lc(
         "(a) THE ROLE THIS PARAMETER plays in the study described in "
         "`context` (e.g. 'being varied now', 'fixed at converged value from "
         "prior convergence test', 'inherited from upstream tool', "
-        "'placeholder before a real value is obtained'); "
+        "'held fixed by design while a sub-study is in progress'); "
         "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
         "supports it, and the expected effect on the output. "
         "The keys must include: 'jobFilenames'.",
@@ -2404,23 +3304,31 @@ def analyze_BEEF_result(
     slabFilePath_w_ref: Annotated[
         Tuple[str, str],
         "(slab calculation file, source_result_id) pair. value at index 0 is "
-        "the file path; value at index 1 is the ref.",
+        "the file path; value at index 1 is the ref. The source_result_id "
+        "accepts an 8-char id to reference the output, or `<8-char-id>.<param_name>` to reference "
+        "an input parameter of a past tool call (see "
+        "`list_referenceable_inputs`).",
     ],
     adsorbateFilePath_w_ref: Annotated[
         Tuple[str, str],
-        "(adsorbate calculation file, source_result_id) pair.",
+        "(adsorbate calculation file, source_result_id) pair. The "
+        "source_result_id accepts an 8-char id to reference the output, or "
+        "`<8-char-id>.<param_name>` to reference an input parameter of a "
+        "past tool call (see `list_referenceable_inputs`).",
     ],
     systemFilePath_w_ref: Annotated[
         Tuple[str, str],
-        "(slab-with-ontop-adsorbate calculation file, source_result_id) pair.",
+        "(slab-with-ontop-adsorbate calculation file, source_result_id) pair. "
+        "The source_result_id accepts an 8-char id to reference the output, or "
+        "`<8-char-id>.<param_name>` to reference an input parameter of a "
+        "past tool call (see `list_referenceable_inputs`).",
     ],
     context: Annotated[
         str,
         "1-2 sentence describing which study or exploration this tool call "
         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'). Applies to the entire call and is merged into "
-        "each per-parameter rationale at registration time.",
+        "'one-off check'), and the reason why you call this tool."
     ],
     reasons: Annotated[
         Dict[str, str],
@@ -2429,7 +3337,7 @@ def analyze_BEEF_result(
         "(a) THE ROLE THIS PARAMETER plays in the study described in "
         "`context` (e.g. 'being varied now', 'fixed at converged value from "
         "prior convergence test', 'inherited from upstream tool', "
-        "'placeholder before a real value is obtained'); "
+        "'held fixed by design while a sub-study is in progress'); "
         "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
         "supports it, and the expected effect on the output. "
         "The keys must include: 'slabFilePath', 'adsorbateFilePath', "
@@ -2634,8 +3542,8 @@ echo "Job Ended at `date`"\n \
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     parent_ID = CANVAS.canvas.get("ready_to_run_job_list", {})[qeInputFileName]
 
-    # new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 48, "runtime": 2800, "submissionScript": submissionScript, "outputFilename": outputFilename}}
-    new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 4, "runtime": 30, "submissionScript": submissionScript, "outputFilename": outputFilename, "ID": parent_ID}}
+    new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 48, "runtime": 2800, "submissionScript": submissionScript, "outputFilename": outputFilename, "ID": parent_ID}}
+    # new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 4, "runtime": 30, "submissionScript": submissionScript, "outputFilename": outputFilename, "ID": parent_ID}}
 
     # check if resource_suggestions.db exist in the working directory
     db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
@@ -2758,9 +3666,11 @@ def submit_and_monitor_job(
                 ## Supervisor sometimes ask to submit the job again, so we need to check if the output file exists
                 try:
                     # temporay disable the read function to avoid the calculation
-                    # tmp = read(os.path.join(WORKING_DIRECTORY, outputFile))
-                    # _ = tmp.get_potential_energy()
+                    tmp = read(os.path.join(WORKING_DIRECTORY, outputFile))
+                    _ = tmp.get_potential_energy()
                     print(f"Output file {inputFile}.pwo already exists, the calculation is done")
+                    parent_ids.add(resource_dict[inputFile]['ID'])
+                    job_to_id[inputFile] = resource_dict[inputFile]['ID']
                     continue
                 except:
                     print("output file exists but the calculation is not done, will resubmit the job")
@@ -2947,6 +3857,7 @@ def submit_and_monitor_job(
     convergedJobs = []
     convergedJobsParents = set()
     for job in job_list:
+        print("hahahahaha")
         try:
             # temporay disable the read function to avoid the calculation
             tmp = read(os.path.join(WORKING_DIRECTORY, job + '.pwo'))
@@ -2955,7 +3866,8 @@ def submit_and_monitor_job(
             convergedJobs.append(job + '.pwo')
             convergedJobsParents.add(job_to_id[job])
             numberOfSucc += 1
-        except:
+        except Exception as e:
+            print(f"Job {job} has not finished or failed, error: {e}")
             notConvergedListString += job + ", "
     
     if notConvergedListString != "":
@@ -3004,15 +3916,14 @@ def submit_and_monitor_job(
 def read_energy_from_output(
     jobFilenames_w_ref: Annotated[
         List[Tuple[str, str]],
-        "List of (filename, filename_ref_id) pairs. Energy of <filename> will be read and printed, filename_ref_id is the source_result_id of the previous tool output where that specific filename was generated."
+        "List of (filename, filename_ref_id) pairs. Energy of <filename> will be read and printed, filename_ref_id is the source_result_id of the previous tool output where that specific filename was generated. Each filename_ref_id accepts an 8-char id to reference the output, or `<8-char-id>.<param_name>` to reference an input parameter of a past tool call (see `list_referenceable_inputs`)."
     ],
     context: Annotated[
         str,
         "1-2 sentence describing which study or exploration this tool call "
         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'). Applies to the entire call and is merged into "
-        "each per-parameter rationale at registration time.",
+        "'one-off check'), and the reason why you call this tool."
     ],
     reasons: Annotated[
         Dict[str, str],
@@ -3021,7 +3932,7 @@ def read_energy_from_output(
         "(a) THE ROLE THIS PARAMETER plays in the study described in "
         "`context` (e.g. 'being varied now', 'fixed at converged value from "
         "prior convergence test', 'inherited from upstream tool', "
-        "'placeholder before a real value is obtained'); "
+        "'held fixed by design while a sub-study is in progress'); "
         "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
         "supports it, and the expected effect on the output. "
         "The keys must include: 'jobFilenames'.",

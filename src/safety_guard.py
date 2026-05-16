@@ -14,9 +14,16 @@ This revision aligns the safety guard with the migrated tools:
   register their rationale as `{"reasons": "<text>"}`; per-parameter lookups
   fall through to that key when the parameter name is not present.
 
-* `overall_goal` is now threaded into every judge call. The judge sees both
-  the immediate target quantity and the overall study purpose, so it can
-  weigh atypical-looking values that are sensible inside an exploration.
+* The per-parameter judge reads the merged `Context:` line at the start of
+  each `reason` to determine whether the artifact is part of production or
+  sub-study work, and adjusts its scrutiny accordingly. The overall study
+  goal and target quantity are no longer threaded directly into judge
+  prompts — the `Context:` prefix already encodes the local purpose, and
+  the judge does not need the report's top-level claim to evaluate a
+  specific upstream parameter. The judge call accepts only what's locally
+  necessary: tool name and description for grounding, parameter name and
+  value, the rationale (with merged context), the source artifact summary
+  if any, and the rule string for the current branch.
 
 * List-shaped parameters are verified element-by-element for value match,
   then judged collectively (one judge call asking whether the N sources
@@ -45,11 +52,14 @@ import math
 import re
 import time
 from typing import Any, Dict, List, Optional, Literal, Set, Annotated, Tuple
+import os
 
 from pydantic import BaseModel, Field
 from langchain.tools import tool
 from src.myCANVAS import CANVAS
 from src import var
+from src.verify_dag_visualizer import VerifyVisualizer
+
 
 from langchain_anthropic import ChatAnthropic
 
@@ -94,71 +104,466 @@ _LIT_TAG = re.compile(r"\{lit:([^}]+)\}")
 _NUMBER_RE = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(?![\w.])")
 
 
+# =========================================================
+# Issue categorization for supervisor-facing output
+# =========================================================
+#
+# The verifier emits two kinds of failures:
+#
+#   (1) per-parameter checks generated inside `verify_artifact_parameterization`,
+#       `_verify_sourced_param`, `_verify_optional_source_match`, and
+#       `_verify_extraction_behavior`. Each of these sites tags its
+#       `ParamCheckResult` with a category at the moment of emission.
+#
+#   (2) report-/claim-level checks generated directly inside
+#       `verify_structured_report` (empty overall_goal, claim value-mismatch,
+#       artifact lookup failures, etc.) and `_verify_one_artifact_recursive`
+#       (recursion failures). Same: the site supplies the category.
+#
+# The post-processor `summarize_verification_for_supervisor` then assembles
+# a numbered, structured issue list keyed by these categories, attaches
+# remediation options, and returns the supervisor-facing format.
+
+class IssueCategory(str):
+    """Closed set of issue category strings.
+
+    Using a str subclass instead of an Enum keeps these values trivially
+    JSON-serializable and avoids unnecessary friction at LLM boundaries
+    (the LLM consumes the string value, not an enum object).
+    """
+    # Claim-level: the claim's value doesn't match its registered artifact.
+    VALUE_MISMATCH_CLAIM = "value_mismatch_claim"
+    # Per-parameter: a parameter's value doesn't match the upstream artifact
+    # it was sourced from (deterministic check, before any judge involvement).
+    VALUE_MISMATCH_PARAM = "value_mismatch_param"
+    # Sensitive parameter has no upstream source and the per-parameter judge
+    # decided this is a real failure (production context, or sub-study cover
+    # that the judge found incoherent).
+    UNSOURCED_SENSITIVE = "unsourced_sensitive"
+    # Sensitive parameter has an upstream source but the judge said the
+    # source is semantically inappropriate for this parameter or the
+    # source's conditions don't match the current use.
+    CROSS_WIRED_SOURCE = "cross_wired_source"
+    # Sensitive parameter is sourced via a dotted reference into an
+    # earlier tool call's input AND the current call is production
+    # work AND the upstream input was itself uncharacterized (held by
+    # design within its origin call, not drawn from an upstream
+    # characterization). Production cannot legitimately consume an
+    # uncharacterized value; a dotted ref to one launders the missing
+    # characterization.
+    DOTTED_SOURCE_INAPPROPRIATE = "dotted_source_inappropriate"
+    # Sensitive-and-varied parameter where the judge flagged the value as
+    # not making sense as a sweep point for the stated study.
+    UNDER_JUSTIFIED_SWEEP = "under_justified_sweep"
+    # Non-sensitive parameter where the judge flagged the rationale as
+    # missing workflow context.
+    UNDER_JUSTIFIED_CHOICE = "under_justified_choice"
+    # Extraction-tool output (numeric or text) doesn't appear as a complete
+    # token in its source.
+    EXTRACTION_TOKEN_MISMATCH = "extraction_token_mismatch"
+    # Extraction judge flagged the extraction as unjustified or wrong.
+    EXTRACTION_JUDGE_FAIL = "extraction_judge_fail"
+    # Extraction has no recoverable source text — surfaces as warning.
+    EXTRACTION_NO_SOURCE = "extraction_no_source"
+    # Report has empty overall_goal or other report-generation-time
+    # schema violation.
+    SCHEMA_VIOLATION = "schema_violation"
+    # An artifact result_id couldn't be loaded from the registry.
+    ARTIFACT_LOOKUP_FAILED = "artifact_lookup_failed"
+    # The recursive descent into a child artifact raised an exception.
+    RECURSION_FAILURE = "recursion_failure"
+    # Catch-all for ParamCheckResult.verdict in {fail, warning} that
+    # somehow didn't get a more specific category. Should not appear in
+    # practice; a debug aid if a new code path forgets to tag.
+    UNCATEGORIZED = "uncategorized"
+
+
+# Sentinel used as ParamCheckResult.rule_applied when the deterministic
+# value-match check fails. Distinguishes the value-mismatch failure mode
+# from the LLM-judge failure mode that uses the actual rule string.
+VALUE_MATCH_SENTINEL = "VALUE_MATCH"
+
+
+# Per-category remediation hints. Each value is a list of legitimate
+# fix paths the supervisor can choose between. The post-processor attaches
+# the relevant list to each issue's `remediation_options` field.
+#
+# Two cross-cutting reminders are appended where relevant:
+#   * "DO NOT silently patch by attaching some other artifact's ID..."
+#     (anti-ref-patching guidance for source-related failures)
+#   * "Regenerating an artifact invalidates downstream consumers..."
+#     (the regeneration cascade reminder, for any fix that involves
+#     recreating an artifact)
+# These are expressed as standalone constants and concatenated into the
+# remediation lists below so the wording stays consistent.
+
+_NO_REF_PATCHING_WARNING = (
+    "DO NOT resolve this by finding some other artifact's `result_id` and "
+    "patching it in as the missing ref. The verifier will catch a "
+    "value-mismatch (the patched artifact's value won't match what was "
+    "actually used) or a cross-wiring (the patched artifact may be "
+    "semantically inappropriate). The legitimate fixes are listed above."
+)
+
+_REGEN_CASCADE_WARNING = (
+    "IMPORTANT: regenerating an artifact invalidates every artifact "
+    "downstream that referenced it. After fixing this artifact, you MUST "
+    "re-run every dependent calculation (production runs, ensemble "
+    "calculations, downstream extractions) using the new artifact's "
+    "`result_id`. The verifier will surface stale references on the next "
+    "verification pass."
+)
+
+
+REMEDIATION_OPTIONS: Dict[str, List[str]] = {
+    IssueCategory.VALUE_MISMATCH_CLAIM: [
+        "The numerical value in the claim does not match what the "
+        "registered artifact actually produced. Re-read the artifact's "
+        "value via CANVAS and update the claim's `value` field to match, "
+        "OR verify that the claim is pointing at the correct `result_id`.",
+        "If the claim is pointing at the wrong artifact (e.g. the agent "
+        "captured the result_id of an intermediate calculation instead of "
+        "the final one), update the `result_id` to the correct artifact.",
+    ],
+    IssueCategory.VALUE_MISMATCH_PARAM: [
+        "The parameter's value does not match the upstream artifact it "
+        "was sourced from. Either update the parameter's value to match "
+        "the upstream artifact's actual output, OR — if the value is "
+        "correct — find the actual upstream artifact whose value matches "
+        "and update the ref. The current ref is incorrect.",
+        _NO_REF_PATCHING_WARNING,
+        _REGEN_CASCADE_WARNING,
+    ],
+    IssueCategory.UNSOURCED_SENSITIVE: [
+        "Characterize the parameter upstream by running a sub-study (e.g. "
+        "a convergence test via "
+        "generate_convergence_test/submit_and_monitor_job/find_optimal_parameter), "
+        "then re-create the offending artifact with the appropriate "
+        "`*_ref` pointing at the optimization result.",
+        "If this parameter is being deliberately swept for the claim, "
+        "add it to the claim's `varied_parameters` list and re-generate "
+        "the report.",
+        "If this artifact is misclassified (i.e. it is actually part of a "
+        "sub-study and not production work), update the tool call's "
+        "`context` argument to clearly identify the sub-study purpose "
+        "(e.g. 'convergence test for ecutwfc'), re-create the artifact, "
+        "and re-generate the report.",
+        _NO_REF_PATCHING_WARNING,
+        _REGEN_CASCADE_WARNING,
+    ],
+    IssueCategory.CROSS_WIRED_SOURCE: [
+        "The judge determined the upstream source is semantically wrong "
+        "for this parameter (e.g. an ecutwfc convergence result used as a "
+        "kspacing pin), or the source's characterization conditions don't "
+        "match this artifact's use. Find or create the correct upstream "
+        "artifact and re-create this artifact with the proper `*_ref`.",
+        "If the source IS semantically correct but the judge raised a "
+        "conditions-mismatch concern, examine the per-parameter rationale "
+        "and add justification for why the source's conditions are still "
+        "appropriate for this use; re-create the artifact.",
+        _NO_REF_PATCHING_WARNING,
+        _REGEN_CASCADE_WARNING,
+    ],
+    IssueCategory.DOTTED_SOURCE_INAPPROPRIATE: [
+        "The current call is production work and is consuming a value "
+        "that was never characterized. Run the appropriate sub-study "
+        "(convergence test, sensitivity sweep) that PRODUCES an "
+        "output artifact for this value, then re-create the current "
+        "artifact with a bare `*_ref` pointing at that output. Do "
+        "not point at the upstream input via a dotted ref — the "
+        "value still wouldn't be characterized.",
+        # "If the current artifact is misclassified as production (it "
+        # "is actually part of a sub-study or exploration), update the "
+        # "tool call's `context` argument to identify the sub-study "
+        # "purpose and re-create the artifact. In a sub-study context, "
+        # "the dotted ref is acceptable.",
+        _NO_REF_PATCHING_WARNING,
+        _REGEN_CASCADE_WARNING,
+    ],
+    IssueCategory.UNDER_JUSTIFIED_SWEEP: [
+        "The judge flagged this swept value as not making sense for the "
+        "stated study. Either correct the value to a sensible sweep point "
+        "and re-create the artifact, or strengthen the per-parameter "
+        "rationale to explain why this specific value is a coherent sweep "
+        "point for the study named in the `Context:` line.",
+        _REGEN_CASCADE_WARNING,
+    ],
+    IssueCategory.UNDER_JUSTIFIED_CHOICE: [
+        "The judge flagged this parameter's rationale as missing workflow "
+        "context. Update the per-parameter rationale to explicitly "
+        "identify the study and the parameter's role in it; re-create "
+        "the artifact.",
+        _REGEN_CASCADE_WARNING,
+    ],
+    IssueCategory.EXTRACTION_TOKEN_MISMATCH: [
+        "The extracted value does not appear as a complete token in the "
+        "source. Re-run the extraction tool with the correct value/text, "
+        "or correct the `evidence_snippet` to point at the actual region "
+        "of the source where the value appears.",
+        _REGEN_CASCADE_WARNING,
+    ],
+    IssueCategory.EXTRACTION_JUDGE_FAIL: [
+        "The extraction-judge LLM determined the extraction is "
+        "unjustified or semantically wrong. Re-examine the source "
+        "artifact and either re-extract with a corrected value/snippet "
+        "or strengthen the per-extraction rationale.",
+        _REGEN_CASCADE_WARNING,
+    ],
+    IssueCategory.EXTRACTION_NO_SOURCE: [
+        "The extraction's source text could not be recovered from the "
+        "registry. Confirm the source artifact is properly registered "
+        "with retrievable text, or re-run the extraction with a "
+        "different (recoverable) source.",
+    ],
+    IssueCategory.SCHEMA_VIOLATION: [
+        "The report does not satisfy a generation-time schema "
+        "requirement. Re-call `generate_structured_report` with the "
+        "required field corrected (e.g. provide a meaningful "
+        "`overall_goal`, fix duplicate quantity_names, add citations "
+        "for all numerical mentions in prose, etc.).",
+    ],
+    IssueCategory.ARTIFACT_LOOKUP_FAILED: [
+        "An artifact `result_id` referenced by the report or by the "
+        "value-flow chain could not be loaded from CANVAS. The id may be "
+        "malformed or may refer to an artifact that was never registered. "
+        "Confirm the result_id is correct and that the upstream tool "
+        "call actually produced an artifact.",
+    ],
+    IssueCategory.RECURSION_FAILURE: [
+        "The recursive verification descent raised an exception, likely "
+        "due to a malformed artifact in the chain. Inspect the artifact "
+        "registry for the offending id, then either repair its metadata "
+        "or re-create the affected upstream artifact.",
+        _REGEN_CASCADE_WARNING,
+    ],
+    IssueCategory.UNCATEGORIZED: [
+        "This issue could not be automatically categorized. Inspect the "
+        "raw `judge_reasoning` and `problem` fields and consult the "
+        "verifier's debug log for diagnostic context.",
+    ],
+}
+
+
+def _problem_text_for_param_check(
+    *,
+    category: str,
+    parameter_name: str,
+    parameter_value: Any,
+    tool_name: str,
+    verdict: str,
+) -> str:
+    """Build a one-sentence `problem` string for a per-parameter issue.
+
+    Specialized per category so the supervisor sees an immediately
+    actionable summary without having to read the longer `judge_reasoning`.
+    """
+    val_repr = repr(parameter_value)
+    if category == IssueCategory.VALUE_MISMATCH_PARAM:
+        return (
+            f"Parameter '{parameter_name}' on a `{tool_name}` artifact has "
+            f"value {val_repr}, which does not match the upstream artifact "
+            f"the agent referenced as its source. The deterministic value-"
+            f"match check failed."
+        )
+    if category == IssueCategory.UNSOURCED_SENSITIVE:
+        return (
+            f"Parameter '{parameter_name}' (value {val_repr}) on a "
+            f"`{tool_name}` artifact is sensitive but has no upstream "
+            f"source artifact. The per-parameter judge — reading the "
+            f"`Context:` line of the rationale — found this missing source "
+            f"unjustified."
+        )
+    if category == IssueCategory.CROSS_WIRED_SOURCE:
+        return (
+            f"Parameter '{parameter_name}' (value {val_repr}) on a "
+            f"`{tool_name}` artifact has an upstream source whose "
+            f"value matches numerically, but the per-parameter judge "
+            f"flagged the source as semantically inappropriate or "
+            f"obtained under conditions that don't match the current use."
+        )
+    if category == IssueCategory.DOTTED_SOURCE_INAPPROPRIATE:
+        return (
+            f"Parameter '{parameter_name}' (value {val_repr}) on a "
+            f"`{tool_name}` artifact is sourced via a dotted reference "
+            f"into an earlier tool call's INPUT. The current call is "
+            f"production work, and the per-parameter judge determined "
+            f"the referenced upstream input was itself uncharacterized "
+            f"(a deliberately-held sub-study value, not a "
+            f"characterized result). Production work cannot inherit "
+            f"a value that was never characterized."
+        )
+    if category == IssueCategory.UNDER_JUSTIFIED_SWEEP:
+        return (
+            f"Parameter '{parameter_name}' (value {val_repr}) on a "
+            f"`{tool_name}` artifact is being swept, but the per-parameter "
+            f"judge flagged the value as not making sense as a sweep point "
+            f"for the study described in the rationale's `Context:` line."
+        )
+    if category == IssueCategory.UNDER_JUSTIFIED_CHOICE:
+        return (
+            f"Parameter '{parameter_name}' (value {val_repr}) on a "
+            f"`{tool_name}` artifact has a rationale the per-parameter "
+            f"judge found incomplete — typically missing identification "
+            f"of the study and the parameter's role in it."
+        )
+    if category == IssueCategory.EXTRACTION_TOKEN_MISMATCH:
+        return (
+            f"Extraction artifact (`{tool_name}`) value {val_repr} does "
+            f"not appear as a complete token in the source text — likely "
+            f"a substring extraction (e.g. extracting '123' out of "
+            f"'1234.56') or a value the agent computed rather than read."
+        )
+    if category == IssueCategory.EXTRACTION_JUDGE_FAIL:
+        return (
+            f"Extraction artifact (`{tool_name}`) extracted value "
+            f"{val_repr} but the extraction judge flagged the extraction "
+            f"as semantically wrong or unjustified."
+        )
+    if category == IssueCategory.EXTRACTION_NO_SOURCE:
+        return (
+            f"Extraction artifact (`{tool_name}`) cannot be verified: "
+            f"no source text was recoverable from the artifact's args or "
+            f"from any registered parent artifact."
+        )
+    return (
+        f"Parameter '{parameter_name}' (value {val_repr}) on a "
+        f"`{tool_name}` artifact has verdict={verdict!r} but no specific "
+        f"problem template matched the issue category."
+    )
+
+
 # --- Rule strings used inside verify_artifact_parameterization ---------------
+#
+# Every rule begins by asking the judge to read the `Context:` line that
+# opens the parameter's `reason` (the per-call context is merged in by
+# `_merge_context` in tools.py before the artifact is registered, so every
+# rationale starts with "Context: <study description>"). The judge uses the
+# context to determine whether this artifact is part of the report's
+# production lineage or part of an earlier sub-study (a convergence test, an
+# EOS sweep, a sensitivity scan, etc.) and adjusts its scrutiny accordingly.
 
 R1_RULE = (
-    "Parameter is sensitive and not being varied for the current target "
-    "quantity. It must be obtained from another tool output; the source's "
-    "value must match, and the source must make semantic sense for this "
-    "parameter. "
-    "A good rationale identifies the study this call is part of, the role "
-    "the parameter plays in that study, and the basis for the specific "
-    "value. Reject rationales that don't situate the parameter in the "
-    "workflow (e.g. 'standard value' or 'reasonable choice' without "
-    "context)."
+    "Parameter is sensitive, not being varied for the current target "
+    "quantity, and is sourced from the OUTPUT of another tool call (a "
+    "bare 8-character result_id ref). The source's value has already "
+    "been confirmed to match by deterministic check; your job is to "
+    "weigh whether that output is an appropriate origin for this "
+    "parameter's value. "
+    "Begin by reading the `Context:` line at the start of the current "
+    "parameter's rationale. Determine whether the current artifact is "
+    "part of the report's production lineage or part of an earlier "
+    "sub-study. Then judge: does the source artifact's tool, "
+    "description, and produced value make semantic sense as the origin "
+    "of this parameter's value, given the study context? "
+    "Reject when the source is plausibly cross-wired (e.g. an ecutwfc "
+    "convergence result used as a kspacing pin), when the source's "
+    "characterization conditions clearly don't match the current use "
+    "(e.g. a kspacing converged at low ecutwfc used at high ecutwfc), "
+    "or when the rationale fails to identify the workflow context."
+)
+
+R1_DOTTED_RULE = (
+    "Parameter is sensitive, not being varied for the current target "
+    "quantity, and is sourced from an INPUT PARAMETER of an earlier "
+    "tool call (a dotted reference of the form '<id>.<field>'). The "
+    "agent is asserting: 'this value should be the same value that was "
+    "used as the named input to that earlier call.' The deterministic "
+    "value-match has already confirmed the values agree; your job is "
+    "to weigh whether that earlier input is an appropriate origin for "
+    "the current parameter's value. "
+    "Read TWO contexts: "
+    "  (1) the `Context:` line at the start of the CURRENT parameter's "
+    "      rationale (what study is the current call part of?), and "
+    "  (2) the `Context:` line at the start of the source input's "
+    "      rationale, which is provided as `input_parameter_rationale` "
+    "      in the source summary (what study was the earlier call part "
+    "      of, and what role did that input play there?). "
+    "Then judge whether sourcing the current value from that earlier "
+    "input is coherent: "
+    "  • If the current call is production work, the source input must have "
+    "    been characterized with a bare ref — production work cannot "
+    "    legitimately consume an uncharacterized value. A dotted ref to an "
+    "    uncharacterized input launders the missing characterization and is "
+    "    therefore unacceptable. Reject when the source input was "
+    "    uncharacterized, or when the rationale fails to identify the "
+    "    workflow context of either the current call or the source input."
+)
+
+
+
+R1_NO_SOURCE_RULE = (
+    "Parameter is sensitive, not being varied for the current target "
+    "quantity, and has NO upstream source artifact. The verdict depends "
+    "entirely on the workflow context the agent has recorded. "
+    "Begin by reading the `Context:` line at the start of the parameter's "
+    "rationale. The context names the study or exploration this tool call "
+    "is part of. Identify which kind of work it describes, and judge "
+    "accordingly: "
+    "  • PRODUCTION work — phrases like 'production run for adsorption "
+    "    energy', 'final relaxation', 'BEEF ensemble for adsorption', or "
+    "    similar terminal calculations whose output is being claimed. "
+    "    Production calls require every sensitive parameter to be either "
+    "    upstream-characterized or being varied. A missing source here is "
+    "    a real failure — return fail. "
+    "  • SUB-STUDY work — phrases like 'convergence test for ecutwfc', "
+    "    'EOS sweep', 'sensitivity scan over n_fixed_layers', 'one-off "
+    "    exploration'. Sub-studies legitimately hold parameters at "
+    "    deliberately-chosen values (without upstream characterization) "
+    "    while the sub-study characterizes some other parameter. Pass if "
+    "    all of the following hold: "
+    "    (a) the rationale clearly identifies the sub-study purpose; "
+    "    (b) the held value is a reasonable choice for that sub-study "
+    "        (e.g. a tight kspacing while ecutwfc is being characterized); "
+    "    (c) the sub-study's purpose is consistent with the artifact's "
+    "        tool name and the parameter being held — i.e. the parameter "
+    "        being held is plausibly held FOR THE PURPOSE the context "
+    "        names. "
+    "    Return fail if the rationale is incoherent, the held value is "
+    "    unusual without justification, or the context-tool mismatch "
+    "    suggests the agent is fabricating a sub-study cover for what "
+    "    was actually a forgotten reference. "
+    "Do not default to either verdict. The context decides."
 )
 
 R2_RULE = (
-    "Parameter is sensitive but intentionally varied for the current target "
-    "quantity. Its value must still be sensible for exploring the quantity. "
-    "A good rationale identifies the study this call is part of (e.g. "
-    "convergence sweep, sensitivity test, EOS scan), the role this "
-    "parameter plays in that study (which one is being swept, which others "
-    "are pinned), and why this specific value was chosen as a sweep point "
-    "rather than another. Atypical values (e.g. very low ecutwfc) are "
-    "acceptable when the study context justifies them — for example a "
-    "convergence sweep deliberately includes low values to characterize "
-    "the convergence curve. Reject only when the rationale fails to "
-    "situate the value within a coherent exploration."
+    "Parameter is sensitive and intentionally varied for the current "
+    "target quantity. Its value must be sensible as a sweep point. "
+    "Begin by reading the `Context:` line at the start of the parameter's "
+    "rationale. Determine whether the current artifact is part of the "
+    "report's production lineage or part of an earlier sub-study. Then "
+    "judge: is this specific value a coherent sweep point for the study "
+    "the context names? "
+    "Atypical values (e.g. very low ecutwfc) are acceptable when the "
+    "study context justifies them — for example a convergence sweep "
+    "deliberately includes low values to characterize the convergence "
+    "curve. Reject only when the value is incoherent for the stated "
+    "study, when the rationale fails to identify the sweep's purpose, or "
+    "when the context-tool mismatch suggests fabrication."
 )
 
 R3_RULE = (
-    "Parameter is not under the hard provenance rule. Its value must still "
-    "be sensible based on the recorded reason. "
-    "A good rationale identifies the study this call is part of, the role "
-    "this parameter plays in it (e.g. fixed default, inherited from upstream, "
-    "placeholder before a real value is obtained), and the basis for the "
-    "specific value. Approve rationales that situate the parameter in the "
-    "workflow — even when the value itself looks atypical, as long as the "
-    "context justifies it. Reject rationales that lack workflow context "
-    "(e.g. 'standard value' with no further detail)."
-)
-
-# Sentinel used in *_ref / *_w_ref arguments and in `parent_result_ids_w_args`
-# to indicate that the agent has explicitly chosen the value as a placeholder
-# at the moment of the tool call. No upstream artifact is required; the
-# verifier judges only whether the chosen placeholder is a reasonable default.
-PLACEHOLDER_REF = "PLACEHOLDER"
-
-R1_PLACEHOLDER_RULE = (
-    "Parameter is sensitive, not being varied for the current target "
-    "quantity, and the agent has explicitly marked it as a placeholder "
-    "(no upstream source artifact yet exists — typically because the "
-    "study has not characterized this parameter yet). "
-    "Provenance is not required. The judgment is: is the chosen "
-    "placeholder value a reasonable default to hold while other "
-    "parameters are being characterized? "
-    "Approve placeholders that are commonly-used safe defaults (e.g. a "
-    "tight kspacing while ecutwfc is being swept) and whose rationale "
-    "clearly identifies the value as provisional. Reject placeholders "
-    "that are unusual choices for a default, or whose rationale fails "
-    "to acknowledge the value as provisional."
+    "Parameter is not under the hard provenance rule (it is not in the "
+    "sensitive-parameters list). Its value must still be sensible based "
+    "on the recorded rationale. "
+    "Begin by reading the `Context:` line at the start of the parameter's "
+    "rationale. Determine whether the current artifact is part of the "
+    "report's production lineage or part of an earlier sub-study. Then "
+    "judge: does the rationale situate the parameter coherently in that "
+    "study? "
+    "Approve rationales that identify the study and the role of the "
+    "parameter — even when the value itself looks atypical, as long as "
+    "the context justifies it. Reject rationales that lack workflow "
+    "context (e.g. 'standard value' with no further detail)."
 )
 
 PARAM_JUDGE_GUIDANCE = """
 Guidance:
+- Always begin by reading the `Context:` line of the rationale. It tells
+  you whether this artifact is part of the production lineage of the
+  claim or part of an earlier sub-study, and you must adjust scrutiny
+  accordingly.
 - A rationale that explicitly situates the parameter within a study
-  (convergence test / production run / sensitivity sweep / etc.) and
+  (production run / convergence test / sensitivity sweep / etc.) and
   explains the parameter's role in that study generally deserves PASS,
   even if the value itself looks atypical out of context.
 - A rationale that lists only "intent and effect" without identifying
@@ -166,11 +571,11 @@ Guidance:
   may be fine, but the reviewer cannot confirm without that context.
 - A rationale that gives no workflow context at all, and the value would
   be questionable in a default production setting, deserves FAIL.
-- When the parameter is intentionally being varied (R2), accept values
-  outside the typical "production" range as long as they are coherent
-  sweep points for the stated study.
+- Watch for context-tool mismatches: if the context says "convergence
+  test for ecutwfc" but the artifact's tool is `analyze_BEEF_result` (a
+  production-stage tool), the rationale is suspicious and the verdict
+  should reflect that.
 """
-
 
 # =========================================================
 # Shared schemas
@@ -202,26 +607,6 @@ class QuantitySpec(BaseModel):
             "set directly. Include only parameters actually being varied."
         ),
     )
-    acknowledged_placeholders: List[str] = Field(
-        default_factory=list,
-        description=(
-            "Parameters that the agent explicitly acknowledges were held at "
-            "a placeholder value (PLACEHOLDER_REF) somewhere in the value-"
-            "flow chain to this claim, and that the agent does NOT intend "
-            "to characterize before this claim is reported. The claim is "
-            "thereby declared to be conditional on those held values. "
-            "By contrast, a placeholder on a parameter NOT listed here AND "
-            "not in `varied_parameters` AND not pinned to a real ref by an "
-            "artifact closer to this claim in the chain will fail the "
-            "report. Use this for claims that are themselves the answer to "
-            "characterizing one parameter while other sensitive parameters "
-            "are deliberately held — e.g. an `optimal_ecutwfc` claim that "
-            "holds kspacing at a tight default. For claims that should "
-            "stand alone (production measurements, final results), leave "
-            "this list empty and ensure every sensitive parameter has been "
-            "characterized upstream. Must not overlap with `varied_parameters`."
-        ),
-    )
     unit: Optional[str] = Field(
         default=None, description="Unit string, e.g. 'eV', 'Angstrom', 'GPa'."
     )
@@ -237,7 +622,6 @@ class ReportNumericalClaim(BaseModel):
     unit: Optional[str] = None
     result_id: str
     varied_parameters: List[str] = Field(default_factory=list)
-    acknowledged_placeholders: List[str] = Field(default_factory=list)
     note: str = ""
 
 
@@ -257,6 +641,10 @@ class ParamCheckResult(BaseModel):
     rule_applied: str
     source_result_id: Optional[Any] = None  # str or List[str]
     reasoning: str
+    # Category tag set at the emitting site so the post-processor can
+    # build a categorized issue list without inferring from prose.
+    # Optional because pass-verdict checks don't need a category.
+    category: Optional[str] = None
 
 
 class ArtifactVerificationResult(BaseModel):
@@ -271,10 +659,36 @@ class ArtifactVerificationResult(BaseModel):
 
 
 class ReportVerificationIssue(BaseModel):
-    level: Literal["report", "claim", "artifact", "parameter"]
-    location: str
-    verdict: Literal["pass", "fail", "warning"]
-    message: str
+    """Structured, supervisor-facing description of one verification failure.
+
+    Designed to be self-contained: the supervisor can act on a single
+    issue without needing to consult the artifact tree or the per-claim
+    walks. Numbering is assigned by the post-processor.
+    """
+    issue_number: int = 0  # 1-indexed; assigned by summarize_verification_for_supervisor
+    category: str  # one of IssueCategory.* values
+    severity: Literal["fail", "warning"]
+    where: Dict[str, Any] = Field(default_factory=dict)
+    # `where` keys (subset present per issue):
+    #   "claim_name":   str
+    #   "claim_value":  float
+    #   "claim_unit":   str
+    #   "result_id":    str  (the artifact at fault, when applicable)
+    #   "tool_name":    str  (the tool that produced the offending artifact)
+    #   "parameter":    str  (the parameter name, when at param level)
+    #   "parameter_value": Any
+    #   "child_id":     str  (when the issue is a recursion failure on a child)
+    #   "field":        str  (e.g. "overall_goal" for schema violations)
+    context_at_site: Optional[str] = None
+    # The merged "Context:" line from the rationale at the offending site,
+    # extracted when available. Helps the supervisor see how the agent
+    # framed the call.
+    problem: str
+    # One-sentence statement of what's wrong, in plain prose.
+    judge_reasoning: Optional[str] = None
+    # The judge's verdict text when the issue came from an LLM judge call.
+    remediation_options: List[str] = Field(default_factory=list)
+    # Filled by the post-processor from REMEDIATION_OPTIONS[category].
 
 
 class ReportVerificationResult(BaseModel):
@@ -335,161 +749,37 @@ def _param_source_ids(artifact: Any) -> Dict[str, Any]:
 
 
 def _collect_recursive_source_ids(artifact: Any) -> List[str]:
-    """All upstream result_ids referenced by this artifact, flattened.
+    """All upstream BARE result_ids referenced by this artifact, flattened.
 
-    The PLACEHOLDER_REF sentinel is filtered out — it marks an explicit
-    placeholder declaration, not a real upstream artifact, so the recursive
-    walker must not try to dereference it.
+    Empty strings are filtered out — they mark "no source declared", not a
+    real upstream artifact, so the recursive walker must not try to
+    dereference them.
+
+    Dotted refs ('<id>.<field>') are EXCLUDED here and are NOT recursed
+    into at all. The dotted-source judge call at the immediate
+    downstream parameter produces the verdict for the cross-reference;
+    the walker does not descend through the dotted ref to verify the
+    source artifact's other parameters or its named field's deeper
+    chain. This keeps the dotted-source semantics narrow: the agent's
+    claim is about that one value, and the verifier's findings stay
+    scoped to that one value.
     """
     source_ids: Set[str] = set(
-        s for s in (artifact.parent_result_ids or []) if s != PLACEHOLDER_REF
+        s for s in (artifact.parent_result_ids or [])
+        if s and not _is_dotted_ref(s)
     )
     for v in _param_source_ids(artifact).values():
         if isinstance(v, list):
             source_ids.update(
                 s for s in v
-                if isinstance(s, str) and s != PLACEHOLDER_REF
+                if isinstance(s, str) and s and not _is_dotted_ref(s)
             )
-        elif isinstance(v, str) and v != PLACEHOLDER_REF:
+        elif isinstance(v, str) and v and not _is_dotted_ref(v):
             source_ids.add(v)
     out = list(source_ids)
     _dbg(
         f"_collect_recursive_source_ids: result_id={artifact.result_id!r} "
-        f"collected n={len(out)} ids={out}"
-    )
-    return out
-
-
-def _walk_placeholders_for_claim(
-    result_id: str,
-    seen_real_for_param: Set[str],
-    varied_parameters: Set[str],
-    acknowledged_placeholders: Set[str],
-    visited: Set[str],
-) -> List[Tuple[str, str, str, str]]:
-    """Walk the value-flow chain (parent_result_ids_w_args only) from a claim
-    and surface unresolved placeholders.
-
-    A placeholder on parameter X encountered in artifact A is **resolved** iff:
-      (a) X has been pinned by a real ref on the path closer to the claim
-          (i.e. X is in `seen_real_for_param`), OR
-      (b) X is in the claim's `varied_parameters` (X is being characterized
-          by the claim itself), OR
-      (c) X is in the claim's `acknowledged_placeholders` (the agent has
-          declared the claim conditional on X being held provisional).
-
-    Otherwise it is unresolved.
-
-    Walks only `parent_result_ids_w_args` — not the broad `parent_result_ids`
-    flat list. Artifacts that were upstream-but-not-value-providing (e.g.
-    convergence-sweep input scripts whose values never flowed forward) are
-    not reached and their placeholders are not flagged.
-
-    `seen_real_for_param` is passed by value (a copy is forked at each
-    recursive call), so diamond chains track resolution per traversal path:
-    if any path from the claim to an ancestor passes through an unresolved
-    placeholder, that path's complaint is recorded.
-
-    `visited` is used only to break cycles; it does NOT prevent the same
-    artifact from being judged multiple times under different paths.
-
-    Returns
-    -------
-    List of (artifact_id, param_name, source_repr, message) tuples.
-    Empty list means every placeholder reachable from the claim was resolved.
-    """
-    out: List[Tuple[str, str, str, str]] = []
-
-    if result_id in visited:
-        return out
-    visited = visited | {result_id}
-
-    try:
-        artifact = _get_artifact(result_id)
-    except Exception as e:                            # noqa: BLE001
-        out.append((
-            result_id, "<artifact_lookup_failed>", "",
-            f"Could not load artifact '{result_id}' while walking value-flow "
-            f"chain for placeholder resolution: {e}"
-        ))
-        return out
-
-    sources = _param_source_ids(artifact)
-
-    # Phase 1: identify parameters that THIS artifact pins to real refs.
-    # A list-shaped source counts as pinning only if every element is real;
-    # any PLACEHOLDER_REF inside a list means the parameter as a whole is
-    # not pinned by this artifact.
-    newly_pinned: Set[str] = set()
-    for param, source in sources.items():
-        if isinstance(source, str) and source and source != PLACEHOLDER_REF:
-            newly_pinned.add(param)
-        elif isinstance(source, list) and source and all(
-            isinstance(s, str) and s and s != PLACEHOLDER_REF for s in source
-        ):
-            newly_pinned.add(param)
-            
-    _dbg(f"newly pinned: {newly_pinned!r}")
-
-    # Resolution context that applies to placeholders found AT THIS artifact:
-    # a placeholder on X here is resolved if X is already pinned closer to
-    # the claim (seen_real_for_param), OR X is varied / acknowledged on the
-    # claim. Note: `newly_pinned` is NOT included — pinning at this artifact
-    # cannot resolve a placeholder also at this artifact (that would be a
-    # contradiction in the same source map).
-    resolved_here = (
-        seen_real_for_param | varied_parameters | acknowledged_placeholders
-    )
-    
-    _dbg(f"resolved_here: {resolved_here!r}")
-
-    # Phase 2: surface unresolved placeholders at this artifact.
-    for param, source in sources.items():
-        is_placeholder = source == PLACEHOLDER_REF or (
-            isinstance(source, list) and PLACEHOLDER_REF in source
-        )
-        if is_placeholder and param not in resolved_here:
-            out.append((
-                result_id, param, repr(source),
-                f"Unresolved placeholder: parameter '{param}' is set to "
-                f"PLACEHOLDER on artifact '{result_id}', and no artifact "
-                f"closer to the claim in the value-flow chain has pinned "
-                f"it to a real upstream artifact. The claim has not "
-                f"declared this parameter under `varied_parameters` or "
-                f"`acknowledged_placeholders`, so the placeholder leaks "
-                f"into the claim."
-            ))
-
-    # Phase 3: recurse upstream via real-ref sources only.
-    # Each branch sees `seen_real_for_param | newly_pinned` — the parameters
-    # this artifact pinned are now resolved for any deeper placeholder of
-    # the same name.
-    seen_below = seen_real_for_param | newly_pinned
-
-    upstream_ids: Set[str] = set()
-    for source in sources.values():
-        if isinstance(source, list):
-            upstream_ids.update(
-                s for s in source
-                if isinstance(s, str) and s and s != PLACEHOLDER_REF
-            )
-        elif isinstance(source, str) and source and source != PLACEHOLDER_REF:
-            upstream_ids.add(source)
-
-    for parent_id in upstream_ids:
-        out.extend(_walk_placeholders_for_claim(
-            result_id=parent_id,
-            seen_real_for_param=seen_below,
-            varied_parameters=varied_parameters,
-            acknowledged_placeholders=acknowledged_placeholders,
-            visited=visited,
-        ))
-
-    _dbg(
-        f"_walk_placeholders_for_claim: result_id={result_id!r} "
-        f"newly_pinned={sorted(newly_pinned)} "
-        f"n_unresolved_here={sum(1 for u in out if u[0] == result_id)} "
-        f"n_unresolved_total={len(out)}"
+        f"collected n={len(out)} bare ids={out}"
     )
     return out
 
@@ -511,6 +801,83 @@ def _summarize_artifact(artifact: Any) -> Dict[str, Any]:
         "metadata": artifact.metadata,
         "value_repr": value_repr,
     }
+
+
+def _is_dotted_ref(ref: Any) -> bool:
+    """A ref is dotted if it's a non-empty string containing a single dot
+    with both halves non-empty. The CANVAS-level validator handles strict
+    parsing; this helper is used only for branching decisions in the
+    verifier, so it's intentionally permissive."""
+    if not isinstance(ref, str) or not ref:
+        return False
+    return "." in ref
+
+
+def _strip_dotted_field(ref: Any) -> Any:
+    """Return the bare result_id portion of a ref. For a dotted ref
+    '<id>.<field>' return '<id>'. For a bare ref return it unchanged.
+    For empty / non-string inputs return as-is. Used by the chain
+    walker when it needs to descend into the parent artifact regardless
+    of which form was passed."""
+    if isinstance(ref, str) and "." in ref:
+        return ref.split(".", 1)[0]
+    return ref
+
+
+def _any_dotted(source: Any) -> bool:
+    """For a per-parameter source entry (scalar string or list of
+    strings), return True if any element is a dotted ref."""
+    if isinstance(source, str):
+        return _is_dotted_ref(source)
+    if isinstance(source, list):
+        return any(_is_dotted_ref(s) for s in source)
+    return False
+
+
+def _summarize_artifact_dotted(ref: str) -> Dict[str, Any]:
+    """Source summary for a dotted ref. The agent is referencing a
+    specific INPUT PARAMETER of a past tool call, not the call's
+    output. The summary surfaces:
+      - the source artifact's tool name and description (so the judge
+        knows what kind of call this input belonged to);
+      - the specific input parameter name being referenced;
+      - the value of that input as recorded in args;
+      - the RATIONALE the agent gave for that input at registration time
+        (which embeds its own `Context:` line, telling the judge whether
+        the source call was production or sub-study work).
+    The `kind` field flags the dotted case so the judge does not
+    confuse this with an output-shaped source.
+    """
+    bare_id, field = ref.split(".", 1)
+    artifact = _get_artifact(bare_id)
+    args = artifact.args or {}
+    reasons = artifact.reasons or {}
+    field_value = args.get(field)
+    field_rationale = reasons.get(field) or reasons.get("reasons") or ""
+    return {
+        "kind": "input_parameter_reference",
+        "source_artifact_id": bare_id,
+        "source_tool_name": artifact.tool_name,
+        "source_tool_description": artifact.description or "",
+        "input_parameter_name": field,
+        "input_parameter_value": field_value,
+        "input_parameter_rationale": field_rationale,
+    }
+
+
+def _build_source_summary(ref: Any) -> Any:
+    """Dispatcher used by the per-parameter judge call sites. Builds the
+    right summary shape based on whether the ref is bare (output
+    reference) or dotted (input-parameter reference). Handles
+    list-shaped refs element-by-element, so a mix of bare and dotted
+    refs in one list-shaped source produces a list of heterogeneously
+    shaped summary dicts."""
+    if isinstance(ref, list):
+        return [_build_source_summary(r) for r in ref]
+    if isinstance(ref, str) and _is_dotted_ref(ref):
+        return _summarize_artifact_dotted(ref)
+    # Bare ref path. Empty / non-string refs should not reach here.
+    return _summarize_artifact(_get_artifact(ref))
 
 
 def _fold_verdict(current: str, incoming: str) -> str:
@@ -626,11 +993,8 @@ def _normalize_to_list_pair(
 
 def _call_param_judge_llm(
     *,
-    overall_goal: str,
-    target_quantity: str,
-    varied_parameters: List[str],
-    sensitive_parameters: List[str],
-    artifact_summary: Dict[str, Any],
+    tool_name: str,
+    tool_description: str,
     parameter_name: str,
     parameter_value: Any,
     reason: str,
@@ -638,7 +1002,30 @@ def _call_param_judge_llm(
     rule_to_apply: str,
     judge,
 ) -> Dict[str, Any]:
-    overall_goal_text = overall_goal if overall_goal.strip() else "(not specified)"
+    """Slim per-parameter judge call.
+
+    Inputs intentionally minimal:
+      - `tool_name` and `tool_description` ground the judge in what kind
+        of artifact we're judging (e.g. "this is a `find_optimal_parameter`
+        artifact, which selects the best parameter from a sweep").
+      - `parameter_name` / `parameter_value`: the parameter under review.
+      - `reason`: includes the merged "Context: <study description>"
+        prefix from the agent's tool call. The judge reads this to
+        determine whether the artifact is production or sub-study work
+        and adjusts scrutiny accordingly.
+      - `source_artifact_summary`: when present (R1 with source), the
+        judge can weigh whether the source is the right one.
+      - `rule_to_apply`: the specific rule string for this branch
+        (R1, R1-no-source, R2, R3) — the rule itself instructs the judge
+        on what to look for.
+
+    Dropped on purpose: overall_goal (already in `reason` via
+    _merge_context), target_quantity (judge doesn't need to know the
+    top-level claim to judge a specific parameter — the parameter's own
+    Context line tells it what study this call is part of), varied/
+    sensitive parameters (already factored into rule selection upstream),
+    artifact_summary (the bits the judge needs are tool_name/description).
+    """
     if source_artifact_summary is None:
         source_block = "None"
     else:
@@ -648,20 +1035,9 @@ def _call_param_judge_llm(
 You are verifying whether one tool parameter was set correctly in a scientific
 agent workflow.
 
-Overall study goal:
-{overall_goal_text}
-
-Target quantity being sought (current verification scope):
-{target_quantity}
-
-Parameters intentionally varied while seeking this quantity:
-{varied_parameters}
-
-Sensitive parameters:
-{sensitive_parameters}
-
-Current artifact:
-{json.dumps(artifact_summary, indent=2, default=str)}
+Tool that produced this artifact:
+  name:        {tool_name}
+  description: {tool_description}
 
 Parameter under review:
   name:  {parameter_name}
@@ -683,7 +1059,7 @@ Return:
 """
     _dbg(
         f"_call_param_judge_llm: INVOKE param={parameter_name!r} "
-        f"value={parameter_value!r} target={target_quantity!r} "
+        f"value={parameter_value!r} tool={tool_name!r} "
         f"prompt_len={len(prompt)}"
     )
     t0 = time.time()
@@ -847,27 +1223,6 @@ def generate_structured_report(
         )
     _dbg("generate_structured_report: duplicate-name check passed")
 
-    # Per-spec validation: varied_parameters and acknowledged_placeholders
-    # are mutually exclusive scopes. A parameter cannot simultaneously be
-    # being varied and being held at a placeholder for the same claim.
-    for spec in parsed_specs:
-        overlap = set(spec.varied_parameters) & set(spec.acknowledged_placeholders)
-        if overlap:
-            _dbg(
-                f"generate_structured_report: overlap between varied_parameters "
-                f"and acknowledged_placeholders for quantity={spec.quantity_name!r}: "
-                f"{sorted(overlap)}"
-            )
-            raise ValueError(
-                f"Quantity '{spec.quantity_name}': parameters "
-                f"{sorted(overlap)} appear in both `varied_parameters` and "
-                "`acknowledged_placeholders`. These are mutually exclusive — "
-                "a parameter cannot be both intentionally swept AND held at "
-                "a placeholder for the same claim. Place each parameter in "
-                "exactly one list."
-            )
-    _dbg("generate_structured_report: varied/acknowledged overlap check passed")
-
     quantities_sought: List[Dict[str, Any]] = []
     numerical_results: List[ReportNumericalClaim] = []
 
@@ -893,7 +1248,6 @@ def generate_structured_report(
         quantities_sought.append({
             "quantity_name": spec.quantity_name,
             "varied_parameters": spec.varied_parameters,
-            "acknowledged_placeholders": spec.acknowledged_placeholders,
             "result_id": spec.result_id,
             "unit": spec.unit,
             "note": spec.note,
@@ -904,7 +1258,6 @@ def generate_structured_report(
             unit=spec.unit,
             result_id=spec.result_id,
             varied_parameters=spec.varied_parameters,
-            acknowledged_placeholders=spec.acknowledged_placeholders,
             note=spec.note,
         ))
 
@@ -1093,7 +1446,6 @@ def verify_artifact_parameterization(
     args = artifact.args or {}
     reasons = artifact.reasons or {}
     param_source_ids = _param_source_ids(artifact)
-    artifact_summary = _summarize_artifact(artifact)
     is_info_tool = artifact.tool_name in INFO_TOOLS
     _dbg(
         f"verify_artifact_parameterization: tool_name={artifact.tool_name!r} "
@@ -1141,13 +1493,17 @@ def verify_artifact_parameterization(
         )
         source = param_source_ids.get(param_name)
 
-        # Detect explicit placeholder declaration. The agent declares a
-        # placeholder by passing PLACEHOLDER_REF as the *_ref / *_w_ref
-        # value at the producing tool call. For list-shaped sources, any
-        # PLACEHOLDER_REF entry triggers the placeholder branch for the
-        # whole parameter (partial placeholders are not modelled).
-        is_placeholder = source == PLACEHOLDER_REF or (
-            isinstance(source, list) and PLACEHOLDER_REF in source
+        # Detect "no source declared" — any of these states means the
+        # agent did not point at an upstream artifact for this parameter:
+        #   - source is None (param has no entry in param_source_ids)
+        #   - source is "" (empty string)
+        #   - source is a list with any empty / non-string entry
+        is_missing_source = (
+            source is None
+            or (isinstance(source, str) and not source)
+            or (isinstance(source, list) and any(
+                not (isinstance(s, str) and s) for s in source
+            ))
         )
 
         # Match either bare `<param>` (applies to every tool) or scoped
@@ -1155,10 +1511,17 @@ def verify_artifact_parameterization(
         is_sensitive = (
             param_name in sensitive_parameters
             or f"{artifact.tool_name}.{param_name}" in sensitive_parameters
-        )        
+        )
         is_varied = param_name in varied_parameters
-        if is_sensitive and not is_varied and is_placeholder:
-            _branch_label = "R1-placeholder"
+        # Dotted-source detection. When the source contains any
+        # '<id>.<field>' entry, the agent is referencing an INPUT of a
+        # past tool call rather than the call's output, and we route to
+        # the dedicated R1_DOTTED rule.
+        is_dotted_source = (not is_missing_source) and _any_dotted(source)
+        if is_sensitive and not is_varied and is_missing_source:
+            _branch_label = "R1-no-source"
+        elif is_sensitive and not is_varied and is_dotted_source:
+            _branch_label = "R1-dotted"
         elif is_sensitive and not is_varied:
             _branch_label = "R1"
         elif is_sensitive and is_varied:
@@ -1168,27 +1531,30 @@ def verify_artifact_parameterization(
         _dbg(
             f"verify_artifact_parameterization: branch decision for "
             f"{param_name!r}: is_sensitive={is_sensitive} is_varied={is_varied} "
-            f"is_placeholder={is_placeholder} is_info_tool={is_info_tool} "
+            f"is_missing_source={is_missing_source} "
+            f"is_dotted_source={is_dotted_source} "
+            f"is_info_tool={is_info_tool} "
             f"has_reason={bool(reason.strip())} -> rule={_branch_label}"
         )
 
-        # R1-placeholder — sensitive, not varied, agent acknowledged
-        # placeholder. No upstream source required; judgment is on whether
-        # the chosen placeholder is a reasonable provisional default.
-        if is_sensitive and not is_varied and is_placeholder:
+        # R1-no-source — sensitive, not varied, no upstream artifact.
+        # Hand to the judge with R1_NO_SOURCE_RULE; the judge reads the
+        # `Context:` line in the rationale and decides production-fail
+        # vs. sub-study-conditional-pass.
+        if is_sensitive and not is_varied and is_missing_source:
             _dbg(
-                f"verify_artifact_parameterization: R1-placeholder path — "
-                f"calling judge for {param_name!r} (no source recovery)"
+                f"verify_artifact_parameterization: R1-no-source path — "
+                f"calling judge for {param_name!r}"
             )
             judgement = _call_param_judge_llm(
-                overall_goal=overall_goal,
-                target_quantity=target_quantity,
-                varied_parameters=varied_parameters,
-                sensitive_parameters=sensitive_parameters,
-                artifact_summary=artifact_summary,
-                parameter_name=param_name, parameter_value=param_value,
-                reason=reason, source_artifact_summary=None,
-                rule_to_apply=R1_PLACEHOLDER_RULE, judge=judge,
+                tool_name=artifact.tool_name,
+                tool_description=artifact.description or "",
+                parameter_name=param_name,
+                parameter_value=param_value,
+                reason=reason,
+                source_artifact_summary=None,
+                rule_to_apply=R1_NO_SOURCE_RULE,
+                judge=judge,
             )
             _dbg(
                 f"verify_artifact_parameterization: judge verdict for "
@@ -1197,46 +1563,47 @@ def verify_artifact_parameterization(
             checks.append(ParamCheckResult(
                 parameter_name=param_name, parameter_value=param_value,
                 verdict=judgement["verdict"],
-                rule_applied=R1_PLACEHOLDER_RULE,
+                rule_applied=R1_NO_SOURCE_RULE,
                 source_result_id=source,
                 reasoning=judgement["reasoning"],
+                category=(IssueCategory.UNSOURCED_SENSITIVE
+                          if judgement["verdict"] != "pass" else None),
             ))
             overall = _fold_verdict(overall, judgement["verdict"])
             continue
 
-        # R1 — sensitive and not varied: must be sourced.
+        # R1 — sensitive, not varied, source IS present. Two flavors:
+        #   * Dotted source: agent is referencing an INPUT of an earlier
+        #     tool call. Use R1_DOTTED_RULE; on judge fail the category
+        #     is DOTTED_SOURCE_INAPPROPRIATE.
+        #   * Bare source: agent is referencing the OUTPUT of an earlier
+        #     tool call. Use R1_RULE; on judge fail the category is
+        #     CROSS_WIRED_SOURCE.
+        # In both cases value-match against the source happens
+        # deterministically inside `_verify_sourced_param` (the CANVAS
+        # layer handles dotted refs in `verify_artifact`).
         if is_sensitive and not is_varied:
-            if source is None:
+            if is_dotted_source:
                 _dbg(
-                    f"verify_artifact_parameterization: R1 — no source "
-                    f"recorded for {param_name!r} -> FAIL"
+                    f"verify_artifact_parameterization: R1-dotted path — "
+                    f"calling _verify_sourced_param for {param_name!r}"
                 )
-                checks.append(ParamCheckResult(
-                    parameter_name=param_name, parameter_value=param_value,
-                    verdict="fail", rule_applied=R1_RULE,
-                    source_result_id=None,
-                    reasoning=(
-                        f"Parameter '{param_name}' is sensitive and it is not intentionally varied "
-                        "but there's no recorded source for Parameter '{param_name}'"
-                        "indicating potentially hallucinated input."
-                    ),
-                ))
-                overall = _fold_verdict(overall, "fail")
-                continue
-
-            _dbg(
-                f"verify_artifact_parameterization: R1 path — calling "
-                f"_verify_sourced_param for {param_name!r}"
-            )
+                rule_for_r1 = R1_DOTTED_RULE
+                fail_category_for_r1 = IssueCategory.DOTTED_SOURCE_INAPPROPRIATE
+            else:
+                _dbg(
+                    f"verify_artifact_parameterization: R1 path — calling "
+                    f"_verify_sourced_param for {param_name!r}"
+                )
+                rule_for_r1 = R1_RULE
+                fail_category_for_r1 = IssueCategory.CROSS_WIRED_SOURCE
             checks_to_add, branch_verdict = _verify_sourced_param(
                 param_name=param_name, param_value=param_value,
-                source=source, rule=R1_RULE,
-                overall_goal=overall_goal,
-                target_quantity=target_quantity,
-                varied_parameters=varied_parameters,
-                sensitive_parameters=sensitive_parameters,
-                artifact_summary=artifact_summary,
+                source=source, rule=rule_for_r1,
+                tool_name=artifact.tool_name,
+                tool_description=artifact.description or "",
                 reason=reason, judge=judge,
+                fail_category=fail_category_for_r1,
             )
             checks.extend(checks_to_add)
             overall = _fold_verdict(overall, branch_verdict)
@@ -1266,12 +1633,21 @@ def verify_artifact_parameterization(
             ))
             continue
 
-        # Belt-and-braces source check. If a source is declared, verify it
-        # element-by-element (list shape) or directly (scalar shape).
+        # Belt-and-braces source check. If a source is declared (non-empty
+        # ref or non-empty list of refs), verify it element-by-element
+        # (list shape) or directly (scalar shape). Empty / missing sources
+        # are treated the same as "no source declared" — skip the match,
+        # judge with no source summary.
+        source_is_real = (
+            (isinstance(source, str) and bool(source))
+            or (isinstance(source, list) and source and all(
+                isinstance(s, str) and s for s in source
+            ))
+        )
         source_summary: Optional[Any] = None
-        if source is not None:
+        if source_is_real:
             _dbg(
-                f"verify_artifact_parameterization: optional source declared "
+                f"verify_artifact_parameterization: real source declared "
                 f"for {param_name!r} — running belt-and-braces match"
             )
             checks_to_add, branch_verdict, source_summary = (
@@ -1298,27 +1674,31 @@ def verify_artifact_parameterization(
             f"{param_name!r} under rule={'R2' if rule is R2_RULE else 'R3'}"
         )
         judgement = _call_param_judge_llm(
-            overall_goal=overall_goal,
-            target_quantity=target_quantity,
-            varied_parameters=varied_parameters,
-            sensitive_parameters=sensitive_parameters,
-            artifact_summary=artifact_summary,
-            parameter_name=param_name, 
+            tool_name=artifact.tool_name,
+            tool_description=artifact.description or "",
+            parameter_name=param_name,
             parameter_value=param_value,
-            reason=reason, 
+            reason=reason,
             source_artifact_summary=source_summary,
-            rule_to_apply=rule, 
+            rule_to_apply=rule,
             judge=judge,
         )
         _dbg(
             f"verify_artifact_parameterization: judge verdict for "
             f"{param_name!r} -> {judgement['verdict']!r}"
         )
+        if judgement["verdict"] == "pass":
+            check_category: Optional[str] = None
+        elif rule is R2_RULE:
+            check_category = IssueCategory.UNDER_JUSTIFIED_SWEEP
+        else:  # rule is R3_RULE
+            check_category = IssueCategory.UNDER_JUSTIFIED_CHOICE
         checks.append(ParamCheckResult(
             parameter_name=param_name, parameter_value=param_value,
             verdict=judgement["verdict"], rule_applied=rule,
             source_result_id=source,
             reasoning=judgement["reasoning"],
+            category=check_category,
         ))
         overall = _fold_verdict(overall, judgement["verdict"])
 
@@ -1348,19 +1728,30 @@ def _verify_sourced_param(
     param_value: Any,
     source: Any,
     rule: str,
-    overall_goal: str,
-    target_quantity: str,
-    varied_parameters: List[str],
-    sensitive_parameters: List[str],
-    artifact_summary: Dict[str, Any],
+    tool_name: str,
+    tool_description: str,
     reason: str,
     judge,
+    fail_category: str = IssueCategory.CROSS_WIRED_SOURCE,
 ) -> Tuple[List[ParamCheckResult], str]:
     """R1 path: must be sourced. Element-by-element value match, then a
-    single LLM judge call evaluating the source(s) collectively."""
+    single LLM judge call evaluating the source(s) collectively.
+
+    Source summaries are built via `_build_source_summary`, which
+    dispatches between the bare-ref shape (the source artifact's full
+    summary) and the dotted-ref shape (the specific input parameter's
+    value + rationale on its parent artifact). The judge sees the
+    appropriate shape and applies the rule accordingly.
+
+    `fail_category` selects the IssueCategory tag attached to a judge-
+    failure verdict. Bare R1 -> CROSS_WIRED_SOURCE; dotted R1 ->
+    DOTTED_SOURCE_INAPPROPRIATE. Value-mismatch failures always tag
+    VALUE_MISMATCH_PARAM regardless.
+    """
     _dbg(
         f"_verify_sourced_param: ENTER param={param_name!r} "
-        f"value={param_value!r} source={source!r}"
+        f"value={param_value!r} source={source!r} "
+        f"fail_category={fail_category!r}"
     )
     is_list, values, sources, err = _normalize_to_list_pair(
         param_value, source, param_name
@@ -1371,9 +1762,12 @@ def _verify_sourced_param(
             parameter_name=param_name, parameter_value=param_value,
             verdict="fail", rule_applied=rule,
             source_result_id=source, reasoning=err,
+            category=IssueCategory.UNCATEGORIZED,
         )], "fail"
 
-    # Value-match each element.
+    # Value-match each element. CANVAS.verify_artifact handles both
+    # bare and dotted refs transparently (dotted refs are validated
+    # against the upstream artifact's args field).
     for i, (v, ref) in enumerate(zip(values, sources)):
         _dbg(
             f"_verify_sourced_param: value-match element idx={i} "
@@ -1388,32 +1782,33 @@ def _verify_sourced_param(
             _dbg(f"_verify_sourced_param: element {label} FAILED value-match")
             return [ParamCheckResult(
                 parameter_name=label, parameter_value=v,
-                verdict="fail", rule_applied=rule,
+                verdict="fail", rule_applied=VALUE_MATCH_SENTINEL,
                 source_result_id=ref, reasoning=msg,
+                category=IssueCategory.VALUE_MISMATCH_PARAM,
             )], "fail"
 
-    # Single judge call over the collective source set.
+    # Single judge call over the collective source set. Summaries are
+    # heterogeneous-shape-tolerant: a list of refs can mix bare and
+    # dotted entries, and each is summarized independently.
     if is_list:
-        source_summary: Any = [
-            _summarize_artifact(_get_artifact(ref)) for ref in sources
-        ]
+        source_summary: Any = [_build_source_summary(ref) for ref in sources]
         _dbg(
             f"_verify_sourced_param: built list source_summary "
             f"n_entries={len(source_summary)}"
         )
     else:
-        source_summary = _summarize_artifact(_get_artifact(sources[0]))
+        source_summary = _build_source_summary(sources[0])
         _dbg("_verify_sourced_param: built scalar source_summary")
 
     judgement = _call_param_judge_llm(
-        overall_goal=overall_goal,
-        target_quantity=target_quantity,
-        varied_parameters=varied_parameters,
-        sensitive_parameters=sensitive_parameters,
-        artifact_summary=artifact_summary,
-        parameter_name=param_name, parameter_value=param_value,
-        reason=reason, source_artifact_summary=source_summary,
-        rule_to_apply=rule, judge=judge,
+        tool_name=tool_name,
+        tool_description=tool_description,
+        parameter_name=param_name,
+        parameter_value=param_value,
+        reason=reason,
+        source_artifact_summary=source_summary,
+        rule_to_apply=rule,
+        judge=judge,
     )
     _dbg(
         f"_verify_sourced_param: RETURN param={param_name!r} "
@@ -1424,6 +1819,8 @@ def _verify_sourced_param(
         verdict=judgement["verdict"], rule_applied=rule,
         source_result_id=source,
         reasoning=judgement["reasoning"],
+        category=(fail_category
+                  if judgement["verdict"] != "pass" else None),
     )], judgement["verdict"]
 
 
@@ -1435,7 +1832,13 @@ def _verify_optional_source_match(
     rule: str,
 ) -> Tuple[List[ParamCheckResult], str, Optional[Any]]:
     """R2/R3 belt-and-braces. Returns checks (failures only), branch verdict,
-    and the source summary to pass to the judge if value-match passes."""
+    and the source summary to pass to the judge if value-match passes.
+
+    The caller is responsible for not invoking this helper when `source` is
+    None / empty / a list with empty entries — those cases mean "no source
+    declared" and should be handled upstream (R1-no-source for sensitive
+    params; skip belt-and-braces for R2/R3).
+    """
     _dbg(
         f"_verify_optional_source_match: ENTER param={param_name!r} "
         f"value={param_value!r} source={source!r}"
@@ -1449,6 +1852,7 @@ def _verify_optional_source_match(
             parameter_name=param_name, parameter_value=param_value,
             verdict="fail", rule_applied=rule,
             source_result_id=source, reasoning=err,
+            category=IssueCategory.UNCATEGORIZED,
         )], "fail", None
 
     for i, (v, ref) in enumerate(zip(values, sources)):
@@ -1469,26 +1873,19 @@ def _verify_optional_source_match(
             )
             return [ParamCheckResult(
                 parameter_name=label, parameter_value=v,
-                verdict="fail", rule_applied=rule,
+                verdict="fail", rule_applied=VALUE_MATCH_SENTINEL,
                 source_result_id=ref, reasoning=msg,
+                category=IssueCategory.VALUE_MISMATCH_PARAM,
             )], "fail", None
 
     if is_list:
-        summary: Any = [
-            (None if ref == PLACEHOLDER_REF
-             else _summarize_artifact(_get_artifact(ref)))
-            for ref in sources
-        ]
+        summary: Any = [_build_source_summary(ref) for ref in sources]
         _dbg(
             f"_verify_optional_source_match: PASS list-shape "
-            f"n_entries={len(summary)} "
-            f"n_placeholders={sum(1 for s in summary if s is None)}"
+            f"n_entries={len(summary)}"
         )
         return [], "pass", summary
-    if sources[0] == PLACEHOLDER_REF:
-        _dbg("_verify_optional_source_match: PASS scalar-shape (placeholder)")
-        return [], "pass", None
-    summary = _summarize_artifact(_get_artifact(sources[0]))
+    summary = _build_source_summary(sources[0])
     _dbg("_verify_optional_source_match: PASS scalar-shape")
     return [], "pass", summary
 
@@ -1597,6 +1994,7 @@ def _verify_extraction_behavior(
                 "No source text recoverable from args or a parent artifact; "
                 "cannot verify extraction syntactically or semantically."
             ),
+            category=IssueCategory.EXTRACTION_NO_SOURCE,
         )]
 
     if _is_listed(artifact):
@@ -1638,6 +2036,7 @@ def _verify_extraction_behavior(
                         "complete numeric token in the source — possible "
                         "substring extraction (e.g. '123' from '123456789')."
                     ),
+                    category=IssueCategory.EXTRACTION_TOKEN_MISMATCH,
                 ))
                 continue
         else:
@@ -1657,6 +2056,7 @@ def _verify_extraction_behavior(
                         f"Extracted text {value!r} does not appear in the "
                         "source. Extraction must be verbatim."
                     ),
+                    category=IssueCategory.EXTRACTION_TOKEN_MISMATCH,
                 ))
                 continue
 
@@ -1688,6 +2088,8 @@ def _verify_extraction_behavior(
             ),
             source_result_id=source_id_for_ref,
             reasoning=judgement["reasoning"],
+            category=(IssueCategory.EXTRACTION_JUDGE_FAIL
+                      if judgement["verdict"] != "pass" else None),
         ))
 
     _dbg(
@@ -1701,6 +2103,8 @@ def _verify_extraction_behavior(
 # Tool 2 — Recursive structured report verification
 # =========================================================
 
+
+
 def _verify_one_artifact_recursive(
     *,
     result_id: str,
@@ -1708,26 +2112,37 @@ def _verify_one_artifact_recursive(
     overall_goal: str,
     varied_parameters: List[str],
     sensitive_parameters: List[str],
-    visited: Set[str],
+    visited: Set[Tuple[str, frozenset]],
     artifact_results: List[ArtifactVerificationResult],
     issues: List[ReportVerificationIssue],
     judge,
     depth: int = 0,
+    viz
 ) -> None:
     indent = "  " * depth
     _dbg(
         f"{indent}_verify_one_artifact_recursive: ENTER depth={depth} "
         f"result_id={result_id!r} target_quantity={target_quantity!r}"
     )
-    if result_id in visited:
+    # Cache key: (result_id, frozenset of varied parameters). Two claims
+    # with the SAME varied_parameters share cache entries — the second
+    # claim's walk skips artifacts the first already verified. Two
+    # claims with DIFFERENT varied_parameters cache separately, since
+    # R1 vs R2 branch selection (and the resulting verdicts) depend on
+    # the varied set.
+    visit_key = (result_id, frozenset(varied_parameters))
+    if visit_key in visited:
         _dbg(
             f"{indent}_verify_one_artifact_recursive: already visited "
-            f"{result_id!r} — skipping"
+            f"{result_id!r} under varied={sorted(varied_parameters)} — "
+            f"skipping (cache hit)"
         )
         return
-    visited.add(result_id)
+    visited.add(visit_key)
 
     artifact = _get_artifact(result_id)
+    viz.begin_artifact(result_id=result_id, target_quantity=target_quantity,
+                       depth=depth, artifact=artifact)
 
     # Post-order traversal: verify children first, then the current node.
     # The output `artifact_results` reads bottom-up, so a reader scrolling
@@ -1742,6 +2157,7 @@ def _verify_one_artifact_recursive(
     )
     children_checked: List[str] = []
     for child_id in children:
+        viz.begin_child_descent(parent_id=result_id, child_id=child_id)
         _dbg(
             f"{indent}_verify_one_artifact_recursive: descending into child "
             f"{child_id!r} (parent={result_id!r})"
@@ -1758,23 +2174,32 @@ def _verify_one_artifact_recursive(
                 issues=issues,
                 judge=judge,
                 depth=depth + 1,
+                viz=viz
             )
             children_checked.append(child_id)
+            viz.end_child_descent(parent_id=result_id, child_id=child_id)
             _dbg(
                 f"{indent}_verify_one_artifact_recursive: returned from child "
                 f"{child_id!r}"
             )
         except Exception as e:                        # noqa: BLE001
             children_failed += 1
+            viz.end_child_descent(parent_id=result_id, child_id=child_id,
+                                  error=str(e))
             _dbg(
                 f"{indent}_verify_one_artifact_recursive: child {child_id!r} "
                 f"raised {type(e).__name__}: {e}"
             )
             issues.append(ReportVerificationIssue(
-                level="artifact",
-                location=f"result_id={result_id} -> child={child_id}",
-                verdict="fail",
-                message=str(e),
+                category=IssueCategory.RECURSION_FAILURE,
+                severity="fail",
+                where={"result_id": result_id, "child_id": child_id},
+                problem=(
+                    f"Recursive verification of child artifact "
+                    f"'{child_id}' (a parent of '{result_id}') raised an "
+                    f"exception during descent."
+                ),
+                judge_reasoning=str(e),
             ))
 
     _dbg(
@@ -1783,6 +2208,15 @@ def _verify_one_artifact_recursive(
         f"children_checked={len(children_checked)} "
         f"children_failed={children_failed}"
     )
+
+    # Dotted refs are NOT recursed into. The dotted-source judge call
+    # at the immediate downstream parameter produces the verdict for
+    # the cross-reference (R1_DOTTED), and the walker stops there. We
+    # deliberately do not descend into the source artifact's siblings
+    # or chase the named field's deeper chain — the agent's claim is
+    # narrow to the one referenced value, so the verifier's findings
+    # are scoped to match.
+
 
     local_dict = verify_artifact_parameterization(
         target_quantity=target_quantity,
@@ -1802,25 +2236,860 @@ def _verify_one_artifact_recursive(
 
     if local_result.overall_verdict != "pass":
         _dbg(
-            f"{indent}_verify_one_artifact_recursive: appending issue for "
-            f"{result_id!r} verdict={local_result.overall_verdict!r}"
+            f"{indent}_verify_one_artifact_recursive: emitting per-check "
+            f"issues for {result_id!r} "
+            f"verdict={local_result.overall_verdict!r}"
         )
-        
-        nonpassMSG = f"{local_result.summary}\n"
+
+        # Look up the artifact once to extract per-parameter `Context:`
+        # lines from its rationale. The merged context is the segment of
+        # `reasons[param]` (or `reasons["reasons"]` for str-shape tools)
+        # between "Context:" and "\n\nRationale:".
+        try:
+            _artifact_for_ctx = _get_artifact(result_id)
+            _all_reasons: Dict[str, str] = _artifact_for_ctx.reasons or {}
+            _tool_name_for_issue = _artifact_for_ctx.tool_name
+        except Exception:                                # noqa: BLE001
+            _all_reasons = {}
+            _tool_name_for_issue = local_result.tool_name
+
         for check in local_result.checks:
-            if check.verdict != "pass":
-                nonpassMSG += (
-                    f"- Parameter '{check.parameter_name}': "
-                    f"{check.verdict.upper()} (reason: {check.reasoning})\n"
-                )
-        nonpassMSG += "--------------------------------------\n"
-        
-        issues.append(ReportVerificationIssue(
-            level="artifact",
-            location=f"result_id={result_id}",
-            verdict=local_result.overall_verdict,
-            message=local_result.summary,
+            if check.verdict == "pass" or check.verdict == "info":
+                continue
+
+            cat = check.category or IssueCategory.UNCATEGORIZED
+
+            # Extract the Context: line from this parameter's rationale.
+            _reason_text = (
+                _all_reasons.get(check.parameter_name)
+                or _all_reasons.get("reasons")
+                or ""
+            )
+            ctx_at_site: Optional[str] = None
+            if "Context:" in _reason_text:
+                _ctx_after = _reason_text.split("Context:", 1)[1]
+                # Strip at the next "Rationale:" delimiter or newline-newline.
+                for _delim in ("\n\nRationale:", "\nRationale:", "\n\n"):
+                    if _delim in _ctx_after:
+                        _ctx_after = _ctx_after.split(_delim, 1)[0]
+                        break
+                ctx_at_site = _ctx_after.strip() or None
+
+            problem = _problem_text_for_param_check(
+                category=cat,
+                parameter_name=check.parameter_name,
+                parameter_value=check.parameter_value,
+                tool_name=_tool_name_for_issue,
+                verdict=check.verdict,
+            )
+
+            issues.append(ReportVerificationIssue(
+                category=cat,
+                severity=("fail" if check.verdict == "fail" else "warning"),
+                where={
+                    "result_id": result_id,
+                    "tool_name": _tool_name_for_issue,
+                    "parameter": check.parameter_name,
+                    "parameter_value": check.parameter_value,
+                },
+                context_at_site=ctx_at_site,
+                problem=problem,
+                judge_reasoning=check.reasoning,
+            ))
+
+    viz.end_artifact(result_id=result_id, verification_result=local_result)
+
+
+def summarize_verification_for_supervisor(
+    raw_result: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Reorganize the raw verifier output into a numbered, categorized list
+    of issues suitable for the supervisor agent to act on.
+
+    Input
+    -----
+    `raw_result` is the dict produced by `ReportVerificationResult.model_dump()`
+    — i.e. has keys: overall_verdict, checked_result_ids, issues,
+    artifact_results.
+
+    Output
+    ------
+    {
+        "overall_verdict": str,
+        "n_fails": int,
+        "n_warnings": int,
+        "summary": str,                 # one-liner for the supervisor
+        "issues": List[Dict],           # numbered, with remediation_options filled
+        "checked_result_ids": List[str],
+        "artifact_results": List[Dict], # kept for diagnostic tooling
+    }
+
+    The numbered `issues` list is the supervisor's primary surface. Each
+    entry includes:
+        issue_number:          1-indexed
+        category:              IssueCategory.* string
+        severity:              "fail" | "warning"
+        where:                 structured dict (claim_name / result_id /
+                               tool_name / parameter / parameter_value / etc.)
+        context_at_site:       the merged Context: line if extractable
+        problem:               one-sentence problem description
+        judge_reasoning:       judge verdict text where applicable
+        remediation_options:   list of fix-paths from REMEDIATION_OPTIONS
+    """
+    raw_issues: List[Dict[str, Any]] = list(raw_result.get("issues") or [])
+    out_issues: List[Dict[str, Any]] = []
+
+    n_fails = 0
+    n_warnings = 0
+
+    for i, issue in enumerate(raw_issues, start=1):
+        cat = issue.get("category") or IssueCategory.UNCATEGORIZED
+        severity = issue.get("severity", "fail")
+        if severity == "fail":
+            n_fails += 1
+        elif severity == "warning":
+            n_warnings += 1
+
+        remediation = list(REMEDIATION_OPTIONS.get(
+            cat, REMEDIATION_OPTIONS[IssueCategory.UNCATEGORIZED]
         ))
+
+        enriched = dict(issue)
+        enriched["issue_number"] = i
+        enriched["remediation_options"] = remediation
+        out_issues.append(enriched)
+
+    overall = raw_result.get("overall_verdict", "pass")
+    n_total = n_fails + n_warnings
+    if n_total == 0:
+        summary = "All checks passed."
+    else:
+        # Count distinct claims and artifacts touched by issues.
+        claims_with_issues = {
+            i["where"].get("claim_name")
+            for i in out_issues
+            if i.get("where", {}).get("claim_name")
+        }
+        artifacts_with_issues = {
+            i["where"].get("result_id")
+            for i in out_issues
+            if i.get("where", {}).get("result_id")
+        }
+        bits = [f"{n_fails} fail" + ("s" if n_fails != 1 else "")]
+        if n_warnings:
+            bits.append(f"{n_warnings} warning" + ("s" if n_warnings != 1 else ""))
+        loc_bits = []
+        if claims_with_issues:
+            loc_bits.append(
+                f"{len(claims_with_issues)} claim"
+                + ("s" if len(claims_with_issues) != 1 else "")
+            )
+        if artifacts_with_issues:
+            loc_bits.append(
+                f"{len(artifacts_with_issues)} artifact"
+                + ("s" if len(artifacts_with_issues) != 1 else "")
+            )
+        if loc_bits:
+            summary = f"{' and '.join(bits)} across {' / '.join(loc_bits)}."
+        else:
+            summary = f"{' and '.join(bits)}."
+
+    return {
+        "overall_verdict": overall,
+        "n_fails": n_fails,
+        "n_warnings": n_warnings,
+        "summary": summary,
+        "issues": out_issues,
+        "checked_result_ids": raw_result.get("checked_result_ids", []),
+        "artifact_results": raw_result.get("artifact_results", []),
+    }
+
+
+# =========================================================
+# Debug tool: investigate a surprising result by walking the
+# artifact chain with a user-supplied question.
+# =========================================================
+#
+# Same chain-walking infrastructure as the verifier (parent_result_ids_w_args,
+# _get_artifact, _summarize_artifact). Different semantics: instead of
+# checking parameters against R1/R2/R3 rules, the per-parameter judge is
+# asked whether each parameter could plausibly explain the user's question.
+#
+# Output mirrors the verifier's supervisor-facing format. The supervisor
+# reads the debug output the same way they read verifier output: a
+# numbered list of findings with structured `where`, `problem`,
+# `judge_reasoning`, and `remediation_options` per finding. Plus a
+# synthesis paragraph that names the most likely culprit.
+
+# Categories specific to debug findings.
+class DebugCategory(str):
+    """Closed set of debug-finding categories. String subclass for the
+    same reason as IssueCategory — JSON serializability and LLM
+    boundary friendliness."""
+    # The parameter's own value is a plausible cause of the surprise
+    # (e.g. low ecutwfc on a production run when the user asks why their
+    # adsorption energy looks too high).
+    PARAMETER_VALUE_SUSPECT = "parameter_value_suspect"
+    # The upstream source the value came from might itself be the
+    # problem (e.g. kspacing came from a convergence test that didn't
+    # converge tightly enough to transfer to the current use).
+    SOURCE_SUSPECT = "source_suspect"
+
+
+# Per-parameter debug rule. Read by the LLM judge for every parameter
+# encountered during the debug walk.
+DEBUG_PARAM_RULE = """
+You are helping the user diagnose a surprising or unexpected result by
+investigating one specific parameter on one specific tool call along the
+chain that produced the result.
+
+The user's investigation question:
+  {user_question}
+
+Investigation history (what the user has already tested and ruled out):
+  {investigation_history}
+
+If the parameter under review (or its source) has already been ruled out
+by the investigation history, return verdict "not_relevant" with a brief
+explanation that this was previously tested. Do NOT re-flag a previously
+ruled-out hypothesis.
+
+Otherwise, judge whether this parameter could plausibly contribute to or
+explain the user's question:
+
+  - "parameter_value_suspect" : the parameter's chosen value, given its
+                                role in this tool call and the broader
+                                study, is a plausible cause of the
+                                surprise. The user should consider
+                                investigating this parameter (likely by
+                                re-running with a different value to see
+                                if the result changes).
+  - "source_suspect"          : the parameter's value comes from an
+                                upstream artifact, and that upstream
+                                artifact is itself a plausible source of
+                                the problem (e.g. an upstream convergence
+                                that may not have been tight enough for
+                                the current use). The user should
+                                investigate the upstream artifact rather
+                                than this parameter directly.
+  - "neutral"                 : the parameter is set in a way consistent
+                                with normal practice and unlikely to
+                                explain the surprise, OR you don't have
+                                enough information to tell.
+  - "not_relevant"            : the parameter has no plausible connection
+                                to the user's question, or has already
+                                been ruled out by the investigation
+                                history.
+
+Be honest. If you don't know, say "neutral" with a one-sentence
+explanation of why you can't tell. Do not invent suspicion to look
+helpful — false leads waste the user's calculation time.
+"""
+
+
+# Synthesis rule. One call after the walk completes, given all per-parameter
+# findings. Produces a one-paragraph human-readable summary that the
+# supervisor reads alongside the numbered findings list.
+DEBUG_SYNTHESIS_RULE = """
+The user is investigating a surprising or unexpected result.
+
+  Question: {user_question}
+
+  Investigation history (already ruled out): {investigation_history}
+
+You have walked the value-flow chain of the artifact in question. For
+each parameter on each artifact in the chain, a per-parameter judge
+produced one of four verdicts: "parameter_value_suspect",
+"source_suspect", "neutral", or "not_relevant".
+
+Below is the complete walk:
+
+{walk_dump}
+
+Your job: synthesize a one-paragraph diagnostic summary for the user.
+
+  - If one or more parameters were flagged as suspects, name them in
+    PRIORITY ORDER (most likely cause first). Briefly explain why each
+    is suspicious.
+  - If multiple suspects share a single root cause (e.g. several
+    parameters all depend on the same un-converged sub-study), name the
+    root cause once and group the dependents under it.
+  - If NO parameters were flagged as suspect — which can happen when
+    the investigation history has already ruled everything out, or when
+    the chain looks clean — say so explicitly. In that case, suggest
+    the surprise may originate OUTSIDE the value-flow chain: in the
+    original input data (geometry, pseudopotentials), in a physical
+    assumption (functional choice, smearing scheme), in an external
+    benchmark, or in the user's expectation. Do not invent suspicion
+    to fill space.
+  - DO NOT recommend changing multiple parameters at once. If multiple
+    suspects exist, the user must vary them ONE AT A TIME in priority
+    order — varying several at once makes attribution impossible.
+
+Begin your response with the disclaimer:
+  "These findings are LLM-generated hypotheses about what could explain
+  the surprise. Each must be confirmed by re-running the relevant
+  calculation with the suggested change; until then, treat them as
+  starting points, not conclusions. Vary one parameter at a time in
+  priority order."
+
+Then provide the synthesis paragraph.
+"""
+
+
+# Per-category remediation options for debug findings. These describe
+# what to investigate next, not how to "fix" something — debug findings
+# are hypotheses, not failures.
+DEBUG_REMEDIATION_OPTIONS: Dict[str, List[str]] = {
+    DebugCategory.PARAMETER_VALUE_SUSPECT: [
+        "Re-run the relevant calculation with a different value of this "
+        "parameter to test whether it changes the surprising result. If "
+        "the result moves substantially, this parameter is the cause. "
+        "If not, mark this parameter as ruled out and pass that to the "
+        "next debug call via `investigation_history`.",
+        "Check whether the parameter's value is consistent with the role "
+        "it plays in the study (i.e. read its `Context:` line and "
+        "rationale alongside the value).",
+    ],
+    DebugCategory.SOURCE_SUSPECT: [
+        "The upstream source artifact named in `where.source_result_id` "
+        "is itself a candidate cause. Re-run this debug tool with that "
+        "upstream `result_id` as the new root and re-ask the same "
+        "question to walk further back into the chain.",
+        "Check whether the upstream source's own characterization was "
+        "tight enough for the current production use (e.g. kspacing "
+        "converged at low ecutwfc may not transfer to high-ecutwfc "
+        "production). If not, the upstream sub-study may need to be "
+        "re-run with tighter conditions.",
+    ],
+}
+
+
+def _call_debug_param_judge_llm(
+    *,
+    tool_name: str,
+    tool_description: str,
+    parameter_name: str,
+    parameter_value: Any,
+    reason: str,
+    source_artifact_summary: Optional[Any],
+    user_question: str,
+    investigation_history: str,
+    judge,
+) -> Dict[str, Any]:
+    """Per-parameter debug judge call. Returns a dict with keys
+    `verdict` (one of "parameter_value_suspect", "source_suspect",
+    "neutral", "not_relevant") and `reasoning`."""
+    if source_artifact_summary is None:
+        source_block = "None (no upstream artifact for this parameter)"
+    else:
+        source_block = json.dumps(source_artifact_summary, indent=2, default=str)
+
+    history_block = (
+        investigation_history.strip()
+        if investigation_history and investigation_history.strip()
+        else "(none — this is the first investigation pass)"
+    )
+
+    rule_text = DEBUG_PARAM_RULE.format(
+        user_question=user_question,
+        investigation_history=history_block,
+    )
+
+    prompt = f"""
+{rule_text}
+
+Tool that produced the artifact under review:
+  name:        {tool_name}
+  description: {tool_description}
+
+Parameter under review:
+  name:  {parameter_name}
+  value: {repr(parameter_value)}
+  reason given by the agent: {reason}
+
+Source artifact for this parameter, if any:
+{source_block}
+
+Return one of: "parameter_value_suspect", "source_suspect", "neutral",
+"not_relevant", with a brief reasoning.
+"""
+    _dbg(
+        f"_call_debug_param_judge_llm: INVOKE param={parameter_name!r} "
+        f"value={parameter_value!r} tool={tool_name!r} "
+        f"prompt_len={len(prompt)}"
+    )
+    t0 = time.time()
+    result = judge.invoke(prompt)
+    elapsed = time.time() - t0
+    _dbg(
+        f"_call_debug_param_judge_llm: RETURN param={parameter_name!r} "
+        f"verdict={result.get('verdict')!r} elapsed={elapsed:.2f}s"
+    )
+    return result
+
+
+def _call_debug_synthesis_llm(
+    *,
+    user_question: str,
+    investigation_history: str,
+    walk_findings: List[Dict[str, Any]],
+    judge,
+) -> str:
+    """Single synthesis call after the walk. Returns one paragraph of
+    free-text diagnostic for the supervisor."""
+    history_block = (
+        investigation_history.strip()
+        if investigation_history and investigation_history.strip()
+        else "(none — this is the first investigation pass)"
+    )
+
+    # Compact dump of every finding for the synthesis prompt. Includes
+    # the "neutral" / "not_relevant" findings so the synthesis can
+    # reason about what was ruled out, not just what was flagged.
+    walk_dump = json.dumps(walk_findings, indent=2, default=str)
+
+    prompt = DEBUG_SYNTHESIS_RULE.format(
+        user_question=user_question,
+        investigation_history=history_block,
+        walk_dump=walk_dump,
+    )
+    _dbg(
+        f"_call_debug_synthesis_llm: INVOKE n_findings={len(walk_findings)} "
+        f"prompt_len={len(prompt)}"
+    )
+    t0 = time.time()
+    result = judge.invoke(prompt)
+    elapsed = time.time() - t0
+    # The judge contract returns dicts with `reasoning`. For the
+    # synthesis we want free-text; we read `reasoning` since that's
+    # where the prose lives.
+    text = (
+        result.get("reasoning")
+        or result.get("verdict")
+        or json.dumps(result)
+    )
+    _dbg(
+        f"_call_debug_synthesis_llm: RETURN text_len={len(str(text))} "
+        f"elapsed={elapsed:.2f}s"
+    )
+    return str(text)
+
+
+def _walk_artifact_for_debug(
+    *,
+    result_id: str,
+    user_question: str,
+    investigation_history: str,
+    judge,
+    visited: Set[str],
+    depth: int,
+    max_depth: int,
+    max_judge_calls: int,
+    judge_call_counter: List[int],   # mutable single-element list
+) -> List[Dict[str, Any]]:
+    """Recursively walk the value-flow chain (parent_result_ids_w_args
+    only) starting at `result_id`. For each parameter on each artifact,
+    invoke the debug judge and record a finding.
+
+    Cycle / depth / budget protection:
+      - `visited` prevents reprocessing the same artifact.
+      - `max_depth` caps the walk depth from the root.
+      - `max_judge_calls` caps the total number of judge invocations
+        across the whole walk; further parameters get a synthetic
+        "neutral / budget_exceeded" finding so the synthesis still
+        sees them but doesn't pay for them.
+
+    Returns a list of finding dicts, one per parameter visited.
+    """
+    out: List[Dict[str, Any]] = []
+
+    if result_id in visited:
+        return out
+    if depth > max_depth:
+        return out
+    visited = visited | {result_id}
+
+    try:
+        artifact = _get_artifact(result_id)
+    except Exception as e:                                # noqa: BLE001
+        out.append({
+            "depth": depth,
+            "result_id": result_id,
+            "tool_name": "<artifact_lookup_failed>",
+            "parameter_name": "<n/a>",
+            "parameter_value": None,
+            "context_at_site": None,
+            "verdict": "not_relevant",
+            "reasoning": (
+                f"Could not load artifact {result_id} during debug walk: {e}"
+            ),
+            "source_result_id": None,
+        })
+        return out
+
+    sources = _param_source_ids(artifact)
+    args = artifact.args or {}
+    reasons = artifact.reasons or {}
+
+    for param_name, param_value in args.items():
+        # Extract Context: from this parameter's reason for the
+        # supervisor-facing finding.
+        reason_text = reasons.get(param_name) or reasons.get("reasons") or ""
+        ctx_at_site: Optional[str] = None
+        if "Context:" in reason_text:
+            _ctx_after = reason_text.split("Context:", 1)[1]
+            for _delim in ("\n\nRationale:", "\nRationale:", "\n\n"):
+                if _delim in _ctx_after:
+                    _ctx_after = _ctx_after.split(_delim, 1)[0]
+                    break
+            ctx_at_site = _ctx_after.strip() or None
+
+        # Resolve the source artifact summary if a real upstream ref
+        # exists for this parameter. Empty / missing sources mean the
+        # parameter wasn't sourced — pass None to the judge. Bare and
+        # dotted refs are handled uniformly via _build_source_summary.
+        source = sources.get(param_name)
+        source_summary: Optional[Any] = None
+        source_id_for_finding: Optional[Any] = None
+        if isinstance(source, str) and source:
+            try:
+                source_summary = _build_source_summary(source)
+                source_id_for_finding = source
+            except Exception:                              # noqa: BLE001
+                source_summary = None
+                source_id_for_finding = source
+        elif isinstance(source, list) and source and all(
+            isinstance(s, str) and s for s in source
+        ):
+            try:
+                source_summary = [_build_source_summary(s) for s in source]
+                source_id_for_finding = source
+            except Exception:                              # noqa: BLE001
+                source_summary = None
+                source_id_for_finding = source
+
+        # Budget check. If we've burned through the judge budget, emit
+        # a synthetic finding so the synthesis still sees this parameter
+        # exists in the walk.
+        if judge_call_counter[0] >= max_judge_calls:
+            out.append({
+                "depth": depth,
+                "result_id": result_id,
+                "tool_name": artifact.tool_name,
+                "parameter_name": param_name,
+                "parameter_value": param_value,
+                "context_at_site": ctx_at_site,
+                "verdict": "neutral",
+                "reasoning": (
+                    "Judge-call budget exceeded for this debug walk; "
+                    "this parameter was not individually examined. "
+                    "Increase max_judge_calls or scope the investigation "
+                    "to a subtree to examine it."
+                ),
+                "source_result_id": source_id_for_finding,
+            })
+            continue
+
+        judgement = _call_debug_param_judge_llm(
+            tool_name=artifact.tool_name,
+            tool_description=artifact.description or "",
+            parameter_name=param_name,
+            parameter_value=param_value,
+            reason=reason_text,
+            source_artifact_summary=source_summary,
+            user_question=user_question,
+            investigation_history=investigation_history,
+            judge=judge,
+        )
+        judge_call_counter[0] += 1
+
+        out.append({
+            "depth": depth,
+            "result_id": result_id,
+            "tool_name": artifact.tool_name,
+            "parameter_name": param_name,
+            "parameter_value": param_value,
+            "context_at_site": ctx_at_site,
+            "verdict": judgement.get("verdict", "neutral"),
+            "reasoning": judgement.get("reasoning", ""),
+            "source_result_id": source_id_for_finding,
+        })
+
+    # Recurse into upstream BARE refs only. Dotted refs are NOT
+    # recursed into — the dotted-source judge call at the immediate
+    # downstream parameter has already produced its finding, and the
+    # debug walker stops there. This mirrors the verifier's narrow
+    # scope on dotted-ref claims.
+    bare_upstream_ids: Set[str] = set()
+    for source in sources.values():
+        if isinstance(source, list):
+            for s in source:
+                if isinstance(s, str) and s and not _is_dotted_ref(s):
+                    bare_upstream_ids.add(s)
+        elif isinstance(source, str) and source and not _is_dotted_ref(source):
+            bare_upstream_ids.add(source)
+
+    for parent_id in bare_upstream_ids:
+        out.extend(_walk_artifact_for_debug(
+            result_id=parent_id,
+            user_question=user_question,
+            investigation_history=investigation_history,
+            judge=judge,
+            visited=visited,
+            depth=depth + 1,
+            max_depth=max_depth,
+            max_judge_calls=max_judge_calls,
+            judge_call_counter=judge_call_counter,
+        ))
+
+    return out
+
+
+
+def _problem_text_for_debug_finding(
+    *,
+    verdict: str,
+    parameter_name: str,
+    parameter_value: Any,
+    tool_name: str,
+) -> str:
+    """One-sentence problem text per debug-finding category."""
+    val_repr = repr(parameter_value)
+    if verdict == DebugCategory.PARAMETER_VALUE_SUSPECT:
+        return (
+            f"Parameter '{parameter_name}' (value {val_repr}) on a "
+            f"`{tool_name}` artifact is a plausible cause of the "
+            f"surprising result based on its value and role in the "
+            f"study."
+        )
+    if verdict == DebugCategory.SOURCE_SUSPECT:
+        return (
+            f"Parameter '{parameter_name}' (value {val_repr}) on a "
+            f"`{tool_name}` artifact draws from an upstream source that "
+            f"is itself a plausible cause; investigate upstream rather "
+            f"than this parameter directly."
+        )
+    return (
+        f"Parameter '{parameter_name}' (value {val_repr}) on a "
+        f"`{tool_name}` artifact has unrecognized debug verdict "
+        f"{verdict!r}."
+    )
+
+
+def summarize_debug_for_supervisor(
+    *,
+    user_question: str,
+    root_result_id: str,
+    walk_findings: List[Dict[str, Any]],
+    synthesis_text: str,
+    judge_calls_used: int,
+    max_judge_calls: int,
+) -> Dict[str, Any]:
+    """Filter the walk findings to potential-causes-only and assemble
+    the supervisor-facing output dict.
+
+    The walk's full contents are NOT returned — they were used internally
+    by the synthesis. The supervisor sees only the potential-causes list
+    (numbered) plus the synthesis paragraph plus a one-line summary.
+    """
+    potential_causes: List[Dict[str, Any]] = []
+    issue_number = 0
+
+    for finding in walk_findings:
+        verdict = finding.get("verdict", "neutral")
+        if verdict not in (
+            DebugCategory.PARAMETER_VALUE_SUSPECT,
+            DebugCategory.SOURCE_SUSPECT,
+        ):
+            continue
+
+        issue_number += 1
+        cat = verdict
+        problem = _problem_text_for_debug_finding(
+            verdict=verdict,
+            parameter_name=finding["parameter_name"],
+            parameter_value=finding["parameter_value"],
+            tool_name=finding["tool_name"],
+        )
+        remediation = list(DEBUG_REMEDIATION_OPTIONS.get(cat, []))
+
+        potential_causes.append({
+            "issue_number": issue_number,
+            "category": cat,
+            "where": {
+                "result_id": finding["result_id"],
+                "tool_name": finding["tool_name"],
+                "parameter": finding["parameter_name"],
+                "parameter_value": finding["parameter_value"],
+                "source_result_id": finding.get("source_result_id"),
+            },
+            "context_at_site": finding.get("context_at_site"),
+            "problem": problem,
+            "judge_reasoning": finding.get("reasoning"),
+            "remediation_options": remediation,
+        })
+
+    n_potential = len(potential_causes)
+    if n_potential == 0:
+        summary = (
+            "No potential causes identified in the value-flow chain. "
+            "See the synthesis for guidance on where else the surprise "
+            "may originate."
+        )
+    else:
+        n_artifacts = len({c["where"]["result_id"] for c in potential_causes})
+        summary = (
+            f"{n_potential} potential cause"
+            f"{'s' if n_potential != 1 else ''} identified across "
+            f"{n_artifacts} artifact{'s' if n_artifacts != 1 else ''}."
+        )
+
+    return {
+        "investigation_question": user_question,
+        "root_result_id": root_result_id,
+        "n_potential_causes": n_potential,
+        "summary": summary,
+        "potential_causes": potential_causes,
+        "synthesis": synthesis_text,
+        "judge_calls_used": judge_calls_used,
+        "max_judge_calls": max_judge_calls,
+        "budget_exceeded": judge_calls_used >= max_judge_calls,
+    }
+
+
+@tool
+def debug_artifact_chain(
+    result_id: Annotated[
+        str,
+        "The result_id of the artifact whose value is surprising or "
+        "unexpected. The walk traces back through this artifact's "
+        "value-flow chain (parent_result_ids_w_args).",
+    ],
+    user_question: Annotated[
+        str,
+        "The investigation question. Phrase as the user would: 'why is "
+        "the adsorption energy 0.5 eV higher than literature?', 'why "
+        "does the lattice constant change with ecutwfc above 80 Ry?', "
+        "etc. The judge uses this to decide whether each parameter "
+        "could plausibly contribute to the surprise.",
+    ],
+    judge,
+    investigation_history: Annotated[
+        str,
+        "Free-text summary of what has already been tested and ruled "
+        "out as the cause. Pass an empty string on the first debug "
+        "call. On subsequent calls, describe what was tested and what "
+        "the result was, so the judge does not re-flag previously "
+        "ruled-out hypotheses. Example: 'Re-ran the production calc "
+        "with ecutwfc doubled (40 -> 80) and the result was unchanged; "
+        "ecutwfc is not the cause.'",
+    ] = "",
+    max_depth: Annotated[
+        int,
+        "Maximum depth of the chain walk from the root. Default 10.",
+    ] = 10,
+    max_judge_calls: Annotated[
+        int,
+        "Maximum number of per-parameter judge invocations across the "
+        "whole walk. Default 50; raise for deep chains, lower to keep "
+        "costs bounded. Parameters past the budget receive a synthetic "
+        "'neutral' verdict noting the budget was exceeded.",
+    ] = 50,
+) -> Dict[str, Any]:
+    """Investigate a surprising or unexpected artifact value.
+
+    Walks the artifact's value-flow chain (parent_result_ids_w_args
+    only) and asks an LLM judge, per parameter, whether that parameter
+    could plausibly explain the user's question. Filters to
+    potential-causes-only and returns a supervisor-facing dict in the
+    same shape as `verify_structured_report`'s output: numbered
+    findings with `where`, `problem`, `judge_reasoning`,
+    `remediation_options`, plus a synthesis paragraph naming the most
+    likely culprit.
+
+    Output dict keys:
+      investigation_question  : str  — echoes the user's question
+      root_result_id          : str  — the artifact investigated
+      n_potential_causes      : int
+      summary                 : str  — one-line tally
+      potential_causes        : List[Dict]  — numbered findings (only
+                                "parameter_value_suspect" and
+                                "source_suspect" verdicts surface here;
+                                "neutral" / "not_relevant" findings are
+                                used internally by the synthesis but not
+                                returned)
+      synthesis               : str  — one-paragraph diagnostic with a
+                                fixed disclaimer prefix
+      judge_calls_used        : int
+      max_judge_calls         : int
+      budget_exceeded         : bool
+
+    Notes for the supervisor:
+
+      * The output is HYPOTHESES, not conclusions. Each potential cause
+        must be confirmed by re-running the relevant calculation with
+        the suggested change.
+      * Vary ONE parameter at a time in priority order from the
+        synthesis; varying multiple at once makes attribution
+        impossible.
+      * If the first call's potential causes are exhausted (re-run and
+        ruled out), call this tool AGAIN with the same `result_id` and
+        `user_question`, but pass `investigation_history` describing
+        what was ruled out. The judge will skip those and surface new
+        candidates.
+      * If the tool returns no potential causes AND the investigation
+        history rules out the obvious candidates, the synthesis will
+        say so explicitly — the surprise may originate outside the
+        value-flow chain (in input data, physical assumptions, or in
+        the user's expectation).
+    """
+    _dbg(
+        f"debug_artifact_chain: ENTER root={result_id!r} "
+        f"question_len={len(user_question)} "
+        f"history_len={len(investigation_history)} "
+        f"max_depth={max_depth} max_judge_calls={max_judge_calls}"
+    )
+
+    judge_call_counter = [0]
+    walk_findings = _walk_artifact_for_debug(
+        result_id=result_id,
+        user_question=user_question,
+        investigation_history=investigation_history,
+        judge=judge,
+        visited=set(),
+        depth=0,
+        max_depth=max_depth,
+        max_judge_calls=max_judge_calls,
+        judge_call_counter=judge_call_counter,
+    )
+
+    _dbg(
+        f"debug_artifact_chain: walk complete — n_findings={len(walk_findings)} "
+        f"judge_calls_used={judge_call_counter[0]}"
+    )
+
+    synthesis_text = _call_debug_synthesis_llm(
+        user_question=user_question,
+        investigation_history=investigation_history,
+        walk_findings=walk_findings,
+        judge=judge,
+    )
+
+    out = summarize_debug_for_supervisor(
+        user_question=user_question,
+        root_result_id=result_id,
+        walk_findings=walk_findings,
+        synthesis_text=synthesis_text,
+        judge_calls_used=judge_call_counter[0],
+        max_judge_calls=max_judge_calls,
+    )
+
+    _dbg(
+        f"debug_artifact_chain: RETURN n_potential_causes="
+        f"{out['n_potential_causes']} budget_exceeded={out['budget_exceeded']}"
+    )
+    return out
 
 
 def verify_structured_report(
@@ -1829,6 +3098,9 @@ def verify_structured_report(
     judge,
 ) -> Dict[str, Any]:
     """Verify a structured report end-to-end."""
+    
+    viz = VerifyVisualizer(html_path=os.path.join(var.my_WORKING_DIRECTORY, f"verify_{reportName}.html"))
+
     _dbg(
         f"verify_structured_report: ENTER reportName={reportName!r} "
         f"sensitive_parameters={sensitive_parameters}"
@@ -1867,7 +3139,16 @@ def verify_structured_report(
 
     issues: List[ReportVerificationIssue] = []
     artifact_results: List[ArtifactVerificationResult] = []
+    # Flat set of artifact IDs visited at least once across the whole
+    # report, for the `checked_result_ids` output field.
     all_visited: Set[str] = set()
+    # Cross-claim verification cache. Keyed by
+    # (artifact_result_id, frozenset(varied_parameters)). Two claims
+    # with the same varied set share cache entries; claims with
+    # different varied sets cache separately because R1 vs R2 branch
+    # selection (and the verdict that follows) depends on which
+    # parameters are being varied.
+    visited_cache: Set[Tuple[str, frozenset]] = set()
 
     overall_goal = parsed_report.overall_goal
     _dbg(
@@ -1881,24 +3162,32 @@ def verify_structured_report(
             "report-level FAIL and short-circuiting"
         )
         issues.append(ReportVerificationIssue(
-            level="report",
-            location="overall_goal",
-            verdict="fail",
-            message=(
-                "Report has empty overall_goal. The verifier requires a "
-                "non-empty goal to provide context to per-parameter "
-                "judgments. Regenerate the report with a meaningful "
-                "overall_goal."
+            category=IssueCategory.SCHEMA_VIOLATION,
+            severity="fail",
+            where={"field": "overall_goal"},
+            problem=(
+                "Report has empty `overall_goal`. The verifier requires a "
+                "non-empty goal so per-parameter judgments have study "
+                "context."
             ),
         ))
-        return ReportVerificationResult(
+        raw_result = ReportVerificationResult(
             overall_verdict="fail",
             checked_result_ids=[],
             issues=issues,
             artifact_results=artifact_results,
         ).model_dump()
+        return summarize_verification_for_supervisor(raw_result)
+        
+    viz.begin_report(
+        report_name=reportName,
+        overall_goal=overall_goal,
+        sensitive_parameters=sensitive_parameters,
+        claims=parsed_report.numerical_results
+    )
 
     for claim in parsed_report.numerical_results:
+        viz.begin_claim(claim)
         _dbg(
             f"verify_structured_report: ===== claim "
             f"{claim.quantity_name!r} ===== value={claim.value!r} "
@@ -1912,10 +3201,18 @@ def verify_structured_report(
                 f"artifact lookup FAILED — {type(e).__name__}: {e}"
             )
             issues.append(ReportVerificationIssue(
-                level="claim",
-                location=f"quantity={claim.quantity_name}",
-                verdict="fail",
-                message=str(e),
+                category=IssueCategory.ARTIFACT_LOOKUP_FAILED,
+                severity="fail",
+                where={
+                    "claim_name": claim.quantity_name,
+                    "result_id": claim.result_id,
+                },
+                problem=(
+                    f"Claim '{claim.quantity_name}' points at "
+                    f"`result_id={claim.result_id}` but that id could not "
+                    f"be loaded from the CANVAS registry."
+                ),
+                judge_reasoning=str(e),
             ))
             continue
 
@@ -1926,55 +3223,34 @@ def verify_structured_report(
         )
         if not ok:
             issues.append(ReportVerificationIssue(
-                level="claim",
-                location=f"quantity={claim.quantity_name}, result_id={claim.result_id}",
-                verdict="fail",
-                message=msg,
+                category=IssueCategory.VALUE_MISMATCH_CLAIM,
+                severity="fail",
+                where={
+                    "claim_name": claim.quantity_name,
+                    "claim_value": claim.value,
+                    "claim_unit": claim.unit,
+                    "result_id": claim.result_id,
+                },
+                problem=(
+                    f"Claim '{claim.quantity_name}' asserts value "
+                    f"{claim.value!r} (unit={claim.unit!r}) against "
+                    f"`result_id={claim.result_id}`, but the registered "
+                    f"artifact's value does not match."
+                ),
+                judge_reasoning=msg,
             ))
             continue
 
-        # Placeholder-resolution check. Walk the value-flow chain (only via
-        # parent_result_ids_w_args) and surface any placeholder source that
-        # is not resolved by:
-        #   (a) a real ref pinning the same parameter closer to the claim,
-        #   (b) the parameter being in claim.varied_parameters, or
-        #   (c) the parameter being in claim.acknowledged_placeholders.
+        # Per-claim descent. Reuse the cross-claim `visited_cache` so the
+        # second claim that reaches a shared upstream artifact under the
+        # SAME varied set short-circuits. Claims with different varied
+        # sets cache separately and re-judge that artifact.
+        cache_size_before = len(visited_cache)
+        ids_before = {k[0] for k in visited_cache}
         _dbg(
             f"verify_structured_report: claim {claim.quantity_name!r} — "
-            f"running placeholder-resolution walk "
-            f"(varied={list(claim.varied_parameters)} "
-            f"acknowledged={list(claim.acknowledged_placeholders)})"
-        )
-        unresolved = _walk_placeholders_for_claim(
-            result_id=claim.result_id,
-            seen_real_for_param=set(),
-            varied_parameters=set(claim.varied_parameters),
-            acknowledged_placeholders=set(claim.acknowledged_placeholders),
-            visited=set(),
-        )
-        _dbg(
-            f"verify_structured_report: claim {claim.quantity_name!r} — "
-            f"placeholder walk found n={len(unresolved)} unresolved entries"
-        )
-        for artifact_id, param_name, source_repr, message in unresolved:
-            issues.append(ReportVerificationIssue(
-                level="claim",
-                location=(
-                    f"quantity={claim.quantity_name}, "
-                    f"artifact={artifact_id}, param={param_name}"
-                ),
-                verdict="fail",
-                message=message,
-            ))
-
-        # Per-claim visited scope: the same upstream artifact reachable from
-        # two different claims gets verified twice, under each claim's own
-        # `varied_parameters`.
-        visited: Set[str] = set()
-        visited_before = len(visited)
-        _dbg(
-            f"verify_structured_report: claim {claim.quantity_name!r} — "
-            f"starting recursive descent (visited size before={visited_before})"
+            f"starting recursive descent (cache size before="
+            f"{cache_size_before})"
         )
         _verify_one_artifact_recursive(
             result_id=claim.result_id,
@@ -1982,29 +3258,50 @@ def verify_structured_report(
             overall_goal=overall_goal,
             varied_parameters=claim.varied_parameters,
             sensitive_parameters=sensitive_parameters,
-            visited=visited,
+            visited=visited_cache,
             artifact_results=artifact_results,
             issues=issues,
             judge=judge,
+            viz=viz
         )
+        ids_after = {k[0] for k in visited_cache}
+        new_ids_for_this_claim = ids_after - ids_before
+        all_visited.update(ids_after)
         _dbg(
             f"verify_structured_report: claim {claim.quantity_name!r} — "
-            f"recursive descent complete (blast radius={len(visited)} "
-            f"artifacts)"
+            f"recursive descent complete (cache size after="
+            f"{len(visited_cache)}, "
+            f"new artifacts touched this claim={len(new_ids_for_this_claim)})"
         )
-        all_visited.update(visited)
+        if any(i.severity == "fail" for i in issues):
+            overall = "fail"
+        elif any(i.severity == "warning" for i in issues):
+            overall = "warning"
+        else:
+            overall = "pass"
+        # Per-claim viz hook gets a short status string (since the old
+        # `issues[-1].message` reference is no longer valid — issues[-1]
+        # is not necessarily related to this claim, and `.message` no
+        # longer exists in the new schema).
+        viz.end_claim(
+            claim.quantity_name, overall,
+            f"claim verdict={overall} "
+            f"(issues so far: {sum(1 for i in issues if i.severity == 'fail')} "
+            f"fails, "
+            f"{sum(1 for i in issues if i.severity == 'warning')} warnings)"
+        )
 
-    if any(i.verdict == "fail" for i in issues):
+    if any(i.severity == "fail" for i in issues):
         overall = "fail"
-    elif any(i.verdict == "warning" for i in issues):
+    elif any(i.severity == "warning" for i in issues):
         overall = "warning"
     else:
         overall = "pass"
 
-    # Issue breakdown by level for log readability.
-    level_counts: Dict[str, int] = {}
+    # Issue breakdown by category for log readability.
+    category_counts: Dict[str, int] = {}
     for i in issues:
-        level_counts[i.level] = level_counts.get(i.level, 0) + 1
+        category_counts[i.category] = category_counts.get(i.category, 0) + 1
     n_pass = sum(1 for r in artifact_results if r.overall_verdict == "pass")
     n_warn = sum(1 for r in artifact_results if r.overall_verdict == "warning")
     n_fail = sum(1 for r in artifact_results if r.overall_verdict == "fail")
@@ -2012,12 +3309,13 @@ def verify_structured_report(
         f"verify_structured_report: AGGREGATE overall={overall!r} "
         f"n_artifacts_checked={len(all_visited)} "
         f"artifact_verdicts(pass/warn/fail)={n_pass}/{n_warn}/{n_fail} "
-        f"issues_by_level={level_counts}"
+        f"issues_by_category={category_counts}"
     )
 
-    return ReportVerificationResult(
+    raw_result = ReportVerificationResult(
         overall_verdict=overall,
         checked_result_ids=sorted(all_visited),
         issues=issues,
         artifact_results=artifact_results,
     ).model_dump()
+    return summarize_verification_for_supervisor(raw_result)
