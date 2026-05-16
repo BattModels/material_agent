@@ -99,9 +99,9 @@ dataset_description = """
     </description>
   </field>
 
-  <field name="average_HHI_P_excluding_OHCNPS" type="numpy.int64" domain="production">
+  <field name="average_HHI_P_excluding_O_H" type="numpy.int64" domain="production">
     <description>
-      average Herfindahl-Hirschman Index (HHI) for global production concentration across producing countries, averaged over all elements (atoms) in the material excluding O, H, C, N, P, and S.
+      average Herfindahl-Hirschman Index (HHI) for global production concentration across producing countries, averaged over all elements (atoms) in the material excluding O and H.
     </description>
   </field>
 
@@ -117,9 +117,9 @@ dataset_description = """
     </description>
   </field>
 
-  <field name="average_HHI_R_excluding_OHCNPS" type="numpy.int64" domain="reserve">
+  <field name="average_HHI_R_excluding_O_H" type="numpy.int64" domain="reserve">
     <description>
-      average Herfindahl-Hirschman Index (HHI) for global reserve concentration across all countries, excluding O, H, C, N, P, and S.
+      average Herfindahl-Hirschman Index (HHI) for global reserve concentration across all countries, excluding O and H.
     </description>
   </field>
 

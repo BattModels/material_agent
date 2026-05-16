@@ -53,18 +53,14 @@ from ursa.agents import ArxivAgent
 
 from GNoME_aqueous_stability.src.gnome_aqueous_stability.data_utils import Data_Handler
 from GNoME_aqueous_stability.src.gnome_aqueous_stability.analysis_utils import (
-    plot_periodic_table_with_values, get_col_dict_for_atoms, 
     Stable_Entries, Stability_Criteria, get_simplified_df, 
     atoms_from_db
 )
 from gnome_dreams_oer_screening.oer.oer_study import OER_catalyst_study
-from gnome_dreams_oer_screening.vasp.pre_defined_vasp_sets import (
-    RPBE_relax_bulk_set, RPBE_relax_surface_set 
-)
-from gnome_dreams_oer_screening.vasp.vasp_calculation import (
-    run_vasp_via_custodian, read_vasp_results, clean_up_vasp_directory
-)
 from gnome_dreams_oer_screening.explog.explog import EXPLOG
+from gnome_dreams_oer_screening.vasp.magnetic_enumeration import (
+    count_magnetic_sites_from_formula
+)
 
 try:
     import torch
@@ -183,12 +179,12 @@ def wait_for_update(
         while status == "stop":
             # print(f"Calculation pause, Agent is waiting. cwd: {var.my_WORKING_DIRECTORY}")
             # # wait for 5 second
-            time.sleep(5)
+            time.sleep(60)
             with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
                 status = f.read()
 
 
-        time.sleep(60)
+        time.sleep(15) # TODO - consider before production run
         tmpUpdate = EXPLOG.update_log()
         # Sort through the updates, remove non-failed/completed jobs (ignore going from pending to running)
         
@@ -197,7 +193,7 @@ def wait_for_update(
         for_deletion = []
         for key, value in tmpUpdate.items():
 
-            if value not in ["completed", "failed"]:
+            if value not in ["completed", "failed"] or 'unrecoverable' in value:
                 for_deletion.append(key)
 
         for key in for_deletion:
@@ -233,7 +229,7 @@ def wait_for_update(
             )    
             
             return f"{outText}\nMessage_ID={id}. Please refer to this ID for the updates while waiting."
-        elif time.time() - var.startTime > patience*60:
+        elif time.time() - waitStartTime > patience*60:
             
             id = CANVAS.register_tool_output(
                 tool_name="wait_for_update",
@@ -654,8 +650,8 @@ def enter_candidate_in_log(
 
     catalyst_study = OER_catalyst_study(
         init_atoms = atoms, 
-        H2O_gas_free_energy = -14.217, # <--- should be the DFT energy + free energy corrections, at the relevant level of theory
-        H2_gas_free_energy = -6.77, # <--- should be the DFT energy + free energy corrections, at the relevant level of theory
+        H2O_gas_free_energy = -14.183498, # <--- should be the DFT energy + free energy corrections, at the relevant level of theory
+        H2_gas_free_energy = -7.027336, # <--- should be the DFT energy + free energy corrections, at the relevant level of theory
                                         )
 
     EXPLOG.add_candidate(candidate_id=MaterialId,
@@ -716,6 +712,8 @@ def submit_dft_job(
           get_terminations_ranking and list_adsorption_sites first to identify
           a suitable termination index and adsorption site index.
 
+    For bilk_relaxation jobs, if magnetic elements are present in a bulk structure, 
+    several bulk jobs will be submitted to explore the most likely magnetic configurations.
     OH_adsorption submits three jobs with slightly varied initial adsorbate
     positions to increase the likelihood of finding the global minimum.
     Only the global minimum will be reported and used.
@@ -1202,8 +1200,10 @@ def OER_data_analasis_v2(
     df = se.get_stable_df()
 
     # ------------------------------------------------------------------
-    # We should consider adding this: <<< ---- NOTE
-    # df = df[df['Dimensionality Cheon'] == '3D']
+    # Prost processing removal:
+    df = df[df['Dimensionality Cheon'] == '3D'] # 3D cells only!
+    df = df.loc[df["Composition"].apply(count_magnetic_sites_from_formula) 
+                <= 10] # NOTE HARD LIMIT ON MAGNETIC ATOMS IN UNTCELL
     # ------------------------------------------------------------------
     
     df = df_query(df, filters, sort)
