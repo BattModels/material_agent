@@ -248,6 +248,8 @@ dft_agent_prompt ="""
                 15. Do not report absolute path.
                 16. when calculating formation energies, convergence test on DFT parameters should be done on one representitive system with both the adsorbate and the surface.
                 17. If a job is having issue, i.e. didn't converge or not accurate enough, use the right tool to get suggestions on how to modify the input file to fix the issue.
+                18. For production run, use optimal parameters and converged structures.
+                19. Never do math yourself. Call the math tool instead
             """
 
 dft_reader_agent_prompt = """
@@ -348,6 +350,7 @@ hpc_agent_prompt = f"""
                 4. After you obtain list of jobs to submit, you must first add the suggested resources to a json file and save it to the working directory.
                 5. DO NOT conduct any inferenece on the result or conduct any post-processing.
                 6. Do not give further suggestions on what to do next.
+                7. Never do math yourself. Call the math tool instead
             """
 
 meam_doc = """

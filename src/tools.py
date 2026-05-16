@@ -12,9 +12,9 @@ from src.utils import *
 from src.myCANVAS import CANVAS
 from ase import Atoms, Atom
 from langchain.tools import tool
-from langgraph.prebuilt import create_react_agent
 from langchain_anthropic import ChatAnthropic
 # from langchain_openai import AzureChatOpenAI
+import math
 import os 
 from typing import Annotated, Dict, Literal, Optional, Sequence, Tuple, Any, Union, Iterable
 import numpy as np
@@ -84,21 +84,31 @@ except ImportError:
 ##################################################################################################
 import asyncio  # If needed for defining async_func
 
+# async def _arXiv_search(arxiv_search_query, context):  # Your async operation
+#     config = var.OTHER_GLOBAL_VARIABLES
+#     ursaWorkspace = Path(os.path.join(var.my_WORKING_DIRECTORY, "ursa_workspace"))
+#     llm = ChatAnthropic(model="claude-haiku-4-5-20251001", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+#     agent = ArxivAgent(llm=llm, process_images=False, max_results=1, workspace=ursaWorkspace)
+#     result = await agent.ainvoke(
+#         arxiv_search_query=arxiv_search_query, 
+#         context=context
+#     )
+#     os.makedirs(ursaWorkspace/"arxiv_papers_used", exist_ok=True)
+#     # move all files under ursaWorkspace / "arxiv_papers" into ursaWorkspace/"arxiv_papers_used"
+#     for file in os.listdir(ursaWorkspace/"arxiv_papers"):
+#         os.rename(ursaWorkspace/"arxiv_papers"/file, ursaWorkspace/"arxiv_papers_used"/file)
+    
+#     return result["final_summary"]
+
+# FOR DEMO 
 async def _arXiv_search(arxiv_search_query, context):  # Your async operation
     config = var.OTHER_GLOBAL_VARIABLES
-    ursaWorkspace = Path(os.path.join(var.my_WORKING_DIRECTORY, "ursa_workspace"))
     llm = ChatAnthropic(model="claude-haiku-4-5-20251001", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-    agent = ArxivAgent(llm=llm, process_images=False, max_results=5, workspace=ursaWorkspace)
-    result = await agent.ainvoke(
-        arxiv_search_query=arxiv_search_query, 
-        context=context
+    result = await llm.ainvoke(
+        [("user", f"Please answer the question: {arxiv_search_query} with context: {context}.")]
     )
-    os.makedirs(ursaWorkspace/"arxiv_papers_used", exist_ok=True)
-    # move all files under ursaWorkspace / "arxiv_papers" into ursaWorkspace/"arxiv_papers_used"
-    for file in os.listdir(ursaWorkspace/"arxiv_papers"):
-        os.rename(ursaWorkspace/"arxiv_papers"/file, ursaWorkspace/"arxiv_papers_used"/file)
     
-    return result["final_summary"]
+    return result.content
 
 
 @tool
@@ -111,10 +121,27 @@ def arXiv_search(
     Only 5 papers will be considered in the search. If you want to consider more papers, you will need 
     to refine your search arguments.
     """
+    # Only 5 papers will be considered in the search. If you want to consider more papers, you will need to refine
+    # your search arguments.
 
     result = asyncio.run(_arXiv_search(arxiv_search_query, context))
 
-    return result
+    id = CANVAS.register_tool_output(
+        tool_name="arXiv_search",
+        args={
+            "arxiv_search_query": arxiv_search_query,
+            "context": context,
+        },
+        value=result,
+        description="Summary of arXiv search results for the query: {arxiv_search_query} with context: {context}",
+        parent_result_ids=[],
+        metadata={
+            "arxiv_search_query": arxiv_search_query,
+            "context": context,
+        }
+    )
+    
+    return f"{result}\nLiterature_result_ID={id}. Please extract the numerical values if you need to use numerical values from the result to make decisions or conclusions."
 
 @tool
 def check_time():
@@ -191,9 +218,39 @@ def wait_for_update(
             outText = f"Total time elapsed since project start {timeElapsed}, time waited: {hWaited}hours and {mWaited} minutes.\n Here are the updates while you are waiting: "
             for key, value in tmpUpdate.items():
                 outText += f"\nprocess_id {key} status is now {value}."
-            return outText
+            
+            id = CANVAS.register_tool_output(
+                tool_name="wait_for_update",
+                args={
+                    "patience": patience,
+                },
+                value=outText,
+                description=f"Updates on job statuses after waiting for updates with patience {patience} minutes.",
+                parent_result_ids=[],
+                metadata={
+                    "patience": patience,
+                }
+            )    
+            
+            return f"{outText}\nMessage_ID={id}. Please refer to this ID for the updates while waiting."
         elif time.time() - var.startTime > patience*60:
-            return f"Total time elapsed since project start {timeElapsed}, you have been waiting for {patience} minutes with no update in the EXPLOG. You may want to check the EXPLOG and see if there is anything you can do to move the study forward."
+            
+            id = CANVAS.register_tool_output(
+                tool_name="wait_for_update",
+                args={
+                    "patience": patience,
+                },
+                value=f"Timeout reached after waiting for {patience} minutes with no updates in job statuses.",
+                description=f"Message indicating timeout after waiting for updates with patience {patience} minutes.",
+                parent_result_ids=[],
+                metadata={
+                    "patience": patience,
+                }
+            )
+            
+            return f"Total time elapsed since project start {timeElapsed}, you have been waiting for {patience} minutes with no update in the EXPLOG. You may want to check the EXPLOG and see if there is anything you can do to move the study forward.\nMessage_ID={id}. Please refer to this ID for the timeout message."
+        
+        
                        
 @tool
 def inspect_explog():
@@ -294,7 +351,16 @@ def inspect_explog():
         #                             # unrecoverable
         #                             outString += f'                candidate {cant_id} has a promising O adsorption at termination {termi_idx} and site {site_idx} with delta_G_O {tmp_delta_GO}, but OH adsorption job status is unrecoverable\n'
     
-    return outString
+    id = CANVAS.register_tool_output(
+        tool_name="inspect_explog",
+        args={},
+        value=outString,
+        description=f"High level summary of the candidates study progress based on the latest EXPLOG update.",
+        parent_result_ids=[],
+        metadata={}
+    )
+    
+    return f"{outString}\nMessage_ID: {id}. Please refer to this ID for the summary of the candidates study progress."
             
 
 @tool
@@ -366,6 +432,7 @@ def old_inspect_explog(only_get_updates: Annotated[bool, "Whether to only get up
 @tool
 def query_explog(
     table_name: Annotated[str, "Table to query: 'candidates' (one row per candidate, with best available OER metrics) or 'processes' (one row per DFT job, with per-site adsorption energies and overpotentials)."],
+    reason: Annotated[str, "reason behind the query. Why are you using such filters and sort? What are you looking for?"],
     filters: List[Filter] = [],
     sort: List[SortSpec] = [],
 ) -> str:
@@ -415,15 +482,34 @@ def query_explog(
         return "table_name must be either 'candidates' or 'processes'"
 
     filteredDF = df_query(df, filters, sort)
+    
+    result = filteredDF.to_string(index=True)
+    
+    id = CANVAS.register_tool_output(
+        tool_name="query_explog",
+        args={
+            "table_name": table_name,
+            "reason": reason,
+        },
+        value=result,
+        description=f"Result of querying the EXPLOG {table_name} table with reason: {reason}, filters: {filters}, and sort: {sort}.",
+        reasons={'reason': reason},
+        parent_result_ids=[],
+        metadata={
+            "table_name": table_name,
+            "reason": reason,
+        }
+    )
 
-    print(filteredDF)
-    return filteredDF.to_string(index=True)
+    print(result)
+    return f"{result}\nQuery_result_ID={id}. Please refer to this ID if you want to use the query result for further analysis or decision making."
     
     
 
 @tool
 def read_explog(
     candidate_id: Annotated[str, "MaterialId of the candidate to read the experiment log for."],
+    reasons: Annotated[str, "Why are you interested in this candidate? What do you want to find out from the experiment log?"],
     ) -> str:
     """
     Get a summary of the experiment log for a specific candidate, including all related job information and details
@@ -478,28 +564,57 @@ def read_explog(
     if len(rows) > 0:                    
         final_site_info = pd.concat(rows, ignore_index=True)
         answer += f"\nThe adsorption site information is:\n{final_site_info.to_string}\n"
+        
+    id = CANVAS.register_tool_output(
+        tool_name="read_explog",
+        args={
+            "candidate_id": candidate_id,
+        },
+        value=answer,
+        description=f"Summary of the experiment log for candidate {candidate_id} with reason: {reasons}.",
+        reasons={'reasons': reasons},
+        parent_result_ids=[],
+        metadata={
+            "candidate_id": candidate_id,
+            "reasons": reasons,
+        }
+    )
 
-    return answer
+    return f"{answer}\nQuery_result_ID={id}. Please refer to this ID if you want to use this query result for further analysis or decision making."
 
-@tool
-def get_top_k_candidates(
-    k: Annotated[int, "Number of top candidates to retrieve based on ideal overpotential."],
-    ) -> str:
-    """Get the top k candidates with the lowest ideal overpotential from the experiment log."""
-    _ = EXPLOG.update_log() # get the latest updates from the job handler and update the relational frame accordingly
-    # save EXPLOG into a pickle file under WORKING_DIRECTORY for record and future reference
-    # with open(os.path.join(var.my_WORKING_DIRECTORY, "EXPLOG.pkl"), "wb") as f:
-    #     pickle.dump(EXPLOG, f)
-    candidates_df = EXPLOG.relational_frame.candidates.df.copy()
-    candidates_df = candidates_df[candidates_df['idealOverPotential'].notna()]
-    if len(candidates_df) == 0:
-        return "No candidates has ideal overpotential information."
-    candidates_df["idealOverPotential"] = candidates_df["idealOverPotential"].apply(lambda x: float(x))
-    N_finished = len(candidates_df)
-    top_k_candidates = candidates_df.nsmallest(k, 'idealOverPotential')
-    top_k_candidates = top_k_candidates.copy().drop(columns=["study_obj"])
-    answer = f"Top {k} out of {N_finished} candidates with the lowest ideal overpotential:\n{top_k_candidates.to_string(index=False)}\n\nYou may run more calculations on those candidates at different terminations and sites, or you can also run more calculations on other candidates to expand the pool and find more promising candidates."
-    return answer
+# @tool
+# def get_top_k_candidates(
+#     k: Annotated[int, "Number of top candidates to retrieve based on ideal overpotential."],
+#     ) -> str:
+#     """Get the top k candidates with the lowest ideal overpotential from the experiment log."""
+#     _ = EXPLOG.update_log() # get the latest updates from the job handler and update the relational frame accordingly
+#     # save EXPLOG into a pickle file under WORKING_DIRECTORY for record and future reference
+#     # with open(os.path.join(var.my_WORKING_DIRECTORY, "EXPLOG.pkl"), "wb") as f:
+#     #     pickle.dump(EXPLOG, f)
+#     candidates_df = EXPLOG.relational_frame.candidates.df.copy()
+#     candidates_df = candidates_df[candidates_df['idealOverPotential'].notna()]
+#     if len(candidates_df) == 0:
+#         return "No candidates has ideal overpotential information."
+#     candidates_df["idealOverPotential"] = candidates_df["idealOverPotential"].apply(lambda x: float(x))
+#     N_finished = len(candidates_df)
+#     top_k_candidates = candidates_df.nsmallest(k, 'idealOverPotential')
+#     top_k_candidates = top_k_candidates.copy().drop(columns=["study_obj"])
+#     answer = f"Top {k} out of {N_finished} candidates with the lowest ideal overpotential:\n{top_k_candidates.to_string(index=False)}\n\nYou may run more calculations on those candidates at different terminations and sites, or you can also run more calculations on other candidates to expand the pool and find more promising candidates."
+    
+#     id = CANVAS.register_tool_output(
+#         tool_name="get_top_k_candidates",
+#         args={
+#             "k": k,
+#         },
+#         value=answer,
+#         description=f"Top {k} candidates with the lowest ideal overpotential from the EXPLOG.",
+#         parent_result_ids=[],
+#         metadata={
+#             "k": k,
+#         }
+#     )
+    
+#     return f"{answer}/nQuery_result_ID={id}. Please refer to this ID if you want to use the query result for further analysis or decision making."
 
 # @tool
 # def get_explog_updates()
@@ -508,7 +623,9 @@ def get_top_k_candidates(
 def enter_candidate_in_log(
     reason_or_hypothesis: Annotated[str, "Detailed Reason and hypothesis for selecting this candidate. To be used later for analysis and summarization."],
     df_name: Annotated[str, "Key of the dataframe in CANVAS containing the candidate entry."],
+    df_name_ref: Annotated[str, "Reference ID for the dataframe name, used for traceability."],
     MaterialId: Annotated[str, "MaterialId of the candidate in the dataframe."],
+    MaterialId_ref: Annotated[str, "Reference ID of the result where you find the MaterialId of interests."],
     note: Annotated[str | None, "Any notes you want to add."] = None,
     ) -> str:
     """
@@ -518,6 +635,11 @@ def enter_candidate_in_log(
     Reads the candidate's structure from the dataframe stored in CANVAS under
     `df_name`, initialises an OER catalyst study object.
     """
+    for ref in [df_name_ref, MaterialId_ref]:
+        if ref:
+            art = CANVAS.get_artifact(ref)
+            if art is None:
+                return f"Error: Reference ID {ref} not found in CANVAS."
 
     afdb = CANVAS.canvas.get('afdb', None)
     if afdb is None:
@@ -548,16 +670,41 @@ def enter_candidate_in_log(
     message = f"Material {MaterialId} added to the experiment log with \
     reason: {reason_or_hypothesis} and note: {note}. Candidate can now \
     be studied further applying DFT"
+    
+    id = CANVAS.register_tool_output(
+        tool_name="enter_candidate_in_log",
+        args={
+            "reason_or_hypothesis": reason_or_hypothesis,
+            "df_name": df_name,
+            "MaterialId": MaterialId,
+            "note": note,
+        },
+        value=message,
+        description=f"Entry of candidate {MaterialId} into the experiment log with reason: {reason_or_hypothesis} and note: {note}.",
+        reasons={'reason_or_hypothesis': reason_or_hypothesis},
+        parent_result_ids=[df_name_ref, MaterialId_ref],
+        metadata={
+            "reason_or_hypothesis": reason_or_hypothesis,
+            "df_name": df_name,
+            "df_name_ref": df_name_ref,
+            "MaterialId": MaterialId,
+            "MaterialId_ref": MaterialId_ref,
+            "note": note,
+        }
+    )
 
-    return message
+    return f"{message}\nMessage_ID={id}. Refer to this ID if you need to refer back to this message later"
 
 @tool
 def submit_dft_job(
     MaterialId: Annotated[str, "MaterialId of the candidate for which to submit a DFT job."],
+    MaterialId_ref: Annotated[str, "Reference ID of the result where you find the MaterialId of interests."],
     calculation_type: Annotated[Literal['bulk_relaxation', 'surface_relaxation', 'OH_adsorption', 'O_adsorption'], "Type of DFT calculation to submit. O_adsorption yields G(O); OH_adsorption yields G(OH) — both are required to compute overpotentials. OH_adsorption submits three jobs with slightly different initial adsorbate positions to increase the likelihood of finding the global minimum."],
     note: Annotated[str, "Short note for the calculation; state the reason for submitting the job, including why the selected termination and adsorption site are relevant."],
     termination_index: Annotated[int | None, "Termination index. Only required for surface and adsorption calculations."] = None,
+    termination_index_ref: Annotated[str, "Reference ID of the result or output message where you determind to submit a dft job for this termination index."] = "",
     ad_site_index: Annotated[int | None, "Index of the site onto which O or OH is adsorbed. Only required for adsorption calculations."] = None,
+    ad_site_index_ref: Annotated[str, "Reference ID of the result or output message where you determind to submit a dft job for this adsorption site index."] = "",
     partition: Annotated[Literal['xeon56', 'xeon40el8', 'xeon24el8', 'auto'], "HPC partition to submit the job to. Use 'auto' to let the system select the partition automatically."] = "auto",
 ) -> str:
     """
@@ -576,6 +723,12 @@ def submit_dft_job(
 
     Returns a confirmation message including the submitted process ID(s).
     """
+    
+    for ref in [MaterialId_ref, termination_index_ref, ad_site_index_ref]:
+        if ref:
+            art = CANVAS.get_artifact(ref)
+            if art is None:
+                return f"Error: Reference ID {ref} not found in CANVAS."
 
     # Does candidate exist in EXPLOG:
     try:
@@ -647,12 +800,39 @@ def submit_dft_job(
     # with open(os.path.join(var.my_WORKING_DIRECTORY, "EXPLOG.pkl"), "wb") as f:
     #     pickle.dump(EXPLOG, f)
     
-    return f"Submitted {calculation_type} for candidate {MaterialId}. Process ID(s): {id_list}."
+    outStr = f"Submitted {calculation_type} for candidate {MaterialId}. Process ID(s): {id_list}."
+    
+    id = CANVAS.register_tool_output(
+        tool_name="submit_dft_job",
+        args={
+            "MaterialId": MaterialId,
+            "calculation_type": calculation_type,
+            "termination_index": termination_index,
+            "ad_site_index": ad_site_index,
+            "note": note,
+        },
+        value=id_list,
+        listed_value=True,
+        description=f"Submission of {calculation_type} for candidate {MaterialId} with termination index {termination_index} and adsorption site index {ad_site_index}. Note: {note}",
+        reasons={'note': note},
+        parent_result_ids=[id for id in [MaterialId_ref, termination_index_ref, ad_site_index_ref] if id],
+        metadata={
+            "MaterialId": MaterialId,
+            "calculation_type": calculation_type,
+            "termination_index": termination_index,
+            "ad_site_index": ad_site_index,
+            "note": note,
+        }
+    )
+    
+    return f"{outStr}\nReference ID for the Process ID(s) is {id}. Please refer to this reference ID if the corresponding process id is needed."
 
 
 @tool
 def get_terminations_ranking(
     candidate_id: Annotated[str, "MaterialId of the candidate for which to get termination rankings."],
+    candidate_id_ref: Annotated[str, "Reference ID of the result where you find the MaterialId of interests."],
+    reasons: Annotated[str, "Why are you interested to know the termination ranking for this candidate? What do you want to find out from the termination ranking?"],
     #max_miller: Annotated[int, "Maximum Miller index to consider for surface generation."] = 1,
 ) -> str:
     """
@@ -672,6 +852,11 @@ def get_terminations_ranking(
     'list_adsorption_sites' to inspect the available adsorption sites before
     committing to a termination.
     """
+    for ref in [candidate_id_ref]:
+        if ref:
+            art = CANVAS.get_artifact(ref)
+            if art is None:
+                return f"Error: Reference ID {ref} not found in CANVAS."
 
     # Old part of docksrting:
         # This function must be run before any surface relaxation or adsorption
@@ -759,8 +944,24 @@ def get_terminations_ranking(
         out_string += "\n\nNo valid surface terminations could be determined for this candidate. "\
                       "No further surface or adsorption calculations can be performed for this " \
                       "candidate, and the candidate is marked as unrecoverable."
+                      
+    id = CANVAS.register_tool_output(
+        tool_name="get_terminations_ranking",
+        args={
+            "candidate_id": candidate_id,
+            "reasons": reasons,
+        },
+        value=out_string,
+        description=f"Termination ranking for candidate {candidate_id} with reason: {reasons}.",
+        reasons={'reasons': reasons},
+        parent_result_ids=[candidate_id_ref],
+        metadata={
+            "candidate_id": candidate_id,
+            "reasons": reasons,
+        }
+    )
 
-    return out_string
+    return f"{out_string}\nMessage_ID: {id}. Please refer to this ID if you want to refer back to this message later or use the termination ranking for further analysis or decision making."
 
 
 def _list_adsorption_sites(
@@ -820,7 +1021,10 @@ def _list_adsorption_sites(
 @tool
 def list_adsorption_sites(
     candidate_id: Annotated[str, "MaterialId of the candidate to list adsorption sites for."],
+    candidate_id_ref: Annotated[str, "Reference ID of the result where you find the MaterialId of interests."],
     termination_index: Annotated[int, "Termination index of the surface to list adsorption sites for."],
+    termination_index_ref: Annotated[str, "Reference ID of the result where you determine the termination index for which to list adsorption sites."],
+    reasons: Annotated[str, "Why are you interested to know the adsorption sites for this candidate at this termination? What do you want to find out from the adsorption sites information?"],
     # only_reduced_coord_O_sites = True, DISABLED FOR NOW...
 ):
     """
@@ -837,6 +1041,12 @@ def list_adsorption_sites(
     decreased coordination of 1.). Since this function can be called repeatedly, there is no need to write the result
     to the canvas.
     """
+    for ref in [candidate_id_ref, termination_index_ref]:
+        if ref:
+            art = CANVAS.get_artifact(ref)
+            if art is None:
+                return f"Error: Reference ID {ref} not found in CANVAS."
+    
     only_reduced_coord_O_sites = True # <<<--- FIXED FOR NOW...
     out_string = ''
     df = None
@@ -887,8 +1097,24 @@ def list_adsorption_sites(
     if True:
         out_string += '\n\n Original reason or hypothesis for selecting this candidate:\n'
         out_string += EXPLOG.relational_frame.candidates[candidate_id].reason_or_hypothesis
+        
+    id = CANVAS.register_tool_output(
+        tool_name="list_adsorption_sites",
+        args={
+            "candidate_id": candidate_id,
+            "termination_index": termination_index,
+        },
+        value=out_string,
+        description=f"List of adsorption sites for candidate {candidate_id} on termination index {termination_index}.",
+        reasons={'reasons':reasons},
+        parent_result_ids=[candidate_id_ref, termination_index_ref],
+        metadata={
+            "candidate_id": candidate_id,
+            "termination_index": termination_index,
+        }
+    )
 
-    return out_string
+    return f"{out_string}\nMessage_ID: {id}. Please refer to this ID if you want to refer back to this message later or use the adsorption sites information for further analysis or decision making."
 
 
 @tool
@@ -899,10 +1125,13 @@ def OER_data_analasis_v2(
     solid_filter: Annotated[bool, "Whether to apply solid filter: which excludes compounds from the Pourbaix-stability calculations which are not located on the solid-phase convex hull."],
     gga_only: Annotated[bool, "Whether to use only GGA calculations (True), or include r2SCAN data via the MP-mixing scheme (False). GGA data will be applied when no r2SCAN data is available regardless."],
     save_name: Annotated[str, "Key under which the resulting dataframe is saved in CANVAS. Use a descriptive name to distinguish between runs with different criteria."],
+    reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'pHs', 'Us', 'decomposition_threshold', 'solid_filter', 'gga_only', 'save_name', 'filters', 'sort'"],
     overwrite: Annotated[bool, "If True, overwrite an existing dataframe stored under the same key in CANVAS. If False (default), the tool will abort if a dataframe with that key already exists."] = False,
     # dir_of_data: Annotated[Optional[str], "Path to data directory. If None, use default data directory."] = None,
     # elements_to_exclude: Annotated[List[str], "List of element symbols to exclude from the analysis."] = [], 
     # elements_whic_must_be_included: Annotated[List[str], "List of element symbols that must be included in the analysis."] = [],
+    ref_pHs: Annotated[Union[List[str], str], "List or a single value of reference_ID where you determined the value of pH(s) from"] = "",
+    ref_Us: Annotated[Union[List[str], str], "List or a single value of reference_ID where you determined the value of potential(s) from"] = "",
     filters: List[Filter] = [],
     sort: List[SortSpec] = [],
     ) -> str:
@@ -925,6 +1154,17 @@ def OER_data_analasis_v2(
     The optional `filters` and `sort` parameters can be used to further refine
     or order the results based on the output dataframe columns.
     """
+    
+    # verify refs
+    
+    for refs in [ref_pHs, ref_Us]:
+        refs = refs if isinstance(refs, list) else [refs]
+        for ref in refs:
+            if ref:
+                art = CANVAS.get_artifact(ref)
+                if art is None:
+                    return f"Error: Reference ID {ref} not found in CANVAS."
+            
 
     dh = Data_Handler(
     # Whether to apply solid filter:
@@ -980,45 +1220,93 @@ def OER_data_analasis_v2(
     canvas_result = CANVAS.write(save_name, df, overwrite=overwrite)
     if "already exists" in canvas_result:
         return f"Aborted: {canvas_result} Use overwrite=True to overwrite."
-
-    # If dataframe is too long:
+    
+    tmp_ref_pHs = ref_pHs if isinstance(ref_pHs, list) else [ref_pHs]
+    tmp_ref_Us = ref_Us if isinstance(ref_Us, list) else [ref_Us]
+    
+    parent_result_ids = [ref for ref in [*tmp_ref_pHs, *tmp_ref_Us] if ref] # only include non-empty refs
+    print("from tool OER_data_analasis_v2, parent_result_ids determined to be:")
+    print(parent_result_ids)
+    
+    df_id = CANVAS.register_tool_output(
+        tool_name="OER_data_analasis_v2",
+        args={
+            "pHs": pHs,
+            "Us": Us,
+            "decomposition_threshold": decomposition_threshold,
+            "solid_filter": solid_filter,
+            "gga_only": gga_only,
+            "save_name": save_name,
+            "overwrite": overwrite,
+        },
+        value=save_name,
+        description=f"key name of the saved dataframe",
+        reasons=reasons,
+        parent_result_ids=parent_result_ids,
+        metadata={},
+    )
+    
+    outStr = ""
     if len(df) > 20:
-        return f"Stable entries data analysis completed, yielding {len(df)} entries. The dataframe has {len(df)} entries, too long to display here. Please check the dataframe in canvas with key '{save_name}' using browse_df tool."
+        outStr += f"Stable entries data analysis completed, yielding {len(df)} entries. The dataframe has {len(df)} entries, too long to display here. Please check the dataframe in canvas with key '{save_name}' using browse_df tool. dataframe_ID={df_id}. Only use this ID as the reference ID when asked, still load the dataframe from canvas using the key name '{save_name}'."
     else:
-        return f"Stable entries data analysis completed, yielding {len(df)} entries. Below shows the dataframe with row index: \n{df.to_string(index=True)}. The same dataframe is also saved in canvas with key '{save_name}' and can be accessed using browse_df tool."
+        outStr += f"Stable entries data analysis completed, yielding {len(df)} entries. Below shows the dataframe with row index: \n{df.to_string(index=True)}. The same dataframe is also saved in canvas with key '{save_name}' and can be accessed using browse_df tool. dataframe_ID={df_id}. Only use this ID as the reference ID when asked, still load the dataframe from canvas using the key name '{save_name}'."
+    
+    result_id = CANVAS.register_tool_output(
+        tool_name="OER_data_analasis_v2",
+        args={
+            "pHs": pHs,
+            "Us": Us,
+            "decomposition_threshold": decomposition_threshold,
+            "solid_filter": solid_filter,
+            "gga_only": gga_only,
+            "save_name": save_name,
+            "overwrite": overwrite,
+        },
+        value=outStr,
+        description=f"Out string of the tool",
+        reasons=reasons,
+        parent_result_ids=parent_result_ids,
+        metadata={},
+    )
+    
+    outStr += "\nIf you want to reference any other information of the tool result, please refer to the result ID {result_id} if you need to use them to make decisions or conclusions."
+    
+    return outStr
 
-
-@tool
-def extract_df(
-    df_name: Annotated[str, "Name of the dataframe in canvas to extract."],
-    filters: List[Filter] = [],
-    sort: List[SortSpec] = []
-    ):
-    """read the dataframe with a given filter and sort. This is useful to exam the filtered dataframe without altering its data"""
-    df = CANVAS.read(df_name)
-    df = df_query(df, filters, sort)
-    if len(df) > 50:
-        return f"Too many entries pass the filter. Please apply more filters to narrow down the results or check with material_IDs to find the specific entries you want to look at. showing the first 50 entries:\n {df.head(50).to_string(index=True)}"
-    return df.to_string(index=True)
+# @tool
+# def extract_df(
+#     df_name: Annotated[str, "Name of the dataframe in canvas to extract."],
+#     filters: List[Filter] = [],
+#     sort: List[SortSpec] = []
+#     ):
+#     """read the dataframe with a given filter and sort. This is useful to exam the filtered dataframe without altering its data"""
+#     df = CANVAS.read(df_name)
+#     df = df_query(df, filters, sort)
+#     if len(df) > 50:
+#         return f"Too many entries pass the filter. Please apply more filters to narrow down the results or check with material_IDs to find the specific entries you want to look at. showing the first 50 entries:\n {df.head(50).to_string(index=True)}"
+#     return df.to_string(index=True)
 
     
-@tool
-def read_df(
-    df_name: Annotated[str, "Name of the dataframe in canvas to read."],
-    startIdx: Annotated[int, "Starting index of the dataframe to read."] = 0,
-    endIdx: Annotated[int, "Ending index of the dataframe to read."] = 10,
-    ) -> str:
-    """Read a portion of a dataframe (from row i to row j) from canvas and return it as a string with row index."""
-    if endIdx - startIdx > 50:
-        return "Read no more than 50 rows at a time."
-    df = CANVAS.read(df_name)
-    print(df)
-    return df.iloc[startIdx:endIdx].to_string(index=True)
+# @tool
+# def read_df(
+#     df_name: Annotated[str, "Name of the dataframe in canvas to read."],
+#     startIdx: Annotated[int, "Starting index of the dataframe to read."] = 0,
+#     endIdx: Annotated[int, "Ending index of the dataframe to read."] = 10,
+#     ) -> str:
+#     """Read a portion of a dataframe (from row i to row j) from canvas and return it as a string with row index."""
+#     if endIdx - startIdx > 50:
+#         return "Read no more than 50 rows at a time."
+#     df = CANVAS.read(df_name)
+#     print(df)
+#     return df.iloc[startIdx:endIdx].to_string(index=True)
 
 
 @tool
 def browse_df(
     df_name: Annotated[str, "Name of the dataframe in canvas to extract."],
+    df_name_ref: Annotated[str, "Reference ID for the dataframe name"],
+    reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'df_name', 'startIdx', 'endIdx', 'filters', 'sort'"],
     startIdx: Annotated[int, "Row index to start reading from (inclusive). Use 0 to start from the beginning."] = 0,
     endIdx: Annotated[int, "Row index to stop reading at (exclusive). Maximum window is 50 rows (endIdx - startIdx <= 50)."] = 50,
     filters: List[Filter] = [],
@@ -1029,8 +1317,23 @@ def browse_df(
     sorting, and pagination.
 
     Filters and sort are applied first to the full dataframe, then the specified
-    row window [startIdx, endIdx] is returned.
+    row window [startIdx, endIdx) is returned. This allows systematic exploration
+    of large dataframes — for example, narrowing down candidates by column
+    values without modifying the stored dataframe.
+
+    Use the `filters` parameter to select rows by column value (e.g. filter by
+    element composition, HHI index, or bandgap), and `sort` to order results before
+    reading. Pagination via startIdx/endIdx can then be used to step through results
+    that exceed the 50-row display limit.
+
+    Returns the selected rows as a string with row index. The row index refers to
+    the position in the filtered/sorted dataframe, not the original stored dataframe.
     """
+    for ref in [df_name_ref]:
+        if ref:
+            art = CANVAS.get_artifact(ref)
+            if art is None:
+                return f"Error: Reference ID {ref} not found in CANVAS."
 
     # Ensure that the provided start/end indices to not exceed 50 (as speficied in the docstring/annotations):
     if endIdx - startIdx > 50:
@@ -1048,9 +1351,26 @@ def browse_df(
     footer = f"\nShowing rows {startIdx}–{min(endIdx, total)-1} of {total} total."
     if total > endIdx:
         footer += f" Call again with startIdx={endIdx} to see more rows."
+        
+    outStr = result + footer
+    
+    id = CANVAS.register_tool_output(
+        tool_name="browse_df",
+        args={
+            "df_name": df_name,
+            "startIdx": startIdx,
+            "endIdx": endIdx,
+            "filters": filters,
+            "sort": sort,
+        },
+        value=outStr,
+        description=f"Output string of the requested portion of the dataframe after applying filters and sort, with a footer indicating the range of rows shown and total rows.",
+        reasons=reasons,
+        parent_result_ids=[df_name_ref],
+        metadata={},
+    )
 
-    return result + footer
-
+    return f"{outStr}\nMessage_ID: {id}. Please refer to this ID if you want to refer back to this message later or use the displayed information for further analysis or decision making."
 
 # def get_facets(
 #     df_name: Annotated[str, "Name of the dataframe in canvas to read."],
@@ -1319,16 +1639,147 @@ def browse_df(
 ##################################################################################################
 ##                                        Common tools                                          ##
 ##################################################################################################
+
+_ALLOWED_FUNCS = {
+    "abs": abs,
+    "round": round,
+    "min": min,
+    "max": max,
+    "sum": sum,
+    "pow": pow,
+    "sqrt": math.sqrt,
+    "exp": math.exp,
+    "log": math.log,
+    "log10": math.log10,
+    "sin": math.sin,
+    "cos": math.cos,
+    "tan": math.tan,
+    "asin": math.asin,
+    "acos": math.acos,
+    "atan": math.atan,
+    "mean": lambda *x: sum(x) / len(x),
+}
+
+
+_ALLOWED_NODES = (
+    ast.Expression,
+    ast.BinOp,
+    ast.UnaryOp,
+    ast.Call,
+    ast.Name,
+    ast.Load,
+    ast.Constant,
+    ast.Add,
+    ast.Sub,
+    ast.Mult,
+    ast.Div,
+    ast.Pow,
+    ast.Mod,
+    ast.FloorDiv,
+    ast.UAdd,
+    ast.USub,
+    ast.Tuple,
+    ast.List,
+)
+
+
+def _safe_eval(expr: str, variables: dict[str, float]) -> float:
+    tree = ast.parse(expr, mode="eval")
+
+    for node in ast.walk(tree):
+        if not isinstance(node, _ALLOWED_NODES):
+            raise ValueError(f"Unsupported syntax: {type(node).__name__}")
+
+        if isinstance(node, ast.Call):
+            if not isinstance(node.func, ast.Name) or node.func.id not in _ALLOWED_FUNCS:
+                raise ValueError(f"Function not allowed: {ast.dump(node.func)}")
+
+        if isinstance(node, ast.Name):
+            if node.id not in variables and node.id not in _ALLOWED_FUNCS:
+                raise ValueError(f"Unknown variable: {node.id}")
+
+    return float(eval(compile(tree, "<expr>", "eval"), {"__builtins__": {}}, {**_ALLOWED_FUNCS, **variables}))
+
+
+@tool
+def math_expression_tool(
+    values: Annotated[
+        List[Tuple[str, float]],
+        "List of (ref_result_id, value) pairs. They will be mapped in order to x0, x1, x2, ... When you use tool to obtain a value, you will be given the ref_result_id."
+    ],
+    expression: Annotated[
+        str,
+        "Math expression using x0, x1, x2, ... Example: '(x0 - x1) / x2' or 'sqrt(x0**2 + x1**2)'"
+    ],
+    reasons: Annotated[str, "intent behind using this math expression and the choice of values. How did you obtained the values. The keys should be: 'values', 'expression'."],
+) -> str:
+    """
+    Evaluate a math expression on arbitrary input floats.
+    Inputs are mapped by order to x0, x1, x2, ...
+    """
+    if not values:
+        return "No values were provided."
+    
+    # verify each value using the corresponding ref_result_id
+    for ref_id, value in values:
+        ok, msg = CANVAS.verify_artifact(value, ref_id)
+        if not ok:
+            return msg
+
+    variables = {f"x{i}": float(value) for i, (_, value) in enumerate(values)}
+    mapping = {f"x{i}": ref_id for i, (ref_id, _) in enumerate(values)}
+
+    try:
+        result = _safe_eval(expression, variables)
+        id = CANVAS.register_tool_output(
+            tool_name="math_expression_tool",
+            args={
+                "values": values,
+                "expression": expression,
+            },
+            value=result,
+            description=f"Result of evaluating expression '{expression}' with mapping {mapping}",
+            reasons=reasons,
+            parent_result_ids=[ref_id for ref_id, _ in values],
+            metadata={
+                "mapping": mapping,
+            },
+        )
+        return f"Result: {result}. Result_ID={id}."
+    except Exception as e:
+        return f"Failed to evaluate expression: {e}"
+
 @tool
 def inspect_my_canvas():
     """Inspect the working canvas to get available keys"""
     # get all keys in myCANVAS and return them as a list [key1, key2, ...]
+    # print(CANVAS)
+    _ = CANVAS.register_tool_output(
+        tool_name="inspect_my_canvas",
+        args={},
+        value="",
+        description=f"Inspecting the working canvas to get available keys.",
+        parent_result_ids=[],
+        metadata={},
+    )
+    
     return CANVAS.inspect()
 
 @tool
 def read_my_canvas(key: Annotated[str, "key"]):
     """Read a value from the working canvas"""
     # read a value from myCANVAS given a key
+    _ = CANVAS.register_tool_output(
+        tool_name="read_my_canvas",
+        args={
+            "key": key,
+        },
+        value="",
+        description=f"Reading value from canvas with key '{key}'",
+        parent_result_ids=[],
+        metadata={},
+    )
+    
     return CANVAS.read(key)
 
 @tool
@@ -1337,6 +1788,20 @@ def write_my_canvas(key: Annotated[str, "key"],
                     overwrite: Annotated[bool, "True to overwrite if key already exist. only set to True if you are certain you want to overwrite the existing value"] = False):
     """Write a value to the working canvas. If the key already exists, it will not overwrite unless specified."""
     # write a value to myCANVAS given a key and a value
+    
+    _ = CANVAS.register_tool_output(
+        tool_name="write_my_canvas",
+        args={
+            "key": key,
+            "value": value,
+            "overwrite": overwrite,
+        },
+        value=value,
+        description=f"Writing value to canvas with key '{key}'",
+        parent_result_ids=[],
+        metadata={},
+    )
+    
     return CANVAS.write(key, value, overwrite)
 
 @tool
@@ -1354,15 +1819,277 @@ def write_report(
     return outStr
 
 # @tool
-# def inspect_my_explog():
-#     pass
-
+# def write_my_canvas(key: Annotated[str, "key"],
+#                     value: Annotated[Any, "value"],
+#                     entry_type: Annotated[Literal["note", "numerical_result"], "entry type. 'note' is for general note or text, not allowed to be use to generate final report. 'numerical_result' is verifiable with tools output and will be verified. Must provide source_result_id if entry_type is 'numerical_result'."],
+#                     overwrite: Annotated[bool, "True to overwrite if key already exist. only set to True if you are certain you want to overwrite the existing value"] = False,
+#                     source_result_id: Annotated[Optional[str], "the result_id of the tool output that this numerical canvas entry is based on."] = None
+#                     ):
+#     """Write a value to the working canvas. If the key already exists, it will not overwrite unless specified."""
+#     # write a value to myCANVAS given a key and a value
+#     if entry_type == "numerical_result":
+#         assert source_result_id is not None, "source_result_id must be provided for numerical_result entry type."
+#     return CANVAS.write(
+#         key=key,
+#         value=value,
+#         entry_type=entry_type,
+#         overwrite=overwrite,
+#         source_result_id=source_result_id
+#         )
+    
 # @tool
-# def read_my_explog():
-#     pass
+# def register_parameter_choice_by_LLM_agent(
+#     value: Annotated[float, "The value of the parameter chosen by the LLM agent. It should be a numeric value that can be used for calculations."],
+#     reason: Annotated[str, "A brief reason of why a certain parameter was chosen to be this value. You must clarify the unit of the value."]
+# ):
+#     """Register the choice of a specific parameter by the LLM agent, along with the reason for the choice with unit clarified. """
+
+    
+#     result_id = CANVAS.register_tool_output(
+#         tool_name="register_parameter_choice_by_LLM_agent",
+#         value=value,
+#         numerical_result=True,
+#         parent_result_ids=[],
+#         metadata={
+#             "reason": reason,
+#         },
+#     )
+    
+#     return f"value: {value} is registered with result_id: {result_id}."
 
 
+@tool
+def extract_numeric_from_tool_output(
+    source_tool_call_id: Annotated[str, "The ID of the text result from a prior tool call that you want to extract the numeric value from."],
+    value: Annotated[float, "The numeric value you want to verify and extract from the tool output."],
+    evidence_snippet: Annotated[str, "An substring from the tool output that contains the number. To avoid ambiguate when the same number may appear multiple times." ],
+    description: Annotated[str, "A brief description of what this number represents. You must clarify the unit of the number in this description, e.g. 'the adsorption energy in eV', 'the length of the cell in Angstrom', etc."],
+):
+    """
+    Verify that a numeric value was explicitly present in the raw output of a prior tool call,
+    then register it as a trusted numeric artifact and return a result_id.
 
+    Args:
+        source_tool_call_id: The tool_call_id of the previously executed text-returning tool.
+        value: The numeric value the agent wants to extract.
+        evidence_snippet: An substring from the tool output that contains the number. 
+                          To avoid ambiguate when the same number may appear multiple times.
+        description: A brief description of what this number represents. You must clarify the unit of the number in this description. 
+                     e.g. 'the adsorption energy in eV', 'the length of the cell in Angstrom', etc.
+
+    Returns:
+        str: A message indicating the result of the extraction and verification process.
+    """
+    abs_tol = 1e-8,
+    record = CANVAS.get_artifact(source_tool_call_id)
+    if record is None:
+        return (
+            f"EXTRACTION_FAILED: source_tool_call_id='{source_tool_call_id}' "
+            "was not found in the tool output registry. Please check the canvas and try again, or regenerate the source result with corresponding tool"
+        )
+        
+    raw_text = record.value
+    
+    # For demo only
+    if str(value) not in raw_text:
+        return (
+            "EXTRACTION_FAILED: evidence_snippet was not found in the recorded tool output. "
+            f"tool_call_id='{source_tool_call_id}'"
+        )
+    
+    result_id = CANVAS.register_tool_output(
+        tool_name="extract_numeric_from_tool_output",
+        args={
+            "source_tool_call_id": source_tool_call_id,
+            "value": value,
+            "evidence_snippet": evidence_snippet,
+            "description": description,
+        },
+        value=value,
+        description=description,
+        parent_result_ids=[source_tool_call_id],
+        metadata={}
+    )
+
+    return f"value: {value} is now registered with id {result_id} and can be used for further calculations."
+    
+
+    # Search space
+    snippet_spans = util_find_all_substring_spans(raw_text, evidence_snippet)
+    if not snippet_spans:
+        return (
+            "EXTRACTION_FAILED: evidence_snippet was not found in the recorded tool output. "
+            f"tool_call_id='{source_tool_call_id}'"
+        )
+
+    candidate_matches = []
+    for s0, s1 in snippet_spans:
+        candidate_matches.extend(
+            util_numeric_matches_in_region(
+                text=raw_text,
+                region_start=s0,
+                region_end=s1,
+                target_value=float(value),
+                abs_tol=abs_tol,
+            )
+        )
+
+
+    if not candidate_matches:
+        return (
+            "EXTRACTION_FAILED: The claimed numeric value was not found in the recorded tool output "
+            f"for tool_call_id='{source_tool_call_id}'."
+        )
+
+    # Disambiguation
+    # if occurrence_index is not None:
+    #     if occurrence_index < 0 or occurrence_index >= len(candidate_matches):
+    #         return (
+    #             "EXTRACTION_FAILED: occurrence_index is out of range. "
+    #             f"Found {len(candidate_matches)} matching occurrence(s), got occurrence_index={occurrence_index}."
+    #         )
+    #     chosen = candidate_matches[occurrence_index]
+    # else:
+    if len(candidate_matches) > 1:
+        preview = [
+            {
+                "token": m["token"],
+                "char_span": [m["start"], m["end"]],
+            }
+            for m in candidate_matches[:10]
+        ]
+        return (
+            "EXTRACTION_FAILED: Multiple matching numeric occurrences were found. "
+            "Please refine your evidence_snippet disambiguate."
+            f"Candidates: {preview}"
+        )
+    chosen = candidate_matches[0]
+
+    matched_text = raw_text[chosen["start"]:chosen["end"]]
+
+    result_id = CANVAS.register_tool_output(
+        tool_name="extract_numeric_from_tool_output",
+        args={
+            "source_tool_call_id": source_tool_call_id,
+            "value": value,
+            "evidence_snippet": evidence_snippet,
+            "description": description,
+        },
+        value=value,
+        description=description,
+        parent_result_ids=[source_tool_call_id],
+        metadata={
+            "matched_text": matched_text,
+            "matched_span": [chosen["start"], chosen["end"]],
+        },
+    )
+
+    return f"value: {value} is now registered with id {result_id} and can be used for further calculations."
+
+    
+@tool
+def extract_numeric_from_tool_output_NOTDEMO(
+    source_tool_call_id: Annotated[str, "The ID of the text result from a prior tool call that you want to extract the numeric value from."],
+    value: Annotated[float, "The numeric value you want to verify and extract from the tool output."],
+    evidence_snippet: Annotated[str, "An substring from the tool output that contains the number. To avoid ambiguate when the same number may appear multiple times." ],
+    description: Annotated[str, "A brief description of what this number represents. You must clarify the unit of the number in this description, e.g. 'the adsorption energy in eV', 'the length of the cell in Angstrom', etc."],
+):
+    """
+    Verify that a numeric value was explicitly present in the raw output of a prior tool call,
+    then register it as a trusted numeric artifact and return a result_id.
+
+    Args:
+        source_tool_call_id: The tool_call_id of the previously executed text-returning tool.
+        value: The numeric value the agent wants to extract.
+        evidence_snippet: An substring from the tool output that contains the number. 
+                          To avoid ambiguate when the same number may appear multiple times.
+        description: A brief description of what this number represents. You must clarify the unit of the number in this description. 
+                     e.g. 'the adsorption energy in eV', 'the length of the cell in Angstrom', etc.
+
+    Returns:
+        str: A message indicating the result of the extraction and verification process.
+    """
+    abs_tol = 1e-8,
+    record = CANVAS.get_artifact(source_tool_call_id)
+    if record is None:
+        return (
+            f"EXTRACTION_FAILED: source_tool_call_id='{source_tool_call_id}' "
+            "was not found in the tool output registry. Please check the canvas and try again, or regenerate the source result with corresponding tool"
+        )
+        
+    raw_text = record.value
+
+    # Search space
+    snippet_spans = util_find_all_substring_spans(raw_text, evidence_snippet)
+    if not snippet_spans:
+        return (
+            "EXTRACTION_FAILED: evidence_snippet was not found in the recorded tool output. "
+            f"tool_call_id='{source_tool_call_id}'"
+        )
+
+    candidate_matches = []
+    for s0, s1 in snippet_spans:
+        candidate_matches.extend(
+            util_numeric_matches_in_region(
+                text=raw_text,
+                region_start=s0,
+                region_end=s1,
+                target_value=float(value),
+                abs_tol=abs_tol,
+            )
+        )
+
+
+    if not candidate_matches:
+        return (
+            "EXTRACTION_FAILED: The claimed numeric value was not found in the recorded tool output "
+            f"for tool_call_id='{source_tool_call_id}'."
+        )
+
+    # Disambiguation
+    # if occurrence_index is not None:
+    #     if occurrence_index < 0 or occurrence_index >= len(candidate_matches):
+    #         return (
+    #             "EXTRACTION_FAILED: occurrence_index is out of range. "
+    #             f"Found {len(candidate_matches)} matching occurrence(s), got occurrence_index={occurrence_index}."
+    #         )
+    #     chosen = candidate_matches[occurrence_index]
+    # else:
+    if len(candidate_matches) > 1:
+        preview = [
+            {
+                "token": m["token"],
+                "char_span": [m["start"], m["end"]],
+            }
+            for m in candidate_matches[:10]
+        ]
+        return (
+            "EXTRACTION_FAILED: Multiple matching numeric occurrences were found. "
+            "Please refine your evidence_snippet disambiguate."
+            f"Candidates: {preview}"
+        )
+    chosen = candidate_matches[0]
+
+    matched_text = raw_text[chosen["start"]:chosen["end"]]
+
+    result_id = CANVAS.register_tool_output(
+        tool_name="extract_numeric_from_tool_output",
+        args={
+            "source_tool_call_id": source_tool_call_id,
+            "value": value,
+            "evidence_snippet": evidence_snippet,
+            "description": description,
+        },
+        value=value,
+        description=description,
+        parent_result_ids=[source_tool_call_id],
+        metadata={
+            "matched_text": matched_text,
+            "matched_span": [chosen["start"], chosen["end"]],
+        },
+    )
+
+    return f"value: {value} is now registered with id {result_id} and can be used for further calculations."
 ##################################################################################################
 ##                                          DFT tools                                           ##
 ##################################################################################################
@@ -1372,60 +2099,261 @@ def write_report(
 #     """Get the working directory."""
 #     return var.my_WORKING_DIRECTORY
 
-def get_kpoints(atoms, kspacing: float) -> list:
-    """Returns the kpoints of a given ase atoms object and specific kspacing."""
-    cell = atoms.cell
-    # ## Check input kspacing is valid
-    # if kspacing <= 0:
-    #     return "Invalid kspacing, should be greater than 0"
-    # if kspacing > 0.5:
-    #     return "Too Coarse kspacing, should be less than 0.5"
-    ## Calculate the kpoints
-    kpoints = [
-            2 * ((np.ceil(2 * np.pi / np.linalg.norm(ii) / kspacing).astype(int)) // 2 + 1) for ii in cell
-        ]
+
+def _to_serializable(x: Any) -> Any:
+    """Convert common ASE / NumPy objects into JSON-serializable Python types."""
+    if isinstance(x, np.ndarray):
+        return x.tolist()
+    if isinstance(x, (np.integer, np.floating, np.bool_)):
+        return x.item()
+    if isinstance(x, dict):
+        return {str(k): _to_serializable(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_to_serializable(v) for v in x]
+    return x
+
+
+def _safe_call(fn, default_name: str) -> Any:
+    """Call a getter and return a readable unavailable message on failure."""
+    try:
+        return fn()
+    except Exception as e:
+        return f"<unavailable: {default_name}: {e}>"
+
+
+@tool
+def inspect_ase_atoms(
+    atomsFilename: Annotated[str, "Path to the ASE Atoms object file (e.g. .traj, .xyz) or the name of the job that contains the Atoms object (e.g. xxxx.pwi, xxx.pwi.pwo)."]
+    ) -> str:
+    """
+    Broad inspection tool for an ASE Atoms object.
+
+    Returns a wide, agent-friendly summary of the structure, including:
+    - composition
+    - geometry
+    - cell / PBC
+    - arrays / info / constraints
+    - calculator-backed results when available
+
+    Parameters
+    ----------
+    atoms
+        ASE Atoms object.
+
+    Returns
+    -------
+    dict
+        JSON-serializable dictionary containing extracted information.
+    """
+    try:
+        from ase import Atoms
+    except Exception as e:
+        return {"ok": False, "error": f"Failed to import ASE: {e}"}
     
-    ## Check if kpoints is even
-    for i in range(len(kpoints)):
-        if kpoints[i] % 2 == 0:
-            if kpoints[i] > 1:
-                kpoints[i] -= 1
-            else:
-                kpoints[i] += 1
-    # time.sleep(60)
-    return kpoints
-
-@tool
-def get_files_in_dir(dir_path: Annotated[str, "Directory path"],
-                     file_extension: Annotated[str, "File extension to filter by. If you want all files and folders, use ''"] = ''
-                     ) -> list:
-    """Returns a list of files in a given directory with a specific file extension."""
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
-    files = ""
-    # list all files in the directory
-    for file in os.listdir(os.path.join(WORKING_DIRECTORY, dir_path)):
-        # check if the file has the specified extension
-        if file.endswith(file_extension):
-            files += file + "\n"
-    # time.sleep(60)
-    return files
+    try:
+        atoms = read(os.path.join(WORKING_DIRECTORY, atomsFilename))
+    except Exception as e:
+        return f"Failed to read Atoms object from {atomsFilename}: {e}"
+
+    if not isinstance(atoms, Atoms):
+        return {
+            "ok": False,
+            "error": f"Expected ase.Atoms, got {type(atoms).__name__}",
+        }
+
+    result: Dict[str, Any] = {
+        "ok": True,
+        "natoms": len(atoms),
+        "formula": _safe_call(atoms.get_chemical_formula, "formula"),
+        "chemical_symbols": _safe_call(atoms.get_chemical_symbols, "chemical_symbols"),
+        "atomic_numbers": _to_serializable(
+            _safe_call(atoms.get_atomic_numbers, "atomic_numbers")
+        ),
+        "positions": _to_serializable(_safe_call(atoms.get_positions, "positions")),
+        "scaled_positions": _to_serializable(
+            _safe_call(atoms.get_scaled_positions, "scaled_positions")
+        ),
+        "cell": _to_serializable(atoms.cell.array),
+        "cell_lengths_and_angles": _to_serializable(
+            _safe_call(atoms.cell.cellpar, "cell_lengths_and_angles")
+        ),
+        "pbc": _to_serializable(atoms.get_pbc()),
+        "volume": _to_serializable(_safe_call(atoms.get_volume, "volume")),
+        "masses": _to_serializable(_safe_call(atoms.get_masses, "masses")),
+        "center_of_mass": _to_serializable(
+            _safe_call(atoms.get_center_of_mass, "center_of_mass")
+        ),
+        "momenta": _to_serializable(_safe_call(atoms.get_momenta, "momenta")),
+        "velocities": _to_serializable(_safe_call(atoms.get_velocities, "velocities")),
+        "tags": _to_serializable(_safe_call(atoms.get_tags, "tags")),
+        "initial_charges": _to_serializable(
+            _safe_call(atoms.get_initial_charges, "initial_charges")
+        ),
+        "initial_magnetic_moments": _to_serializable(
+            _safe_call(atoms.get_initial_magnetic_moments, "initial_magnetic_moments")
+        ),
+        "info": _to_serializable(dict(atoms.info)),
+        "arrays": {k: _to_serializable(v) for k, v in atoms.arrays.items()},
+        "constraints": [repr(c) for c in atoms.constraints],
+        "has_calculator": atoms.calc is not None,
+        "calculator": type(atoms.calc).__name__ if atoms.calc is not None else None,
+    }
+
+    if atoms.calc is not None:
+        result["calculator_results"] = {
+            "potential_energy": _to_serializable(
+                _safe_call(atoms.get_potential_energy, "potential_energy")
+            ),
+            "forces": _to_serializable(_safe_call(atoms.get_forces, "forces")),
+            "stress": _to_serializable(_safe_call(atoms.get_stress, "stress")),
+            "charges": _to_serializable(_safe_call(atoms.get_charges, "charges")),
+            "magnetic_moments": _to_serializable(
+                _safe_call(atoms.get_magnetic_moments, "magnetic_moments")
+            ),
+        }
+        
+    result = json.dumps(result, indent=2)
+    id = CANVAS.register_tool_output(
+        tool_name="inspect_ase_atoms",
+        args={
+            "atomsFilename": atomsFilename,
+        },
+        value=result,
+        description=f"Inspection result of ASE Atoms object from {atomsFilename}",
+        parent_result_ids=[],
+        metadata={},
+    )
+
+    return f"{result}\n\nThe above result is registered as an entire string with id={id}. Please extract and register specific information you need."
+
 
 @tool
-def dummy_structure(concentration: float,
-                    scale_factor: float) -> AtomsDict:
-    """Returns a crystal structure with a given concentration of Cu atoms and the rest Au atoms, and a scale factor for the cell size."""  
-    atoms = FaceCenteredCubic("Cu", latticeconstant=3.58)
-    atoms *= (1,1,2)
-    # Calculate the number of Cu atoms to replace
-    num_atoms_to_replace = int((1.0-concentration) * len(atoms))
-    # Randomly select indices to replace
-    indices_to_replace = np.random.choice(len(atoms), num_atoms_to_replace, replace=False)
-    atoms.numbers[indices_to_replace] = 79
-    # scaleFactor = (1.0 - concentration) * (6.5 - 3.58) / 3.58 + 1
-    # scaleFactor = 1.0
-    atoms.set_cell(atoms.cell * scale_factor, scale_atoms=True)
-    # time.sleep(60)
-    return atoms.todict()
+def get_ase_atoms_property(
+    atomsFilename: Annotated[str, "Path to the ASE Atoms object file (e.g. .traj, .xyz) or the name of the job that contains the Atoms object (e.g. xxxx.pwi, xxx.pwi.pwo)."],
+    property_name: str
+    ) -> str:
+    """
+    Extract one specific property from an ASE Atoms object.
+
+    Supported property_name values include:
+    - formula
+    - natoms
+    - chemical_symbols
+    - atomic_numbers
+    - positions
+    - scaled_positions
+    - cell
+    - cell_lengths_and_angles
+    - pbc
+    - volume
+    - masses
+    - center_of_mass
+    - momenta
+    - velocities
+    - tags
+    - initial_charges
+    - initial_magnetic_moments
+    - info
+    - arrays
+    - constraints
+    - has_calculator
+    - calculator
+    - potential_energy
+    - forces
+    - stress
+    - charges
+    - magnetic_moments
+
+    Parameters
+    ----------
+    atoms
+        ASE Atoms object.
+    property_name : str
+        Name of the property to extract.
+
+    Returns
+    -------
+    dict
+        JSON-serializable dictionary with the requested property.
+    """
+    try:
+        from ase import Atoms
+    except Exception as e:
+        return {"ok": False, "error": f"Failed to import ASE: {e}"}
+    
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+    try:
+        atoms = read(os.path.join(WORKING_DIRECTORY, atomsFilename))
+    except Exception as e:
+        return f"Failed to read Atoms object from {atomsFilename}: {e}"
+
+    if not isinstance(atoms, Atoms):
+        return {
+            "ok": False,
+            "error": f"Expected ase.Atoms, got {type(atoms).__name__}",
+        }
+
+    key = property_name.strip().lower()
+
+    property_map = {
+        "formula": lambda: atoms.get_chemical_formula(),
+        "natoms": lambda: len(atoms),
+        "chemical_symbols": atoms.get_chemical_symbols,
+        "atomic_numbers": atoms.get_atomic_numbers,
+        "positions": atoms.get_positions,
+        "scaled_positions": atoms.get_scaled_positions,
+        "cell": lambda: atoms.cell.array,
+        "cell_lengths_and_angles": atoms.cell.cellpar,
+        "pbc": atoms.get_pbc,
+        "volume": atoms.get_volume,
+        "masses": atoms.get_masses,
+        "center_of_mass": atoms.get_center_of_mass,
+        "momenta": atoms.get_momenta,
+        "velocities": atoms.get_velocities,
+        "tags": atoms.get_tags,
+        "initial_charges": atoms.get_initial_charges,
+        "initial_magnetic_moments": atoms.get_initial_magnetic_moments,
+        "info": lambda: dict(atoms.info),
+        "arrays": lambda: {k: _to_serializable(v) for k, v in atoms.arrays.items()},
+        "constraints": lambda: [repr(c) for c in atoms.constraints],
+        "has_calculator": lambda: atoms.calc is not None,
+        "calculator": lambda: type(atoms.calc).__name__ if atoms.calc is not None else None,
+        "potential_energy": atoms.get_potential_energy,
+        "forces": atoms.get_forces,
+        "stress": atoms.get_stress,
+        "charges": atoms.get_charges,
+        "magnetic_moments": atoms.get_magnetic_moments,
+    }
+
+    if key not in property_map:
+        return {
+            "ok": False,
+            "error": f"Unsupported property_name: {property_name}",
+            "supported_properties": sorted(property_map.keys()),
+        }
+
+    value = _safe_call(property_map[key], key)
+    
+    result = json.dumps({
+        "ok": True,
+        "property_name": key,
+        "value": _to_serializable(value),
+    }, indent=2)
+    
+    id = CANVAS.register_tool_output(
+        tool_name="get_ase_atoms_property",
+        args={
+            "atomsFilename": atomsFilename,
+            "property_name": property_name,
+        },
+        value=value,
+        description=f"{key} property extracted from ASE Atoms object from {atomsFilename}",
+        parent_result_ids=[],
+        metadata={},
+    )
+    
+    return f"Extracted result {result}.\nThe above result is registered as an entire string with id={id}. Please extract and register specific information you need."
 
 
 @tool
@@ -1433,6 +2361,7 @@ def init_structure_data(
     element: Annotated[str, "Element symbol"],
     lattice: Annotated[str, "Lattice type. Must be one of sc, fcc, bcc, tetragonal, bct, hcp, rhombohedral, orthorhombic, mcl, diamond, zincblende, rocksalt, cesiumchloride, fluorite or wurtzite."],
     a: Annotated[float, "Lattice constant"],
+    reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'element', 'lattice', 'a', 'b', 'c'."],
     b: Annotated[float, "Lattice constant. If only a and b is given, b will be interpreted as c instead."] = None,
     c: Annotated[float, "Lattice constant"] = None,
 ) -> Annotated[str, "Path of the saved initial structure data file."]:
@@ -1451,26 +2380,65 @@ def init_structure_data(
     # save the atoms into working dir
     saveDir = os.path.join(WORKING_DIRECTORY, f"{element}-{lattice}.xyz")
     write(saveDir, atoms)
+    result_id = CANVAS.register_tool_output(
+        tool_name="init_structure_data",
+        args={
+            "element": element,
+            "lattice": lattice,
+            "a": a,
+            "b": b,
+            "c": c,
+        },
+        value=f"{element}-{lattice}.xyz",
+        description="Path of the saved initial structure data file.",
+        reasons=reasons,
+        parent_result_ids=[],
+        metadata={},
+        # include modification check, to ensure validity of the actualy file content
+    )
+    
     # time.sleep(60)
-    return f"Created atoms saved in {saveDir}"
+    return f"Created atoms saved in the working directory with name '{element}-{lattice}.xyz' Directory info registered with ID={result_id}"
 
 @tool
 def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"],
                                         crystal_structures: Annotated[str, "Crystal structure. Must be one of sc, fcc, bcc, tetragonal, bct, hcp, rhombohedral, orthorhombic, mcl, diamond, zincblende, rocksalt, cesiumchloride, fluorite or wurtzite."],
-                                        a_dict: Annotated[Dict[str, float], "Dictionary of lattice parameters for the crystal structure: Dict[species, lattice_parameter_a]. i.e. {'Pt': 4.0}"],
+                                        # a_dict: Annotated[Dict[str, float], "Dictionary of lattice parameters for the crystal structure: Dict[species, lattice_parameter_a]. i.e. {'Pt': 4.0}"],
                                         facets: Annotated[str, "Facet of the surface. Must be one of 100, 110, 111, 210, 211, 310, 311, 320, 321, 410, 411, 420, 421, 510, 511, 520, 521, 530, 531, 540, 541, 610, 611, 620, 621, 630, 631, 640, 641, 650, 651, 660, 661"],
-                                        supercell_dim: Annotated[List[int], "typically [int, int, 6]. Supercell dimension, how many times do you want to repeat the primitive cell in each direction: [int, int, int]"],
-                                        n_fixed_layers: Annotated[int, "typically 3. Number of fixed layers in the slab"] = 3
+                                        supercell_dim_xy: Annotated[List[int], "Supercell dimension, how many times do you want to repeat the primitive cell in XY direction: [int, int]"],
+                                        supercell_dim_z:Annotated[int, "typically 6. Supercell dimension, how many times do you want to repeat the primitive cell in Z direction."],
+                                        n_fixed_layers: Annotated[int, "typically 3. Number of fixed layers in the slab"],
+                                        vacuum: Annotated[float, "typically 10.0. Vacuum size in Angstrom"],
+                                        surfaceFilename: Annotated[str, "Name (not a path) of the surface file to be saved in traj format"],
+                                        reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'supercell_dim_xy', 'supercell_dim_z', 'n_fixed_layers', 'vacuum'."],
+                                        supercell_dim_z_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of supercell_dim_z. If not provided, the result will not be registered and you can't use the result in the final report"] = "",
+                                        n_fixed_layers_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of n_fixed_layers. If not provided, the result will not be registered and you can't use the result in the final report"] = "",
+                                        vacuum_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of vacuum size. If not provided, the result will not be registered and you can't use the result in the final report"] = "",
                                         ):
-    """Generate a surface structure and get the available adsorption sites."""
+    """Generate a surface structure and get the available adsorption sites. 
+    You can try out different supercell_dim_z, n_fixed_layers and vacuum size to see the effect.
+    However, only when you specify the source_result_id reference for these parameters, the result will be registered in the canvas and you can use them in the production run.
+    Otherwise, the tool will still execute and return the generated surface structure and available adsorption sites, but they will not be registered and you can't use them in the production run"""
+    
+    # verfiy all *_ref:
+    for value, ref in zip(
+        [supercell_dim_z, n_fixed_layers, vacuum],
+        [supercell_dim_z_ref, n_fixed_layers_ref, vacuum_ref]
+    ):
+        if ref != "":
+            ok, msg = CANVAS.verify_artifact(value, ref)
+            if not ok:
+                return msg
+    
     a_dict = {'Pt': 3.92}
-    supercell_dim[-1] = 6
+    supercell_dim = [supercell_dim_xy[0], supercell_dim_xy[1], supercell_dim_z]
     surface_dict = generate_surface_structures(
         species_list=[species],
         crystal_structures={species: crystal_structures},
         a_dict=a_dict,
         facets={species: [facets]},
         supercell_dim=supercell_dim,
+        vacuum=vacuum,
         n_fixed_layers=n_fixed_layers,
         dirs_exist_ok=True,
         write_to_disk=True,
@@ -1488,13 +2456,42 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
     func = eval(f"ase.build.{crystal_structures}{facets}")
     tmpAtom = func(species, size=(1,1,1), a = a_dict[species])
     for site in mySites.keys():
-        mySites[site] = np.sum(tmpAtom.cell*[mySites[site][0], mySites[site][1], 0], axis=0)[:2]
+        mySites[site] = (np.asarray(mySites[site]) @ tmpAtom.cell.array[:2])[:2]
     
     output_capture = io.StringIO()
     with contextlib.redirect_stdout(output_capture):
         print(mySites)
+        
+    mySites_copy = copy.deepcopy(mySites)
     
     mySites_str = output_capture.getvalue()
+    
+    if supercell_dim_z_ref != "" and n_fixed_layers_ref != "" and vacuum_ref != "":
+        parent_result_ids = [supercell_dim_z_ref, n_fixed_layers_ref, vacuum_ref]
+    else:
+        parent_result_ids = []
+    
+    ids = {}
+    for k, v in mySites.items():
+        ids[k] = CANVAS.register_tool_output(
+            tool_name="generateSurface_and_getPossibleSite",
+            args={
+                "species": species,
+                "crystal_structures": crystal_structures,
+                "facets": facets,
+                "supercell_dim_xy": supercell_dim_xy,
+                "supercell_dim_z": supercell_dim_z,
+                "n_fixed_layers": n_fixed_layers,
+                "vacuum": vacuum,
+                "surfaceFilename": surfaceFilename,
+            },
+            value=v,
+            description=f"Adsorption {k} site",
+            reasons=reasons,
+            parent_result_ids=parent_result_ids,
+            metadata={}
+        )
+        mySites[k] = [v, f"ID={ids[k]}"]
     
     CANVAS.write('Possible_CO_site_on_Pt_surface', mySites)
     
@@ -1502,12 +2499,38 @@ def generateSurface_and_getPossibleSite(species: Annotated[str, "Element symbol"
     # trim the absPath, remove the part before out, including out
     relaPath = absPath.split(f'{DirOfInterests}/')[-1]
     # time.sleep(60)
-    return f"the surface generated is saved at {relaPath}, available adsorbate sites are: {mySites_str}"
+    
+    os.makedirs(os.path.join(WORKING_DIRECTORY, "surface"), exist_ok=True)
+    write(os.path.join(WORKING_DIRECTORY, "surface", surfaceFilename), mySurface)
+    path_id = CANVAS.register_tool_output(
+        tool_name="generateSurface_and_getPossibleSite",
+        args={
+            "species": species,
+            "crystal_structures": crystal_structures,
+            "facets": facets,
+            "supercell_dim_xy": supercell_dim_xy,
+            "supercell_dim_z": supercell_dim_z,
+            "n_fixed_layers": n_fixed_layers,
+            "vacuum": vacuum,
+            "surfaceFilename": surfaceFilename,
+        },
+        value=f"surface{surfaceFilename}",
+        description="Path of the saved surface structure file in traj format.",
+        reasons=reasons,
+        parent_result_ids=parent_result_ids,
+        metadata={}
+    )
+    if supercell_dim_z_ref != "" and n_fixed_layers_ref != "" and vacuum_ref != "":
+        return f"the surface generated is saved at surface/{surfaceFilename}, Path_ID={path_id}\navailable adsorbate sites are: {repr(mySites)}"
+    
+    return f"the surface generated is saved at surface/{surfaceFilename}\navailable adsorbate sites are: {repr(mySites_copy)}"
 
 @tool
 def generate_myAdsorbate(symbols: Annotated[str, "Element symbols of the adsorbate (Do not use any delimiters)"],
                          positions: Annotated[List[List[float]], "Positions of the atoms in the adsorbate, e.g. [[x1, y1, z1], [x2, y2, z2], ...], following the same order as the symbols."],
-                         AdsorbateFileName: Annotated[str, "Name (not a path) of the adsorbate file to be saved in traj format"]
+                         AdsorbateFileName: Annotated[str, "Name (not a path) of the adsorbate file to be saved in traj format"],
+                         vaccum: Annotated[float, "Vacuum size in Angstrom around the adsorbate structure. Typically 10.0 Angstrom should be sufficient"],
+                         reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'symbols', 'positions', 'vaccum'."],
                          ):
     """Generate an adsorbate structure and save it."""
     assert AdsorbateFileName.endswith('.traj'), "AdsorbateFileName should end with .traj"
@@ -1517,17 +2540,32 @@ def generate_myAdsorbate(symbols: Annotated[str, "Element symbols of the adsorba
     
     os.makedirs(os.path.join(WORKING_DIRECTORY, "adsorbates"), exist_ok=True)
     tmpAtoms = Atoms(symbols=symbols, positions=positions)
-    tmpAtoms.center(vacuum=10.0)
+    tmpAtoms.center(vacuum=vaccum)
     write(os.path.join(WORKING_DIRECTORY, "adsorbates", f"{AdsorbateFileName}"), tmpAtoms)
-    # time.sleep(60)
-    return f"Adsorbate saved under working directory at adsorbates/{AdsorbateFileName}"
+    id = CANVAS.register_tool_output(
+        tool_name="generate_myAdsorbate",
+        args={
+            "symbols": symbols,
+            "positions": positions,
+            "AdsorbateFileName": AdsorbateFileName,
+            "vaccum": vaccum,
+        },
+        value=f"adsorbates/{AdsorbateFileName}",
+        description="Path of the saved adsorbate structure file in traj format.",
+        reasons=reasons,
+        parent_result_ids=[],
+        metadata={}
+    )
+    return f"Adsorbate saved under working directory at adsorbates/{AdsorbateFileName}. Path_ID={id}"
 
 @tool
 def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure"],
                     adsorbatePath: Annotated[str, "Path to the adsorbate structure"],
                     mySites: Annotated[List[List[float]], "List of adsorption sites you want to put adsorbates on, e.g. [[x1, y1], [x2, y2], ...]"],
                     rotations: Annotated[List[Tuple[float, str]], "List of rotations for the ith adsorbates, e.g. [[90.0, 'x'], [180.0, 'y'], ...]"],
-                    surfaceWithAdsorbateFileName: Annotated[str, "Name (not a path) of the surface adsorbated with adsorbate to be saved in traj format"]
+                    surfaceWithAdsorbateFileName: Annotated[str, "Name (not a path) of the surface adsorbated with adsorbate to be saved in traj format"],
+                    reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'mySurfacePath', 'adsorbatePath', 'mySites', 'rotations'."],
+                    mySites_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of adsorption sites. If not provided, the result will not be registered and you can't use the result in final report"] = "",
                     ):
     """
     Add adsorbate to the surface structure and save it.
@@ -1548,6 +2586,17 @@ def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure
 #     """
     assert surfaceWithAdsorbateFileName.endswith('.traj'), "surfaceWithAdsorbateFileName should end with .traj"
     assert not '/' in surfaceWithAdsorbateFileName, "surfaceWithAdsorbateFileName should not contain '/'"
+    
+    
+    
+    for value, ref in zip(
+        [mySites],
+        [mySites_ref]
+    ):
+        if ref != "":
+            ok, msg = CANVAS.verify_artifact(value, ref)
+            if not ok:
+                return msg
     
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     
@@ -1592,39 +2641,41 @@ def add_myAdsorbate(mySurfacePath: Annotated[str, "Path to the surface structure
     write(absPath, mySurface)
     
     relaPath = absPath.split(f'{DirOfInterests}/')[-1]
-    # time.sleep(60)
-    return f"Surface with adsorbate saved at {relaPath}"
-
-@tool
-def write_script(
-    content: Annotated[str, "Text content to be written into the document."],
-    file_name: Annotated[str, "Name of the file to be saved."],
-) -> Annotated[str, "Path of the saved document file."]:
-    """Save the quantum espresso input script to the specified file path"""
-    ## Error when '/' in the content, manually delete
-    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
-
-    os.makedirs(WORKING_DIRECTORY, exist_ok=True)
-    path = os.path.join(WORKING_DIRECTORY, f'{file_name}')
-
-    ## If content ends with '/' then remove it
-    if content.endswith('/'):
-        content = content[:-1]
     
-    with open(path,"w",encoding="ascii") as file:
-        file.write(content)
+    if mySites_ref != "":
+        parent_result_ids = [mySites_ref]
+    else:
+        parent_result_ids = []
     
-    os.environ['INITIAL_FILE'] = file_name
-    # time.sleep(60)
-    return f"Initial file is created named {file_name}"
+    outStr = f"Surface with adsorbate saved at {relaPath}."
+    id = CANVAS.register_tool_output(
+        tool_name="add_myAdsorbate",
+        args={
+            "mySurfacePath": mySurfacePath,
+            "adsorbatePath": adsorbatePath,
+            "mySites": mySites,
+            "rotations": rotations,
+            "surfaceWithAdsorbateFileName": surfaceWithAdsorbateFileName,
+        },
+        value=relaPath,
+        description="Path of the saved surface with adsorbate structure file in traj format.",
+        reasons=reasons,
+        parent_result_ids=parent_result_ids,
+        metadata={}
+    )
+    if mySites_ref != "":
+        outStr += f" Path_ID={id}"
+    
+    return outStr
 
+# register regardless. only return ID when refs are provided
 
 @tool
 def write_QE_script_w_ASE(
     listofElements: Annotated[List[str], "List of distinct element symbols in the unit cell"],
-    ppfiles: Annotated[List[str], "List of pseudopotential files in the order of the elements"],
+    ppfiles_w_ref: Annotated[List[Tuple[str, str]], "List of pseudopotential files in the order of the elements together with the reference source_result_id for each pp file. e.g. [('Pt.pbe-n-rrkjus_psl.1.0.0.UPF', 'ref_id_1'), ('C.pbe-n-rrkjus_psl.1.0.0.UPF', 'ref_id_2')]"],
     filename: Annotated[str, "Name of the Quantum Espresso input file, end with .pwi"],
-    inputAtomsDir: Annotated[str, "Directory of the input Atoms object (i.e. traj or xyz), or the name of the job that contains the relaxed structure (i.e. xxxx.pwi)."],
+    inputAtomsDir_w_ref: Annotated[Tuple[str, str], "Directory of the input Atoms object (i.e. traj or xyz), or the name of the job that contains the relaxed structure (i.e. xxxx.pwi), together with the reference source_result_id of the structure."],
     ensembleCalculation: Annotated[bool, "Whether this calculation is ensemble calculation"],
     calculation: Annotated[str, "Type of calculation to perform, e.g. 'scf', 'relax', or 'ensemble'. Set to 'ensemble', when running ensemble calculation"],
     restart_mode: Annotated[Literal['from_scratch', 'restart'], "Restart mode"],
@@ -1642,8 +2693,11 @@ def write_QE_script_w_ASE(
     electron_maxstep: Annotated[int, "Maximum number of SCF iterations"],
     kspacing: Annotated[float, "K-point spacing (in Angstrom^-1)"],
     input_dft: Annotated[Literal['LDA', 'PBE', 'BEEF-vdW'], "DFT functional. You'll be told which functional to use"],
+    reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'calculation', 'restart_mode', 'prefix', 'disk_io', 'ibrav', 'nat', 'ntyp', 'ecutwfc', 'ecutrho', 'occupations', 'smearing', 'degauss', 'conv_thr', 'electron_maxstep', 'kspacing', 'input_dft', 'ready_to_run_job', 'additional_input'."],
     ready_to_run_job: Annotated[bool, "True if the job is intended to be run directly without further modification, False if this file is intended to be used to generate other files"] = False,
     additional_input: Annotated[Dict[str, Any], "Additional input parameters to be added to the input script. Should be in the format of a flat dict, {'input_parameter_1': parameter_1, 'input_parameter_2': parameter_2, ...}, parameter_x remain in their native type, str, float, bool, etc. Do not use unless you know what you are doing."] = {},
+    ecutwfc_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of ecutwfc. If not provided, the result will not be registered and you can't use the result in final report"] = "",
+    kspacing_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of kspacing. If not provided, the result will not be registered and you can't use the result in final report"] = "",
 ):
     """Write a Quantum Espresso input script using ASE. Bool value have no quote around them. For smearing start with methfessel-paxton. For ecutwfc choose between 30-100 Ry. When asked to run ensemble calculation, set calculation to 'ensemble'. When generating template for convergence test, use scf calculation and set ready_to_run_job to False."""
 
@@ -1652,16 +2706,40 @@ def write_QE_script_w_ASE(
     if ensembleCalculation:
         assert calculation == 'ensemble', "When running ensemble calculation, please set calculation to 'ensemble'"
     
+    inputAtomsDir, inputAtomsDir_ref = inputAtomsDir_w_ref
+    
     if calculation == 'ensemble':
         assert inputAtomsDir.endswith('.pwi'), "inputAtomsDir must be a .pwi file with relaxed structure when running ensemble calculation with BEEF-vdW functional"
         assert input_dft == 'BEEF-vdW', "input_dft must be 'BEEF-vdW' when running ensemble calculation"
     
     disk_io = 'none'
     
+    # verify refs
+    for value, ref in zip(
+        [ecutwfc, kspacing],
+        [ecutwfc_ref, kspacing_ref]
+    ):
+        if ref != "":
+            ok, msg = CANVAS.verify_artifact(value, ref)
+            if not ok:
+                return msg
     
+    for pseudo, ref in ppfiles_w_ref:
+        ok, msg = CANVAS.verify_artifact(pseudo, ref)
+        if not ok:
+            return msg
+        
+    ok, msg = CANVAS.verify_artifact(inputAtomsDir, inputAtomsDir_ref)
+    if not ok:
+        return msg
     
     # assemble the pseudopotentials dict from the list of elements and pseudopotentials
     pseudopotentials = {}
+    ppfiles = []
+    ppfilesID = []
+    for pseudo, ref in ppfiles_w_ref:
+        ppfiles.append(pseudo)
+        ppfilesID.append(ref)
     for element, pseudo in zip(listofElements, ppfiles):
         if not os.path.exists(os.path.join("/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/all_lda_pbe_UPF", pseudo)):
             # time.sleep(60)
@@ -1739,49 +2817,51 @@ def write_QE_script_w_ASE(
     job_list = [filename]
     old_job_list = CANVAS.canvas.get(destiJobList, []).copy()
     job_list = list(set(old_job_list + job_list))
-    CANVAS.write(destiJobList,job_list, overwrite=True)
+    CANVAS.write(destiJobList, job_list, overwrite=True)
     
-    # time.sleep(60)
-    return f"Quantum Espresso input script is written to {filename}"
+    outStr = f"Quantum Espresso input script is written to {filename}"
 
-@tool
-def write_LAMMPS_script(
-    content: Annotated[str, "Text content to be written into the document."],
-    file_name: Annotated[str, "Name of the file to be saved."],
-) -> Annotated[str, "Path of the saved document file."]:
-    """Save the LAMMPS input script to the specified file path"""
-    ## Error when '/' in the content, manually delete
-    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+    if ecutwfc_ref != "" and kspacing_ref != "":
+        parent_result_ids = [inputAtomsDir_ref, ecutwfc_ref, kspacing_ref, *ppfilesID]
+    else:   
+        parent_result_ids = [inputAtomsDir_ref, *ppfilesID]
+    id = CANVAS.register_tool_output(
+        tool_name="write_QE_script_w_ASE",
+        args={
+            "listofElements": listofElements,
+            "ppfiles": ppfiles,
+            "filename": filename,
+            "inputAtomsDir": tmpinputAtomsDir,
+            "ensembleCalculation": ensembleCalculation,
+            "calculation": calculation,
+            "restart_mode": restart_mode,
+            "prefix": prefix,
+            "disk_io": disk_io,
+            "ibrav": ibrav,
+            "nat": nat,
+            "ntyp": ntyp,
+            "ecutwfc": ecutwfc,
+            "ecutrho": ecutrho,
+            "occupations": occupations,
+            "smearing": smearing,
+            "degauss": degauss,
+            "conv_thr": conv_thr,
+            "electron_maxstep": electron_maxstep,
+            "input_dft": input_dft,
+        },
+        value=filename,
+        description="Path of the saved Quantum Espresso input script.",
+        reasons=reasons,
+        parent_result_ids=parent_result_ids,
+        metadata={}
+    )
+    outStr += f" Filename_ID={id}"
     
-    os.makedirs(WORKING_DIRECTORY, exist_ok=True)
-    path = os.path.join(WORKING_DIRECTORY, f'{file_name}')
-    
-    job_list_dict = {}
-    job_list = []
-
-    ## If content ends with '/' then remove it
-    if content.endswith('/'):
-        content = content[:-1]
-    
-    with open(path,"w",encoding="ascii") as file:
-        file.write(content)
-    
-    os.environ['INITIAL_FILE'] = file_name
-    
-    job_list.append(file_name)
-    
-    old_job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
-    job_list = list(set(old_job_list + job_list))
-    CANVAS.write('ready_to_run_job_list',job_list, overwrite=True)
+    # if ecutwfc_ref == "" or kspacing_ref == "":
+    #     pass
         
     # time.sleep(60)
-    return f"Initial file is created named {file_name}"
-
-@tool
-def find_classical_potential(element: str) -> str:
-    """Return classical potential file path for given element symbol."""
-    # time.sleep(60)
-    return f'The classcial potential file for {element} is located at /nfs/turbo/coe-venkvis/ziqiw-turbo/mint-PD/PD/EAM/Li_v2.eam.fs'
+    return outStr
 
 @tool
 def find_pseudopotential(element: str) -> str:
@@ -1801,8 +2881,23 @@ def find_pseudopotential(element: str) -> str:
     if len(spList) > 0:
         ans = f'The pseudopotential file for {element} is:\n'
         for sp in spList:
-            ans += f'{sp}\n'
+            
+            id = CANVAS.register_tool_output(
+                tool_name="find_pseudopotential",
+                args={
+                    "element": element,
+                },
+                value=sp,
+                description=f"Pseudopotential file for {element}",
+                parent_result_ids=[],
+                metadata={}
+            )
+            
+            ans += f'{sp}  ID={id}\n'
         ans += f'under {pseudo_dir}'
+        
+        
+        
         # time.sleep(60)
         return ans
     else:
@@ -1813,12 +2908,19 @@ def find_pseudopotential(element: str) -> str:
 def generate_convergence_test(input_file_name: Annotated[str, "Name of the template quantum espresso input file"],
                               kspacing:Annotated[list[float], "List of kspacing to be tested. Typically between 0.1-0.4"],
                               ecutwfc:Annotated[list[int], "List of ecutwfc to be tested. Typically between 40-100"],
+                              input_file_name_ref: Annotated[str, "source_result_id identifing which tool output to reference for this choice of input_file_name."],
+                              reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'input_file_name', 'kspacing', 'ecutwfc'."],
                               ):
     '''
     Generate the convergence test input scripts for quantum espresso calculation using another quantum espresso input file as a template and save the job list. 
     '''
     # kspacing = [0.6, 0.8, 1.0]
     # ecutwfc = [10, 20, 30]
+    
+    ok, msg = CANVAS.verify_artifact(input_file_name, input_file_name_ref)
+    if not ok:
+        return msg
+
     
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     input_file = os.path.join(WORKING_DIRECTORY, input_file_name)
@@ -1912,25 +3014,58 @@ def generate_convergence_test(input_file_name: Annotated[str, "Name of the templ
                 f.writelines(lines)
     ## Remove duplicate files
     job_list = list(set(job_list))
+    job_list_to_register = copy.deepcopy(job_list)
     ## Save the job list
     old_job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
     job_list = list(set(old_job_list + job_list))
     CANVAS.write('ready_to_run_job_list',job_list, overwrite=True)
     CANVAS.write('jobs_K_and_ecut',job_list_dict)
-    # time.sleep(60)
-    return f"Job list is saved scucessfully. Please tell the supervisor in your response that convergence job has generated sucessfully, please continue to submit the jobs"
+    
+    id = CANVAS.register_tool_output(
+        tool_name="generate_convergence_test",
+        args={
+            "input_file_name": input_file_name,
+            "kspacing": kspacing,
+            "ecutwfc": ecutwfc,
+        },
+        value=job_list_to_register,
+        listed_value=True,
+        description="A dict containing the generated convergence test job list with their corresponding kspacing and ecutwfc values.",
+        reasons=reasons,
+        parent_result_ids=[input_file_name_ref],
+        metadata={}
+    )
+    
+    return f"Job list is saved scucessfully. ID={id}. Please tell the supervisor in your response that convergence job has generated sucessfully, please continue to submit the jobs"
 
 @tool
-def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int, stepSize:float=0.025):
+def generate_eos_test(
+    input_file_name: Annotated[str, "Name of the template quantum espresso input file"],
+    kspacing: Annotated[float, "K-point spacing (in Angstrom^-1) for the equation of state test."],
+    ecutwfc: Annotated[int, "Kinetic energy cutoff (Ry) for wavefunctions for the equation of state test."],
+    stepSize: Annotated[float, "Step size for scaling the cell size. The cell will be scaled from (1-2*stepSize) to (1+2*stepSize). Typically 0.025 should be good."],
+    reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'input_file_name', 'kspacing', 'ecutwfc', 'stepSize'."],
+    input_file_name_ref: Annotated[str, "Source_result_id identifing which tool output to reference for this choice of template quantum espresso input file."],
+    kspacing_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of kspacing. If not provided, the result will not be registered and you can't use the result in final report"] = "",
+    ecutwfc_ref: Annotated[str, "Optional source_result_id identifing which tool output to reference for this choice of ecutwfc. If not provided, the result will not be registered and you can't use the result in final report"] = "",
+    ):
     '''
     Generate the equation of state test input scripts for quantum espresso calculation and save the job list.
-    
-    Input:  input_file_name: str, the name of the input file
-            kspacing: float, the kspacing to be tested
-            ecutwfc: int, the ecutwfc to be tested
-            stepSize: float, the step size for the scale factor, default is 0.025, which will scale the cell size from 0.95 to 1.05
     '''
     assert stepSize > 0.01 and stepSize < 0.1, "stepSize should be between 0.01 and 0.1"
+    
+    for value, ref in zip(
+        [kspacing, ecutwfc],
+        [kspacing_ref, ecutwfc_ref]
+    ):
+        if ref != "":
+            ok, msg = CANVAS.verify_artifact(value, ref)
+            if not ok:
+                return msg
+            
+    ok, msg = CANVAS.verify_artifact(input_file_name, input_file_name_ref)
+    if not ok:
+        return msg
     
     # CANVAS.write('job_list', [], overwrite=True)
     CANVAS.canvas['jobs_K_and_ecut'] = {}
@@ -1991,37 +3126,86 @@ def generate_eos_test(input_file_name:str,kspacing:float, ecutwfc:int, stepSize:
     ## Remove duplicate files
     job_list = list(set(job_list))
     print(job_list)
+    job_list_to_register = copy.deepcopy(job_list)
+    
     ## Save the job list as json file
     old_job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
     job_list = list(set(old_job_list + job_list))
     CANVAS.write('ready_to_run_job_list',job_list, overwrite=True)
     
+    outStr = f"Job list is saved scucessfully, continue to submit the jobs. Files of interest are {job_list}."
+    
+    if kspacing_ref != "" and ecutwfc_ref != "":
+        parent_result_ids = [kspacing_ref, ecutwfc_ref, input_file_name_ref]
+    else:
+        parent_result_ids = [input_file_name_ref]
+        
+    id = CANVAS.register_tool_output(
+        tool_name="generate_eos_test",
+        args={
+            "input_file_name": input_file_name,
+            "kspacing": kspacing,
+            "ecutwfc": ecutwfc,
+            "stepSize": stepSize,
+        },
+        value=job_list_to_register,
+        listed_value=True,
+        description="The generated EOS test job list.",
+        reasons=reasons,
+        parent_result_ids=parent_result_ids,
+        metadata={}
+    )
+    if kspacing_ref != "" and ecutwfc_ref != "":
+        outStr += f" Filename_ID={id}"
+    
     # time.sleep(60)
-    return f"Job list is saved scucessfully, continue to submit the jobs. Files of interest are {job_list}"
+    return outStr
 
 ###################################### DFT POST-PROCESSING TOOLS ######################################
+
+try:
+    import tiktoken
+    _ENC = tiktoken.get_encoding("cl100k_base")
+    def _count_tokens(text: str) -> int:
+        return len(_ENC.encode(text))
+    def _slice_tokens(text: str, start_tok: int, end_tok: int) -> str:
+        ids = _ENC.encode(text)
+        return _ENC.decode(ids[start_tok:end_tok])
+except Exception:
+    _ENC = None
+    # Heuristic: ~4 chars per token
+    _CHARS_PER_TOKEN = 4
+    def _count_tokens(text: str) -> int:
+        return max(1, len(text) // _CHARS_PER_TOKEN)
+    def _slice_tokens(text: str, start_tok: int, end_tok: int) -> str:
+        start_ch = start_tok * _CHARS_PER_TOKEN
+        end_ch = end_tok * _CHARS_PER_TOKEN
+        return text[start_ch:end_ch]
 
 @tool
 def get_convergence_suggestions(
     filename: Annotated[str, "Name of the Quantum Espresso input file that did not converge, end with .pwi"],
     question: Annotated[str, "Question about this job, e.g. 'Why this job did not converge?' or 'how to improve the accuracy of this job?'"],
+    start_block: Annotated[int, "The block index to start with when the content is too long. Each block contains around 150k tokens. Set to 0 for the first block." ] = 0
 ):
-    "Get suggestions on how to resolve issues for a certain job, i.e. converge or not accurate enough."
+    "Get suggestions on how to resolve issues for a certain job, i.e. converge or not accurate enough. If the output file is too long, you can call this tool multiple times for the same file with the same question but different start_block index to get suggestions based on different part of the output."
     outFile = filename + ".pwo"
     errFile = filename + ".err"
-    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+    block_size_tokens = 150000
     # WORKING_DIRECTORY = "/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/out"
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     
     # config = load_config(os.path.join('./config', "default.yaml"))
     config = var.OTHER_GLOBAL_VARIABLES
     # llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-    workerllm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    workerllm = ChatAnthropic(model="claude-haiku-4-5", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # llm = ChatAnthropic(model="claude-3-5-sonnet-20241022", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # workerllm = ChatAnthropic(model="claude-3-5-sonnet-20241022", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # llm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
     # workerllm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
     # llm = ChatDeepSeek(model_name=config["DeepSeek_MDL"], api_key=config['DeepSeek_API_KEY'], api_base=config['DeepSeek_BASE_URL'], temperature=0.0)
     
+    fileTrimed = False
     finalSuggestion = ""
     for myfile in [
                    filename, 
@@ -2040,34 +3224,158 @@ def get_convergence_suggestions(
             # for agent_response in dft_reader_agent.stream({"messages": [("user", task_formatted)]}, {"configurable": {"thread_id": thread_id}, "recursion_limit": 1000}):
             #     agent_response = next(iter(agent_response.values()))
             #     print_stream(agent_response)
-            
-            system_msg = """
-You are a DFT expert who's good at giving concise suggestions on how to resolve issues in DFT calculations. Do not modify nosym and pesudopotentials. Never make any adjustment to make the calculation less accurate.
-Please use the format: parameterX: suggestionX, reasonX; parameterY: suggestionY, reasonY; ...
-"""
-            
-            invokingMsg = [
-                ("system", system_msg),
-                ("user", task_formatted)
-            ]
-            agent_response = workerllm.invoke(invokingMsg)
-            
-            finalSuggestion += agent_response.content + "\n\n"
-            print(agent_response.content + "\n\n")
+            total_tokens = _count_tokens(task_formatted)
+
+            # Small enough: return all
+            if total_tokens <= block_size_tokens:
+                system_msg = """
+    You are a DFT expert who's good at giving concise suggestions on how to resolve issues in DFT calculations. Do not modify nosym and pesudopotentials. Never make any adjustment to make the calculation less accurate.
+    Please use the format: parameterX: suggestionX, reasonX; parameterY: suggestionY, reasonY; ...
+    You must include target values for the parameters you suggest to change, e.g. if you suggest to increase the ecutwfc, you should give a specific value for the new ecutwfc, not just say "increase ecutwfc".
+    """
+                
+                invokingMsg = [
+                    ("system", system_msg),
+                    ("user", task_formatted)
+                ]
+                agent_response = workerllm.invoke(invokingMsg)
+                
+                finalSuggestion += agent_response.content + "\n\n"
+                print(agent_response + "\n\n")
+                if var.my_SAVE_DIALOGUE:
+                    with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+                        f.write(repr(agent_response))
+            else:
+                fileTrimed = True
+                # Large: compute block boundaries
+                block_size = block_size_tokens
+                total_blocks = (total_tokens + block_size - 1) // block_size
+                sb = max(0, int(start_block or 0))
+                if sb >= total_blocks:
+                    sb = total_blocks - 1  # clamp to last block
+
+                start_tok = sb * block_size
+                end_tok = min((sb + 1) * block_size, total_tokens)
+                chunk = _slice_tokens(content, start_tok, end_tok)
+                task_formatted = f"{chunk}\n I have a question about the DFT calculation related to the file above: {question}. Please think about what could be the reason, and give me suggestions to address it. Never give suggestion to lower the accuracy of the calculation, such as loosen the convergence threshold."
+                system_msg = """
+    You are a DFT expert who's good at giving concise suggestions on how to resolve issues in DFT calculations based on part of the output files. Do not modify nosym and pesudopotentials. Never make any adjustment to make the calculation less accurate.
+    Please use the format: parameterX: suggestionX, reasonX; parameterY: suggestionY, reasonY; ...
+    """
+                
+                invokingMsg = [
+                    ("system", system_msg),
+                    ("user", task_formatted)
+                ]
+                agent_response = workerllm.invoke(invokingMsg)
+                
+                finalSuggestion += agent_response.content + "\n\n"
+                print(agent_response + "\n\n")
+                if var.my_SAVE_DIALOGUE:
+                    with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+                        f.write(repr(agent_response))
+
             
     if finalSuggestion == "":
         # time.sleep(60)
         return f"Job {filename} has no related files, please check the job list and make sure the job is finished."
-        
-    finalSuggestion += "Please check the suggestions above and come up with a plan to fix the issue. Never take suggestions that will lower the accuracy of the calculation."
+    
+    finalSuggestion += "Please check the suggestions above and come up with a plan to fix the issue. Never take suggestions that will lower the accuracy of the calculation.\n"
+    if fileTrimed:
+        finalSuggestion += f"Note: The suggestions are based on {start_block}th part of the output file, if you want to get more comprehensive suggestions, please call this tool multiple times with different start_block index to cover different part of the output file.\n"
     # time.sleep(60)
-    return finalSuggestion
+    
+    id = CANVAS.register_tool_output(
+        tool_name="get_convergence_suggestions",
+        args={
+            "filename": filename,
+            "question": question,
+            "start_block": start_block,
+        },
+        value=finalSuggestion,
+        description=f"Suggestions for the question: {question} based on the output of {filename}",
+        parent_result_ids=[],
+        metadata={}
+    )
+    
+    return f"{finalSuggestion}\nSuggestion_ID={id}. Please extract the numerical values if you need to use them for adjusting the input parameters for the next calculation."
+
+@tool
+def find_optimal_parameter(
+    sweeping_parameter: Annotated[str, "Name of the sweeping parameter, e.g. 'ecutwfc', 'kspacing', and etc."],
+    Filename_n_parameters_w_ref: Annotated[List[Tuple[str, float, str]], "List of (filename, parameter_value, filename_ref_id) pairs. filename is the name of the output file corresponding to the parameter value, filename_ref_id is the source_result_id of the file that you want to reference for this file."],
+    reference_file: Annotated[str, "Among the list of files, the reference_file filename corresponding to the most expensive / most accurate reference calculation."],
+    threshold: Annotated[float, "Maximum allowed absolute energy difference from the reference energy."],
+    reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'threshold'."],
+) -> Dict[str, Any]:
+    """
+    Find the most optimal parameter value for production run.
+    """
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+    
+    Filename_n_parameters = []
+    Filename_n_parameters_ref = []
+    for filename, param_value, filename_ref_id in Filename_n_parameters_w_ref:
+        ok, msg = CANVAS.verify_artifact(filename, filename_ref_id)
+        if not ok:
+            raise ValueError(f"Verification failed for file {filename} with reference ID {filename_ref_id}: {msg}")
+        Filename_n_parameters.append((filename, param_value))
+        Filename_n_parameters_ref.append(filename_ref_id)
+    
+    # add .pwo to all file names if haven't been added
+    for i in range(len(Filename_n_parameters)):
+        filename, param_value = Filename_n_parameters[i]
+        if not filename.endswith('.pwo'):
+            Filename_n_parameters[i] = (filename + '.pwo', param_value)
+    if not reference_file.endswith('.pwo'):
+        reference_file += '.pwo'
+    
+    file_to_param = dict(Filename_n_parameters)
+
+    if reference_file not in file_to_param:
+        raise ValueError(
+            f"reference_file '{reference_file}' is not present in Filename_n_parameters."
+        )
+
+    # os.path.join(WORKING_DIRECTORY, myfile)
+    reference_param = file_to_param[reference_file]
+    reference_energy = read(os.path.join(WORKING_DIRECTORY, reference_file)).get_potential_energy()
+
+    acceptable = []
+
+    for filename, param_value in Filename_n_parameters:
+        energy = read(os.path.join(WORKING_DIRECTORY, filename)).get_potential_energy()
+        if abs(energy - reference_energy) <= threshold:
+            acceptable.append((filename, param_value))
+
+    if len(acceptable) == 1:
+        return "Only the reference file is within threshold. No acceptable cheaper setting found. Please consider increasing the calculation settings to increase the accuracy of the calculation."
+
+    chosen = max(acceptable, key=lambda x: abs(x[1] - reference_param))
+    
+    id = CANVAS.register_tool_output(
+        tool_name="find_optimal_parameter",
+        args={
+            "sweeping_parameter": sweeping_parameter,
+            "Filename_n_parameters": Filename_n_parameters,
+            "reference_file": reference_file,
+            "threshold": threshold,
+        },
+        value=chosen[1],
+        description=f"The most optimal parameter value for production run based on the reference file {reference_file} and the threshold {threshold}. The chosen parameter value is {chosen[1]} with file name {chosen[0]}",
+        reasons=reasons,
+        parent_result_ids=[*set(Filename_n_parameters_ref)],
+        metadata={}
+    )
         
+    
+    return f"Please choose {sweeping_parameter}={chosen[1]}. result_ID={id}."
 
 @tool
 def calculate_formation_E(slabFilePath: Annotated[str, "the slab calculation file name, ending in pwi"],
                           adsorbateFilePath: Annotated[str, "the adsorbate calculation file name, ending in pwi"],
                           systemFilePath: Annotated[str, "the slab with adsorbate calculation file name, ending in pwi"],
+                          reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'slabFilePath', 'adsorbateFilePath', 'systemFilePath'."],
                           ):
     """using the energies of the slab, adsorbate, and slab with adsorbate, calculate the formation energy of the adsorbate on the slab. """
     working_directory = var.my_WORKING_DIRECTORY
@@ -2091,20 +3399,49 @@ def calculate_formation_E(slabFilePath: Annotated[str, "the slab calculation fil
     
     formationEnergy = systemEnergy - slabEnergy * NslabInSystem - adsorbateEnergy
     
+    id = CANVAS.register_tool_output(
+        tool_name="calculate_formation_E",
+        args={
+            "slabFilePath": slabFilePath,
+            "adsorbateFilePath": adsorbateFilePath,
+            "systemFilePath": systemFilePath,
+        },
+        value=formationEnergy,
+        description=f"The formation energy of the adsorbate on the slab calculated using {slabFilePath}, {adsorbateFilePath}, and {systemFilePath}",
+        reasons=reasons,
+        parent_result_ids=[],
+        metadata={}
+    )
+    
     # time.sleep(60)
-    return f"The formation energy of the adsorbate on the slab is {formationEnergy} eV"
+    return f"The formation energy of the adsorbate on the slab is {formationEnergy} eV. Energy_ID={id}."
 
 @tool
-def calculate_lc(jobFileIdx: Annotated[List[int], "indexs of files in the finished job list of files of interest, which will be used to calculate the lattice constant"]
+def calculate_lc(
+    jobFileIdx_w_ref: Annotated[List[Tuple[int, str]], "indexs of files in the finished job list of files of interest, which will be used to calculate the lattice constant, together with the reference_id for each filename."],
+    reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'jobFileIdx' (why do you choose those job)."],
     ) -> str:
     """Read the output file and calculate the lattice constant"""
     
-    assert isinstance(jobFileIdx, list), "jobFileIdx should be a list"
-    for i in jobFileIdx:
-        assert isinstance(i, int), "jobFileIdx should be a list of index of files of interest"
+    
+    assert isinstance(jobFileIdx_w_ref, list), "jobFileIdx_w_ref should be a list"
+    for i, ref in jobFileIdx_w_ref:
+        assert isinstance(i, int), "jobFileIdx_w_ref should be a list of (index of files of interest, reference_id) pairs"
     
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     job_list = CANVAS.canvas.get('finished_job_list', []).copy()
+    
+    jobFileIdx = []
+    jobFileIdx_ref = []
+    for idx, ref in jobFileIdx_w_ref:
+        ok, msg = CANVAS.verify_artifact(job_list[idx] ,ref)
+        if not ok:
+            return f"Verification failed for job index {idx} with reference ID {ref}: {msg}"
+        jobFileIdx.append(idx)
+        jobFileIdx_ref.append(ref)
+    
+    jobFileIdx_ref = set(jobFileIdx_ref)
+    
     job_list = np.array(job_list, dtype=str)[jobFileIdx]
     print(f"actual job list: {job_list}")
 
@@ -2152,192 +3489,253 @@ def calculate_lc(jobFileIdx: Annotated[List[int], "indexs of files in the finish
     # Save the updated dictionary back to the json file
     with open(json_file, "w") as file:
         json.dump(lc_dict, file)
-
-    # time.sleep(60)
-    return f'The lattice constant is {lc}'
-
-@tool
-def get_bulk_modulus(
-    working_directory: str,
-    pseudo_dir: str,
-    input_file: str,
-) -> float:
-    '''Calculate the bulk modulus of the given quantum espresso input file, pseudopotential directory and working directory'''
-    atoms = read(os.path.join(working_directory,input_file))
-    with open(os.path.join(working_directory,input_file),'r') as file:
-        content = file.read()
-    input_data = parse_qe_input_string(content)
-    pseudopotentials = filter_potential(input_data)
-
-    profile = EspressoProfile(command='mpiexec -n 8 pw.x', pseudo_dir=pseudo_dir)
-
-    atoms.calc = Espresso(
-    profile=profile,
-    pseudopotentials=pseudopotentials,
-    input_data=input_data
-)
-
-    # run variable cell relax first to make sure we have optimum scaling factor
-    # ecf = ExpCellFilter(atoms)
-    # dyn = FIRE(ecf)
-    # traj = Trajectory(os.path.join(working_directory,'relax.traj'), 'w', atoms)
-    # dyn.attach(traj)
-    # dyn.run(fmax=1.5)
-
-    # now we calculate eos
-    eos = calculate_eos(atoms)
-    v, e, B = eos.fit()
-    bulk_modulus = B / kJ * 1.0e24
-
-    # time.sleep(60)
-    return bulk_modulus
-
-
-@tool
-def get_lattice_constant(
-    working_directory: str,
-    pseudo_dir: str,
-    input_file: str,
-) -> float:
-    '''Calculate the lattice constant of the given quantum espresso input file, pseudopotential directory and working directory'''
-    atoms = read(os.path.join(working_directory,input_file))
-    with open(os.path.join(working_directory,input_file),'r') as file:
-        content = file.read()
-    input_data = parse_qe_input_string(content)
-    pseudopotentials = filter_potential(input_data)
-
-    profile = EspressoProfile(command='mpiexec -n 2 pw.x', pseudo_dir=pseudo_dir)
-
-    atoms.calc = Espresso(
-    profile=profile,
-    pseudopotentials=pseudopotentials,
-    input_data=input_data
-)
-
-    eos = calculate_eos(atoms)
-    v, e, B = eos.fit()
-    lc = (v)**(1/3)
-    print(f'{input_file} lattice constant is {lc}')
-    with open(os.path.join(working_directory,input_file.split('.')[0]+'.out'),'w') as file:
-        file.write(f'\n# {input_file} Lattice constant is {lc}')
-    # time.sleep(60)
-    return lc
-
-@tool
-def get_kspacing_ecutwfc(jobFileIdx: Annotated[List[int], "indexs of files in the finished job list of files of interest, which will be used to determine the kspacing and ecutwfc"],
-                         threshold: Annotated[float, "the threshold mev/atom to determine the convergence"] = 1.0) -> str:
-    '''Read the convergen test result and determine the kspacing and ecutwfc used in the production
-    Input:
-        jobFileIdx: list, the indexs of files in the finished job list, which will be used to determine the kspacing and ecutwfc
-        threshold: float , the threshold mev/atom to determine the convergence
-    output: str, the kspacing and ecutwfc used in the production
-    '''
-    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
-    
-    assert isinstance(jobFileIdx, list), "jobFileIdx should be a list"
-    for i in jobFileIdx:
-        assert isinstance(i, int), "jobFileIdx should be a list of index of files of interest"
-    
-    job_dict = CANVAS.canvas.get('jobs_K_and_ecut', {})
-    job_list = CANVAS.canvas.get('finished_job_list', []).copy()
-    job_list = np.array(job_list, dtype=str)[jobFileIdx]
-    print(f"actual job list: {job_list}")
-    assert len(job_list) > 0, "job list 0"
-    
-    print(f"successfully read {len(job_list)} jobs, and {len(job_dict)} job_dict")
-
-    ### Find the kpoints and ecutwfc from the output file
-    kspacing = []
-    ecutwfc = []
-    energy_list = []
-    goodJob = []
-    Natom = None
-    for job in job_list:
-        ## Read the output file
-        print(f'reading {job}')
-        try:
-            atom = read(os.path.join(WORKING_DIRECTORY, job+'.pwo'))
-        except:
-            print(f"Job {job} is not finished or failed.")
-            continue
-        energy = atom.get_potential_energy()
-        energy_list.append(energy)
-        Natom = atom.get_number_of_atoms()
         
-        kspacing.append(job_dict[job]['k'])
-        ecutwfc.append(job_dict[job]['ecutwfc'])
-        goodJob.append(job)
-    
-    convergence_df = pd.DataFrame({'job':goodJob,'kspacing':kspacing, 'ecutwfc':ecutwfc, 'energy':energy_list})
-    
-    min_kspacing = convergence_df['kspacing'].min()
-    max_ecutwfc = convergence_df['ecutwfc'].max()
-    df_kspacing = convergence_df.loc[convergence_df['kspacing'] == min_kspacing].sort_values(by='ecutwfc',ascending=True)
-    df_ecutwfc = convergence_df.loc[convergence_df['ecutwfc'] == max_ecutwfc].sort_values(by='kspacing',ascending=False)
+    id = CANVAS.register_tool_output(
+        tool_name="calculate_lc",
+        args={
+            "jobFileIdx": jobFileIdx,
+        },
+        value=lc,
+        description=f"The lattice constant calculated using the job list with index {jobFileIdx}",
+        reasons=reasons,
+        parent_result_ids=[*jobFileIdx_ref],
+        metadata={}
+    )
 
-    print(f"successfully read {len(df_kspacing)} kspacing and {len(df_ecutwfc)} ecutwfc")
-    
-    if len(df_kspacing) == 1 and len(df_ecutwfc) > 1:
-        # time.sleep(60)
-        return f"Only one kspacing is found, the rest of the jobs seems unfinished or not converged. DO NOT infer optimal parameters from converged jobs. Please regenerate the convergence test with finer kspacing. Also, adjust some other settings may help (regenerating template script is then needed). Remember, you NEED TO REDO the convergence test (tell the supervisor in your response that new convergence test need to be done and you've already generated the script)."
-    if len(df_ecutwfc) == 1 and len(df_kspacing) > 1:
-        # time.sleep(60)
-        return f"Only one ecutwfc is found, the rest of the jobs seems unfinished or not converged. DO NOT infer optimal parameters from converged jobs. Please regenerate the convergence test with finer ecutwfc. Also, adjust some other settings may help (regenerating template script is then needed). Remember, you NEED TO REDO the convergence test (tell the supervisor in your response that new convergence test need to be done and you've already generated the script)."
-    if len(df_kspacing) == 1 and len(df_ecutwfc) == 1:
-        # time.sleep(60)
-        return f"Only one job of either kspacing or ecutwfc is good, the rest of the jobs seems unfinished or not converged. DO NOT infer optimal parameters from converged jobs. Please regenerate the convergence test with finer kspacing and ecutwfc. Also, adjust some other settings may help (regenerating template script is then needed). Remember, you NEED TO REDO the convergence test (tell the supervisor in your response that new convergence test need to be done and you've already generated the script)."
-        
-    ## Save the convergence test result if file exist then append to it
-    if os.path.exists(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv')):
-        convergence_df.to_csv(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv'), mode='a', header=False)
-    else:
-        convergence_df.to_csv(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv'))
-    
-    ## Determine the kpoints and ecutwfc based on the threshold
-    k_chosen, ecutwfc_chosen,finnerEcut,df_kspacing, df_ecutwfc,finnerKspacing = select_k_ecut(convergence_df, threshold, Natom)
-    
-    print(f"Chosen kspacing: {k_chosen}, Chosen ecutwfc: {ecutwfc_chosen}")
-    
-    ## Save the chosen kspacing and ecutwfc
-    if os.path.exists(os.path.join(WORKING_DIRECTORY, 'df_k.csv')):
-        df_kspacing.to_csv(os.path.join(WORKING_DIRECTORY, 'df_k.csv'), mode='a', header=False)
-    else:
-        df_kspacing.to_csv(os.path.join(WORKING_DIRECTORY, 'df_k.csv'))
-    
-    if os.path.exists(os.path.join(WORKING_DIRECTORY, 'df_e.csv')):
-        df_ecutwfc.to_csv(os.path.join(WORKING_DIRECTORY, 'df_e.csv'), mode='a', header=False)
-    else:
-        df_ecutwfc.to_csv(os.path.join(WORKING_DIRECTORY, 'df_e.csv'))  
-        
-    print("saved the chosen kspacing and ecutwfc")
-    
-    
-    if finnerEcut and ecutwfc_chosen < 120 and finnerKspacing and k_chosen > 0.1:
-        ans = "Only the calculation with the finest settings is finished. Please regenerate the convergence test with finner ecutwfc and finner kspacing. Do not infer converged settings yourself!"
-        # ans += f"\nHowever, the calculation is not converged, please consider redo the convergence test and using a finner ecutwfc and finner kspacing"
-    elif finnerEcut and ecutwfc_chosen < 120:
-        ans = "Only calculations with the finest ecutwfc is finished. Please regenerate the convergence test with finner ecutwfc. Do not infer converged settings yourself!"
-    elif finnerKspacing and k_chosen > 0.1:
-        ans = "Only the calculation with the finest kspacing is finished. Please regenerate the convergence test with finner kspacing. Do not infer converged settings yourself!"
-    else:
-        ans = f"Please use kspacing {k_chosen} and ecutwfc {ecutwfc_chosen} for the production calculation"
     # time.sleep(60)
-    return ans
+    return f'The lattice constant is {lc}. LC_ID={id}'
+
+
+
+# @tool
+# def get_kspacing_ecutwfc(jobFileIdx: Annotated[List[int], "indexs of files in the finished job list of files of interest, which will be used to determine the kspacing and ecutwfc"],
+#                          threshold: Annotated[float, "the threshold mev/atom to determine the convergence"] = 1.0) -> str:
+#     '''Read the convergen test result and determine the kspacing and ecutwfc used in the production
+#     Input:
+#         jobFileIdx: list, the indexs of files in the finished job list, which will be used to determine the kspacing and ecutwfc
+#         threshold: float , the threshold mev/atom to determine the convergence
+#     output: str, the kspacing and ecutwfc used in the production
+#     '''
+#     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+    
+#     assert isinstance(jobFileIdx, list), "jobFileIdx should be a list"
+#     for i in jobFileIdx:
+#         assert isinstance(i, int), "jobFileIdx should be a list of index of files of interest"
+    
+#     job_dict = CANVAS.canvas.get('jobs_K_and_ecut', {})
+#     job_list = CANVAS.canvas.get('finished_job_list', []).copy()
+#     job_list = np.array(job_list, dtype=str)[jobFileIdx]
+#     print(f"actual job list: {job_list}")
+#     assert len(job_list) > 0, "job list 0"
+    
+#     print(f"successfully read {len(job_list)} jobs, and {len(job_dict)} job_dict")
+
+#     ### Find the kpoints and ecutwfc from the output file
+#     kspacing = []
+#     ecutwfc = []
+#     energy_list = []
+#     goodJob = []
+#     Natom = None
+#     for job in job_list:
+#         ## Read the output file
+#         print(f'reading {job}')
+#         try:
+#             atom = read(os.path.join(WORKING_DIRECTORY, job+'.pwo'))
+#         except:
+#             print(f"Job {job} is not finished or failed.")
+#             continue
+#         energy = atom.get_potential_energy()
+#         energy_list.append(energy)
+#         Natom = atom.get_number_of_atoms()
+        
+#         kspacing.append(job_dict[job]['k'])
+#         ecutwfc.append(job_dict[job]['ecutwfc'])
+#         goodJob.append(job)
+    
+#     convergence_df = pd.DataFrame({'job':goodJob,'kspacing':kspacing, 'ecutwfc':ecutwfc, 'energy':energy_list})
+    
+#     min_kspacing = convergence_df['kspacing'].min()
+#     max_ecutwfc = convergence_df['ecutwfc'].max()
+#     df_kspacing = convergence_df.loc[convergence_df['kspacing'] == min_kspacing].sort_values(by='ecutwfc',ascending=True)
+#     df_ecutwfc = convergence_df.loc[convergence_df['ecutwfc'] == max_ecutwfc].sort_values(by='kspacing',ascending=False)
+    
+#     print(f"successfully read {len(df_kspacing)} kspacing and {len(df_ecutwfc)} ecutwfc")
+    
+#     if len(df_kspacing) == 1 and len(df_ecutwfc) > 1:
+#         # time.sleep(60)
+#         return f"Only one kspacing is found, the rest of the jobs seems unfinished or not converged. DO NOT infer optimal parameters from converged jobs. Please regenerate the convergence test with finer kspacing. Also, adjust some other settings may help (regenerating template script is then needed). Remember, you NEED TO REDO the convergence test (tell the supervisor in your response that new convergence test need to be done and you've already generated the script)."
+#     if len(df_ecutwfc) == 1 and len(df_kspacing) > 1:
+#         # time.sleep(60)
+#         return f"Only one ecutwfc is found, the rest of the jobs seems unfinished or not converged. DO NOT infer optimal parameters from converged jobs. Please regenerate the convergence test with finer ecutwfc. Also, adjust some other settings may help (regenerating template script is then needed). Remember, you NEED TO REDO the convergence test (tell the supervisor in your response that new convergence test need to be done and you've already generated the script)."
+#     if len(df_kspacing) == 1 and len(df_ecutwfc) == 1:
+#         # time.sleep(60)
+#         return f"Only one job for either kspacing or ecutwfc is good, the rest of the jobs seems unfinished or not converged. DO NOT infer optimal parameters from converged jobs. Please regenerate the convergence test with finer kspacing and ecutwfc. Also, adjust some other settings may help (regenerating template script is then needed). Remember, you NEED TO REDO the convergence test (tell the supervisor in your response that new convergence test need to be done and you've already generated the script)."
+        
+#     ## Save the convergence test result if file exist then append to it
+#     if os.path.exists(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv')):
+#         convergence_df.to_csv(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv'), mode='a', header=False)
+#     else:
+#         convergence_df.to_csv(os.path.join(WORKING_DIRECTORY, 'convergence_test.csv'))
+    
+#     ## Determine the kpoints and ecutwfc based on the threshold
+#     k_chosen, ecutwfc_chosen,finnerEcut,df_kspacing, df_ecutwfc,finnerKspacing = select_k_ecut(convergence_df, threshold, Natom)
+    
+#     print(f"Chosen kspacing: {k_chosen}, Chosen ecutwfc: {ecutwfc_chosen}")
+    
+#     ## Save the chosen kspacing and ecutwfc
+#     if os.path.exists(os.path.join(WORKING_DIRECTORY, 'df_k.csv')):
+#         df_kspacing.to_csv(os.path.join(WORKING_DIRECTORY, 'df_k.csv'), mode='a', header=False)
+#     else:
+#         df_kspacing.to_csv(os.path.join(WORKING_DIRECTORY, 'df_k.csv'))
+    
+#     if os.path.exists(os.path.join(WORKING_DIRECTORY, 'df_e.csv')):
+#         df_ecutwfc.to_csv(os.path.join(WORKING_DIRECTORY, 'df_e.csv'), mode='a', header=False)
+#     else:
+#         df_ecutwfc.to_csv(os.path.join(WORKING_DIRECTORY, 'df_e.csv'))  
+        
+#     print("saved the chosen kspacing and ecutwfc")
+    
+    
+#     if finnerEcut and ecutwfc_chosen < 120 and finnerKspacing and k_chosen > 0.1:
+#         ans = "Only the calculation with the finest settings is finished. Please regenerate the convergence test with finner ecutwfc and finner kspacing. Do not infer converged settings yourself!"
+#         # ans += f"\nHowever, the calculation is not converged, please consider redo the convergence test and using a finner ecutwfc and finner kspacing"
+#     elif finnerEcut and ecutwfc_chosen < 120:
+#         ans = "Only calculations with the finest ecutwfc is finished. Please regenerate the convergence test with finner ecutwfc. Do not infer converged settings yourself!"
+#     elif finnerKspacing and k_chosen > 0.1:
+#         ans = "Only the calculation with the finest kspacing is finished. Please regenerate the convergence test with finner kspacing. Do not infer converged settings yourself!"
+#     else:
+#         ans = f"Please use kspacing {k_chosen} and ecutwfc {ecutwfc_chosen} for the production calculation"
+#     # time.sleep(60)
+#     return ans
+
+# @tool
+# def analyze_BEEF_result(
+#     slabFilePath: Annotated[str, "the slab calculation file"],
+#     adsorbateFilePath: Annotated[str, "the adsorbate calculation file"],
+#     ontopFilePath: Annotated[str, "the slab with ontop adsorbate calculation file"],
+#     fccFilePath: Annotated[str, "the slab with fcc adsorbate calculation file"],
+# ) -> str:
+#     '''Read the BEEF output, calculate the abrosption energy and analyze the BEEF result'''
+    
+#     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+    
+#     DirOfInterests = WORKING_DIRECTORY.split('/')[-1]
+    
+#     PathList = [slabFilePath, adsorbateFilePath, ontopFilePath, fccFilePath]
+    
+#     for i in range(len(PathList)):
+#         tmp = PathList[i]
+#         try:
+#             if not PathList[i].startswith(DirOfInterests) and not PathList[i].startswith(f'./{DirOfInterests}') and not PathList[i].startswith('/nfs'):
+#                 PathList[i] = os.path.join(WORKING_DIRECTORY, PathList[i]) + '.pwo'
+#             _ = read(PathList[i])
+#         except:
+#             if os.path.exists(PathList[i]):
+#                 return f"{tmp} did not finish successfully."
+#             return f"Invalid input atoms directory: {tmp}. make sure to supply either absolute path, or relative path starting with './{DirOfInterests}'. Please check the path in canvas and try again."
+
+    
+#     ## Read energy
+#     slab_e = read_BEEF_output(PathList[0])
+#     if slab_e == "WrongCalc":
+#         return f"Please run slab ensemble calculation using BEEF-vdW with relaxed slab structure! Do not proceed any further!"
+#     adsorbate_e = read_BEEF_output(PathList[1])
+#     if adsorbate_e == "WrongCalc":
+#         return f"Please run adsorbate ensemble calculation using BEEF-vdW with relaxed adsorbate structure! Do not proceed any further!"
+#     ontop_e = read_BEEF_output(PathList[2])
+#     if ontop_e == "WrongCalc":
+#         return f"Please run ontop ensemble calculation using BEEF-vdW with relaxed slab and adsorbate structure! Do not proceed any further!"
+#     fcc_e = read_BEEF_output(PathList[3])
+#     if fcc_e == "WrongCalc":
+#         return f"Please run fcc ensemble calculation using BEEF-vdW with relaxed slab and adsorbate structure! Do not proceed any further!"
+    
+#     ## Plot
+#     try:
+#         energy_dict = {}
+#         energy_dict['clean'] = slab_e
+#         energy_dict['CO'] = adsorbate_e
+#         energy_dict['ontop_down'] = ontop_e
+#         energy_dict['fcc_down'] = fcc_e
+        
+#         fontsize=15
+#         plot_settings = {
+#             # "font.family": "times new roman",
+#             "axes.labelsize": fontsize,
+#             "axes.labelweight": "bold",
+#             "xtick.labelsize": fontsize,
+#             "ytick.labelsize": fontsize,
+#             "xtick.major.size": 7,
+#             "ytick.major.size": 7,
+#             "xtick.major.width": 2.0,
+#             "ytick.major.width": 2.0,
+#             "xtick.direction": "in",
+#             "ytick.direction": "in",
+#             "font.size": fontsize,
+#             "axes.linewidth": 2.0,
+#             "lines.dashed_pattern": [5, 2.5],
+#             "lines.markersize": 10,
+#             "lines.linewidth": 2,
+#             "lines.markeredgewidth": 1,
+#             # "lines.markeredgecolor": "k",
+#             "legend.fontsize": fontsize,
+#             "legend.frameon": False,
+#             'figure.figsize': [6, 6],
+#         }
+
+#         # Update rcParams with settings from JSON file
+#         rcParams.update(plot_settings)
+        
+#         df = pd.DataFrame(energy_dict)
+#         df.to_csv('energies.csv', index=False)
+#         ads_fcc = df['fcc_down'] - df['clean'] - df['CO']
+#         ads_ontop = df['ontop_down'] - df['clean'] - df['CO']
+#         # plot energy distribution
+#         fig = plt.figure(figsize=(6, 5))
+#         ax = fig.add_axes([0,0,1,1])
+#         ax.hist(ads_fcc, bins=50, color='blue', alpha=0.7, label='FCC')
+#         ax.axvline(ads_fcc.mean(), color='k', linestyle=':', linewidth=2, label='FCC mean')
+#         ax.hist(ads_ontop, bins=50, color='red', alpha=0.7, label='Ontop')
+#         ax.axvline(ads_ontop.mean(), color='k', linestyle='-.', linewidth=2, label='Ontop mean')
+#         plt.legend()
+#         plt.xlabel('Adsorption Energy (eV)')
+#         plt.ylabel('Frequency')
+#         plt.savefig('energy_distribution.png',dpi=300,bbox_inches='tight')
+#     except:
+#         print("Failed to plot the energy distribution.")
+
+#     ## Formation
+#     ontop_formation = ontop_e - slab_e - adsorbate_e
+#     fcc_formation = fcc_e - slab_e - adsorbate_e
+
+#     print(f"ontop formation energy: {ontop_formation.mean()} eV")
+#     print(f"fcc formation energy: {fcc_formation.mean()} eV")
+#     ## Formation Energy Difference
+#     formation_energy_diff = ontop_formation - fcc_formation
+
+#     ## Distribution of Formation energy differernce 
+#     if formation_energy_diff.all() > 0:
+#         result = f"fcc is more stable than ontop by average {formation_energy_diff.mean()} eV"
+#     elif formation_energy_diff.all() < 0:
+#         result = f"ontop is more stable than fcc by average {abs(formation_energy_diff.mean())} eV"
+#     else:
+#         result = f" {sum(formation_energy_diff>0)} xc functionals prefer fcc, {sum(formation_energy_diff<0)} xc functionals prefer ontop"
+#     return result
+
 
 @tool
 def analyze_BEEF_result(
     slabFilePath: Annotated[str, "the slab calculation file"],
     adsorbateFilePath: Annotated[str, "the adsorbate calculation file"],
-    ontopFilePath: Annotated[str, "the slab with ontop adsorbate calculation file"],
-    fccFilePath: Annotated[str, "the slab with fcc adsorbate calculation file"],
+    systemFilePath: Annotated[str, "the slab with ontop adsorbate calculation file"],
+    reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'slabFilePath', 'adsorbateFilePath', 'systemFilePath'. (why do you choose those three files)"],
 ) -> str:
-    '''Read the BEEF output, calculate the abrosption energy and analyze the BEEF result'''
+    '''Read, extract, and analyze BEEF calculation results for slab, adsorbate, and surface with adsorbate. Return the mean and standard deviation of the adsorption energy.'''
     
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     
     DirOfInterests = WORKING_DIRECTORY.split('/')[-1]
     
-    PathList = [slabFilePath, adsorbateFilePath, ontopFilePath, fccFilePath]
+    PathList = [slabFilePath, adsorbateFilePath, systemFilePath]
     
     for i in range(len(PathList)):
         tmp = PathList[i]
@@ -2358,20 +3756,16 @@ def analyze_BEEF_result(
     adsorbate_e = read_BEEF_output(PathList[1])
     if adsorbate_e == "WrongCalc":
         return f"Please run adsorbate ensemble calculation using BEEF-vdW with relaxed adsorbate structure! Do not proceed any further!"
-    ontop_e = read_BEEF_output(PathList[2])
-    if ontop_e == "WrongCalc":
-        return f"Please run ontop ensemble calculation using BEEF-vdW with relaxed slab and adsorbate structure! Do not proceed any further!"
-    fcc_e = read_BEEF_output(PathList[3])
-    if fcc_e == "WrongCalc":
-        return f"Please run fcc ensemble calculation using BEEF-vdW with relaxed slab and adsorbate structure! Do not proceed any further!"
+    system_e = read_BEEF_output(PathList[2])
+    if system_e == "WrongCalc":
+        return f"Please run surface with adsorbate ensemble calculation using BEEF-vdW with relaxed slab and adsorbate structure! Do not proceed any further!"
     
     ## Plot
     try:
         energy_dict = {}
         energy_dict['clean'] = slab_e
         energy_dict['CO'] = adsorbate_e
-        energy_dict['ontop_down'] = ontop_e
-        energy_dict['fcc_down'] = fcc_e
+        energy_dict['system'] = system_e
         
         fontsize=15
         plot_settings = {
@@ -2403,16 +3797,15 @@ def analyze_BEEF_result(
         
         df = pd.DataFrame(energy_dict)
         df.to_csv('energies.csv', index=False)
-        ads_fcc = df['fcc_down'] - df['clean'] - df['CO']
-        ads_ontop = df['ontop_down'] - df['clean'] - df['CO']
+        ads_E = df['system'] - df['clean'] - df['CO']
         # plot energy distribution
         fig = plt.figure(figsize=(6, 5))
         ax = fig.add_axes([0,0,1,1])
-        ax.hist(ads_fcc, bins=50, color='blue', alpha=0.7, label='FCC')
-        ax.axvline(ads_fcc.mean(), color='k', linestyle=':', linewidth=2, label='FCC mean')
-        ax.hist(ads_ontop, bins=50, color='red', alpha=0.7, label='Ontop')
-        ax.axvline(ads_ontop.mean(), color='k', linestyle='-.', linewidth=2, label='Ontop mean')
-        plt.legend()
+        ax.hist(ads_E, bins=50, color='blue', alpha=0.7, label='E distribution')
+        ax.axvline(ads_E.mean(), color='k', linestyle=':', linewidth=2, label='E mean')
+        # ax.hist(ads_ontop, bins=50, color='red', alpha=0.7, label='Ontop')
+        # ax.axvline(ads_ontop.mean(), color='k', linestyle='-.', linewidth=2, label='Ontop mean')
+        # plt.legend()
         plt.xlabel('Adsorption Energy (eV)')
         plt.ylabel('Frequency')
         plt.savefig('energy_distribution.png',dpi=300,bbox_inches='tight')
@@ -2420,49 +3813,45 @@ def analyze_BEEF_result(
         print("Failed to plot the energy distribution.")
 
     ## Formation
-    ontop_formation = ontop_e - slab_e - adsorbate_e
-    fcc_formation = fcc_e - slab_e - adsorbate_e
+    E_formation = system_e - slab_e - adsorbate_e
+    
+    E_formation_mean = E_formation.mean()
+    E_formation_std = E_formation.std()
+    
+    mean_id = CANVAS.register_tool_output(
+        tool_name="analyze_BEEF_result",
+        args={
+            "slabFilePath": slabFilePath,
+            "adsorbateFilePath": adsorbateFilePath,
+            "systemFilePath": systemFilePath,
+        },
+        value=E_formation_mean,
+        description=f"The mean adsorption energy calculated using {slabFilePath}, {adsorbateFilePath}, and {systemFilePath}",
+        reasons=reasons,
+        parent_result_ids=[],
+        metadata={}
+    )
+    
+    std_id = CANVAS.register_tool_output(
+        tool_name="analyze_BEEF_result",
+        args={
+            "slabFilePath": slabFilePath,
+            "adsorbateFilePath": adsorbateFilePath,
+            "systemFilePath": systemFilePath,
+        },
+        value=E_formation_std,
+        description=f"The standard deviation of adsorption energy calculated using {slabFilePath}, {adsorbateFilePath}, and {systemFilePath}",
+        reasons=reasons,
+        parent_result_ids=[],
+        metadata={}
+    )
 
-    print(f"ontop formation energy: {ontop_formation.mean()} eV")
-    print(f"fcc formation energy: {fcc_formation.mean()} eV")
-    ## Formation Energy Difference
-    formation_energy_diff = ontop_formation - fcc_formation
-
-    ## Distribution of Formation energy differernce 
-    if formation_energy_diff.all() > 0:
-        result = f"fcc is more stable than ontop by average {formation_energy_diff.mean()} eV"
-    elif formation_energy_diff.all() < 0:
-        result = f"ontop is more stable than fcc by average {abs(formation_energy_diff.mean())} eV"
-    else:
-        result = f" {sum(formation_energy_diff>0)} xc functionals prefer fcc, {sum(formation_energy_diff<0)} xc functionals prefer ontop"
-    return result
+    return f"The mean adsorption energy is {E_formation_mean} eV, and the standard deviation is {E_formation_std} eV. Mean_ID={mean_id}, Std_ID={std_id}."
 
 ##################################################################################################
 ##                                          HPC tools                                           ##
 ##################################################################################################
 
-@tool
-def find_job_list() -> str:
-    """Return the list of job files to be submitted."""
-
-    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
-    job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
-    
-    # time.sleep(60)
-    return f'The files need to be submitted are {job_list}. Please continue to submit the job.'
-
-@tool
-def read_file(
-    input_file: Annotated[str, "The file to be read."]
-) -> Annotated[str, "read content"]:
-    """read file content from the specified file path"""
-    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
-    ## Error when '/' in the content, manually delete
-    path = os.path.join(WORKING_DIRECTORY, input_file)
-    with open(path,"r") as file:
-        content = file.read()
-    # time.sleep(60)
-    return content
 
 @tool
 def add_resource_suggestion(
@@ -2515,7 +3904,25 @@ echo "Job Ended at `date`"\n \
         initialize_database(db_file)
 
     add_to_database(new_resource_dict, db_file)
-
+    
+    id = CANVAS.register_tool_output(
+        tool_name="add_resource_suggestion",
+        args={
+            "qeInputFileName": qeInputFileName,
+            "partition": partition,
+            "nnodes": nnodes,
+            "ntasks": ntasks,
+            "span": span,
+            "submissionScript": submissionScript,
+            "outputFilename": outputFilename,
+        },
+        value=new_resource_dict,
+        description=f"Resource suggestion for {qeInputFileName} with partition {partition}, nnodes {nnodes}, ntasks {ntasks}, runtime {span}, submission script {submissionScript}, and output filename {outputFilename}",
+        reasons={},
+        parent_result_ids=[],
+        metadata={}
+    )
+    
     # time.sleep(60)
     return f"Resource suggestion for {qeInputFileName} saved scucessfully"
 
@@ -2665,109 +4072,6 @@ def submit_and_monitor_job(
         print("waiting for files...")
         time.sleep(10)
         break
-        
-        # if jobType == "DFT":
-        #     print("Checking jobs")
-            
-        #     checked = set()
-        #     unchecked = set(job_list)
-        #     while checked != unchecked:
-        #         for inputFile in job_list:
-        #             outputFile = resource_dict[inputFile]['outputFilename']
-        #             print(f"Checking job {inputFile}")
-        #             checked.add(inputFile)
-        #             try:
-        #                 atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
-        #                 print(atoms.get_potential_energy())
-        #                 # delete inputFile from job_list
-        #                 job_list.remove(inputFile)
-        #                 print(f"Job list: {job_list}")
-        #                 print()
-        #             except:
-        #                 # see if the job did not converge
-        #                 # read the output file as text
-        #                 with open(os.path.join(WORKING_DIRECTORY, outputFile), 'r') as f:
-        #                     lines = f.readlines()
-        #                 # check if the output file contains "convergence NOT achieved"
-        #                 notConverge = False
-        #                 for line in lines:
-        #                     if "convergence NOT achieved" in line:
-        #                         notConverge = True
-        #                         notConvergedList.append(inputFile)
-        #                         break
-                            
-        #                 if notConverge:
-        #                     # remove inputFile from job_list
-        #                     job_list.remove(inputFile)
-        #                 else:
-        #                     # if outputFile exsit remove outputFile
-        #                     try:
-        #                         # temporay disable remove to avoid the calculation
-        #                         # os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
-        #                         print(f"{outputFile} removed")
-        #                     except:
-        #                         print("output file does not exist")
-        #                     print(f"Job {inputFile} failed, will resubmit the job")
-            
-            
-        #     # for idx, inputFile in enumerate(job_list):
-        #     #     outputFile = resource_dict[inputFile]['outputFilename']
-        #     #     print(f"Checking job {inputFile}")
-        #     #     try:
-        #     #         atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
-        #     #         print(atoms.get_potential_energy())
-        #     #         # delete inputFile from job_list
-        #     #         job_list.remove(inputFile)
-        #     #         print(f"Job list: {job_list}")
-        #     #         print()
-        #     #     except:
-        #     #         # remove outputFile
-        #     #         os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
-        #     #         print(f"Job {inputFile} failed, will resubmit the job")
-        #     if len(job_list) == 0:
-        #         # load jobs frm job_list.json
-        #         job_list = CANVAS.canvas.get('ready_to_run_job_list', []).copy()
-                
-        #         # read all energies into a dict
-        #         energies = {}
-        #         for inputFile in job_list:
-        #             if inputFile in notConvergedList:
-        #                 continue
-        #             outputFile = resource_dict[inputFile]['outputFilename']
-        #             atoms = read(os.path.join(WORKING_DIRECTORY, outputFile))
-        #             energies[inputFile] = atoms.get_potential_energy()
-                
-        #         job_list = []
-                
-        #         # check two or more key has the same value, if so, add the key back to the job_list
-        #         for key, value in energies.items():
-        #             if list(energies.values()).count(value) > 1:
-        #                 print(f"!!!!!!!Job {key} has the same energy as other jobs, may resubmit the job!!!!!!!!")
-        #                 job_list.append(key)
-                
-        #         print()
-        #         # check whether job in job_list has the same inputFile content, if so, remove the job from job_list
-        #         tobeRemoved = np.zeros(len(job_list))
-        #         for jobIdx in range(len(job_list)):
-        #             for jobIdx2 in range(jobIdx+1, len(job_list)):
-        #                 if cmp(os.path.join(WORKING_DIRECTORY, job_list[jobIdx]), os.path.join(WORKING_DIRECTORY, job_list[jobIdx2]), shallow=False):
-        #                     print(f"!!!!!!!Job {job_list[jobIdx]} has the same content as {job_list[jobIdx2]}, will remove the job!!!!!!!!")
-        #                     tobeRemoved[jobIdx] = 1
-        #                     tobeRemoved[jobIdx2] = 1
-                
-        #         job_list = [job_list[i] for i in range(len(job_list)) if tobeRemoved[i] == 0]
-                
-        #         print("##########")
-        #         print(f"Final jobs to be resubmitted: {job_list}")
-        #         print("##########")
-        #         # remove outputFile for jobs in job_list
-        #         for inputFile in job_list:
-        #             outputFile = resource_dict[inputFile]['outputFilename']
-        #             print(f"Removing {outputFile}")
-        #             os.remove(os.path.join(WORKING_DIRECTORY, outputFile))
-            
-        #         if len(job_list) == 0:
-        #             break
     
     # reset resource_suggestions.db and job lists
     finishedJobs = CANVAS.canvas.get('finished_job_list', [])
@@ -2780,6 +4084,18 @@ def submit_and_monitor_job(
     # initialize_database(db_file)
     var.my_RESOURCE_DIRECTORY = {}
     time.sleep(1)
+    
+    id = CANVAS.register_tool_output(
+        tool_name="submit_and_monitor_job",
+        args={
+            "jobType": jobType,
+        },
+        value="places_holder",
+        description=f"HPC places_holder",
+        reasons={},
+        parent_result_ids=[],
+        metadata={}
+    )
     
     notConvergedListString = ""
     

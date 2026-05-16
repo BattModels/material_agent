@@ -34,11 +34,12 @@ The task given is:
    git clone https://github.com/BattModels/material_agent.git
    ```
 2. setup a conda environment:
-    ```conda env create -f environment.yml
+    ```
+    conda env create -f environment.yml
     ```
     
     note: The environment setup typically takes about 5 - 10 minutes. The default environment setup only work for Antropic models. If you need to use LLM models from other providers, please install the corresponding packages and modify `planNexe2.py` and `tools.py` accordingly.
-3. Install Quantum Espresso and modify the `QE_submission_example` under `prompt.py`, so the LLM agent can find the QE executables.
+4. Install Quantum Espresso and modify the `QE_submission_example` under `prompt.py`, so the LLM agent can find the QE executables.
     
 3. Add your API keys to the `config/default.yaml` file. Change the pseudopotentials in the `config/default.yaml` and the working directory to the one you want to use.
 4. Edit the usermessage in the `invoke.py` file to specify the task you want to perform.

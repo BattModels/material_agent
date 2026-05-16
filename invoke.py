@@ -12,12 +12,14 @@ from langchain_core.messages import (
     HumanMessage,
     ToolMessage,
 )
+import pickle
 # from langchain_anthropic import ChatAnthropic
 
 # from src.prompt import hpc_agent_prompt,dft_agent_prompt
 # from src.graph import create_graph
 from src.planNexe2 import create_planning_graph
 # from src.planNexeHighPlan import create_planning_graph as create_graph
+import sys
 import sys
 import time
 from src.utils import load_config, save_graph_to_file,initialize_database
@@ -103,7 +105,7 @@ if __name__ == "__main__":
     Sn (dia)	6.474
     '''
     
-    userMessage_6 = "You are going to calculate the lattice constant for BCC Li through DFT, the experiment value is 3.451, use this to create the initial structure."
+    userMessage_6 = "You are going to calculate the lattice constant for BCC Li through DFT."
     userMessage_7 = "You are going to generat a Pt surface structure with 2x2x4 supercell, then do a convergence test, use maximum ecutwfc = 160. Get the optimal kspacing and ecutwfc."
     userMessage_8 = """Please generate intial structures required to calculate CO adsorbtion on Pt(111) surface with 1/4 coverage (2x2x4 supercell), and calculate the adsorbtion energy."""
     userMessage_9 = """
@@ -400,7 +402,7 @@ You have a maximum of 7 hours to complete the entire study and make your final r
             initialize_database(db_file)
 
     EXPLOG.init(Path(WORKING_DIRECTORY)/"TEMP_vasp_calcs",
-                "MLIP_test",
+                "test",
                 reject_if_failed_exists = True,
                 require_relaxed_o_for_oh = True
                 )
@@ -415,6 +417,11 @@ You have a maximum of 7 hours to complete the entire study and make your final r
     # print(EXPLOG.relational_frame.candidates.df.dtypes)
     # assert False    
     CANVAS.set_working_directory(WORKING_DIRECTORY)
+    Worker_available_tools = {}
+    with open(os.path.join('./config', "oer_available_tools.yaml"), "r") as f:
+        Worker_available_tools = yaml.safe_load(f)
+    CANVAS.write("Worker_available_tools", Worker_available_tools)
+
 
     rawGraph = create_planning_graph(config)
     # graph = create_graph(config)
@@ -454,9 +461,9 @@ You have a maximum of 7 hours to complete the entire study and make your final r
             history = list(graph.get_state_history(llm_config))
             # print(history)
             snap = history[timeTravelToXFrameBefore]
-            print("\n\n\n")
-            print(snap)
-            print("\n\n\n")
+            # print("\n\n\n")
+            # print(snap)
+            # print("\n\n\n")
 
             
             # NOTE: FAIL when trying to resume a checkpoint that predates the boss-era state format.
@@ -475,6 +482,7 @@ You have a maximum of 7 hours to complete the entire study and make your final r
             print(f"Time since the start of the session: {time.time() - var.startTime} seconds")
             llm_config = snap.config
             CANVAS.canvas = snap.values["canvas"]
+            CANVAS.result_registry = snap.values["artifacts"]
             CANVAS.print()
             print(CANVAS)
             EXPLOG.relational_frame.candidates.df = snap.values["explog_candidates"]
