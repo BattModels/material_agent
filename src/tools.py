@@ -9,7 +9,7 @@ from math import e
 from networkx import predecessor
 import pandas as pd
 from src.utils import *
-from src.myCANVAS import CANVAS
+from src.myCANVAS import CANVAS, ListedArtifact
 from ase import Atoms, Atom
 from langchain.tools import tool
 from langchain_anthropic import ChatAnthropic
@@ -1270,7 +1270,7 @@ def OER_data_analasis_v2(
         metadata={},
     )
     
-    outStr += "\nIf you want to reference any other information of the tool result, please refer to the result ID {result_id} if you need to use them to make decisions or conclusions."
+    outStr += f"\nIf you want to reference any other information of the tool result, please refer to the result ID {result_id} if you need to use them to make decisions or conclusions."
     
     return outStr
 
@@ -1641,45 +1641,17 @@ def browse_df(
 ##################################################################################################
 
 _ALLOWED_FUNCS = {
-    "abs": abs,
-    "round": round,
-    "min": min,
-    "max": max,
-    "sum": sum,
-    "pow": pow,
-    "sqrt": math.sqrt,
-    "exp": math.exp,
-    "log": math.log,
-    "log10": math.log10,
-    "sin": math.sin,
-    "cos": math.cos,
-    "tan": math.tan,
-    "asin": math.asin,
-    "acos": math.acos,
-    "atan": math.atan,
+    "abs": abs, "round": round, "min": min, "max": max, "sum": sum,
+    "pow": pow, "sqrt": math.sqrt, "exp": math.exp, "log": math.log,
+    "log10": math.log10, "sin": math.sin, "cos": math.cos, "tan": math.tan,
+    "asin": math.asin, "acos": math.acos, "atan": math.atan,
     "mean": lambda *x: sum(x) / len(x),
 }
 
-
 _ALLOWED_NODES = (
-    ast.Expression,
-    ast.BinOp,
-    ast.UnaryOp,
-    ast.Call,
-    ast.Name,
-    ast.Load,
-    ast.Constant,
-    ast.Add,
-    ast.Sub,
-    ast.Mult,
-    ast.Div,
-    ast.Pow,
-    ast.Mod,
-    ast.FloorDiv,
-    ast.UAdd,
-    ast.USub,
-    ast.Tuple,
-    ast.List,
+    ast.Expression, ast.BinOp, ast.UnaryOp, ast.Call, ast.Name, ast.Load,
+    ast.Constant, ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow, ast.Mod,
+    ast.FloorDiv, ast.UAdd, ast.USub, ast.Tuple, ast.List,
 )
 
 
@@ -1700,52 +1672,108 @@ def _safe_eval(expr: str, variables: dict[str, float]) -> float:
 
     return float(eval(compile(tree, "<expr>", "eval"), {"__builtins__": {}}, {**_ALLOWED_FUNCS, **variables}))
 
+def _merge_context(context: str, reasons: Any) -> Dict[str, str]:
+    """Prepend the per-call `context` onto each per-parameter rationale.
+
+    Accepts `reasons` in either of two shapes:
+      * `Dict[str, str]` — multi-key rationale, one entry per tool parameter.
+      * `str`            — single rationale used by tools with one logical input.
+
+    In both cases, the return value is a dict so that every artifact registered
+    via `register_tool_output(reasons=...)` has a uniform shape on disk. For
+    str-shape inputs, the merged value is stored under the key `"reasons"`,
+    matching the pre-existing convention used by tools like
+    `math_expression_tool` and `extract_numeric_from_tool_output`.
+
+    Empty / whitespace-only `context` is rejected at the tool boundary so that
+    a missing study description fails loudly instead of silently degrading the
+    verifier's signal.
+    """
+    if not context or not context.strip():
+        raise ValueError(
+            "context is required and must be non-empty. Describe in one "
+            "sentence which study or exploration this tool call is part of "
+            "(e.g. 'convergence test for ecutwfc', 'production run for "
+            "adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+            "'one-off check')."
+        )
+    prefix = f"Context: {context.strip()}"
+    if isinstance(reasons, dict):
+        return {k: f"{prefix}\n\nRationale: {v}" for k, v in reasons.items()}
+    return {"reasons": f"{prefix}\n\nRationale: {reasons}"}
 
 @tool
 def math_expression_tool(
-    values: Annotated[
-        List[Tuple[str, float]],
-        "List of (ref_result_id, value) pairs. They will be mapped in order to x0, x1, x2, ... When you use tool to obtain a value, you will be given the ref_result_id."
+    values_w_ref: Annotated[
+        List[Tuple[float, str]],
+        "List of (value, ref_result_id) pairs. They will be mapped in order to "
+        "x0, x1, x2, ... When you obtain a value from a tool, you will be "
+        "given the ref_result_id; place the (value, ref_result_id) pair here. "
+        "Each ref_result_id accepts an 8-char id to reference the output, or "
+        "`<8-char-id>.<param_name>` to reference an input parameter of a "
+        "past tool call (see `list_referenceable_inputs`).",
     ],
     expression: Annotated[
         str,
-        "Math expression using x0, x1, x2, ... Example: '(x0 - x1) / x2' or 'sqrt(x0**2 + x1**2)'"
+        "Math expression using x0, x1, x2, ... Example: '(x0 - x1) / x2' or 'sqrt(x0**2 + x1**2)'",
     ],
-    reasons: Annotated[str, "intent behind using this math expression and the choice of values. How did you obtained the values. The keys should be: 'values', 'expression'."],
+    context: Annotated[
+        str,
+        "1-2 sentence describing which study or exploration this tool call "
+        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
+        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+        "'one-off check'), and the reason why you call this tool."
+    ],
+    reasons: Annotated[
+        str,
+        "Per-parameter rationale. Write 2-3 sentences covering: "
+        "(a) THE ROLE this calculation plays in the study described in "
+        "`context` (e.g. 'computing an intermediate value used downstream', "
+        "'final reported quantity', 'sanity check'); "
+        "(b) WHY THIS SPECIFIC EXPRESSION AND VALUES: how the inputs were "
+        "chosen, what evidence supports them, and the expected meaning of "
+        "the output. Since this tool has only one logical parameter (the "
+        "expression+values pair), provide one combined rationale rather "
+        "than per-key entries.",
+    ],
 ) -> str:
     """
     Evaluate a math expression on arbitrary input floats.
     Inputs are mapped by order to x0, x1, x2, ...
+    reference_id in the output ties with: computed math result, float
     """
-    if not values:
+    if not values_w_ref:
         return "No values were provided."
-    
-    # verify each value using the corresponding ref_result_id
-    for ref_id, value in values:
-        ok, msg = CANVAS.verify_artifact(value, ref_id)
-        if not ok:
-            return msg
 
-    variables = {f"x{i}": float(value) for i, (_, value) in enumerate(values)}
-    mapping = {f"x{i}": ref_id for i, (ref_id, _) in enumerate(values)}
+    merged_reasons = _merge_context(context, reasons)
+
+    # Verify each value against its ref.
+    for v, ref in values_w_ref:
+        art = CANVAS.get_artifact(ref)
+        if art is None:
+            return f"Error: Reference ID {ref} not found in CANVAS."
+
+    bare_values = [float(v) for v, _ in values_w_ref]
+    bare_refs = [ref for _, ref in values_w_ref]
+
+    variables = {f"x{i}": v for i, v in enumerate(bare_values)}
+    mapping = {f"x{i}": ref for i, ref in enumerate(bare_refs)}
 
     try:
         result = _safe_eval(expression, variables)
-        id = CANVAS.register_tool_output(
+        result_id = CANVAS.register_tool_output(
             tool_name="math_expression_tool",
             args={
-                "values": values,
+                "values": bare_values,
                 "expression": expression,
             },
             value=result,
             description=f"Result of evaluating expression '{expression}' with mapping {mapping}",
-            reasons=reasons,
-            parent_result_ids=[ref_id for ref_id, _ in values],
-            metadata={
-                "mapping": mapping,
-            },
+            reasons=merged_reasons,
+            parent_result_ids=list(set(bare_refs)),
+            metadata={"mapping": mapping},
         )
-        return f"Result: {result}. Result_ID={id}."
+        return f"Result: {result}. Result_ID={result_id}."
     except Exception as e:
         return f"Failed to evaluate expression: {e}"
 
@@ -1815,8 +1843,20 @@ def write_report(
         outStr = f"Report '{report_name}' already exists. Please choose a different name for the report. You should never overwirte a report."
     else:
         var.reportName = report_name
+        
+    id = CANVAS.register_tool_output(
+        tool_name="write_report",
+        args={
+            "report": report,
+            "report_name": report_name,
+        },
+        value=report,
+        description=f"Writing report to canvas with key '{report_name}'",
+        parent_result_ids=[],
+        metadata={},
+    )
     
-    return outStr
+    return outStr + f"\nReport_ID: {id}. Please refer to this ID if you want to reference this report later or use the information in the report for further analysis or decision making."
 
 # @tool
 # def write_my_canvas(key: Annotated[str, "key"],
@@ -1888,14 +1928,20 @@ def extract_numeric_from_tool_output(
             "was not found in the tool output registry. Please check the canvas and try again, or regenerate the source result with corresponding tool"
         )
         
-    raw_text = record.value
+    raw_text = ""
+    if isinstance(record, ListedArtifact):
+        for arti in record.value:
+            raw_text += repr(arti.value) + "\n"
+    else:
+        raw_text = record.value
     
     # For demo only
-    if str(value) not in raw_text:
-        return (
-            "EXTRACTION_FAILED: evidence_snippet was not found in the recorded tool output. "
-            f"tool_call_id='{source_tool_call_id}'"
-        )
+    if str(value).strip() not in raw_text:
+        if str(int(value)).strip() not in raw_text:
+            return (
+                f"EXTRACTION_FAILED: neither {str(value).strip()!r} nor {str(int(value)).strip()} was not found in the recorded tool output: {raw_text!r} "
+                f"tool_call_id='{source_tool_call_id}'"
+            )
     
     result_id = CANVAS.register_tool_output(
         tool_name="extract_numeric_from_tool_output",
@@ -2016,8 +2062,13 @@ def extract_numeric_from_tool_output_NOTDEMO(
             f"EXTRACTION_FAILED: source_tool_call_id='{source_tool_call_id}' "
             "was not found in the tool output registry. Please check the canvas and try again, or regenerate the source result with corresponding tool"
         )
-        
-    raw_text = record.value
+                
+    raw_text = ""
+    if isinstance(record, ListedArtifact):
+        for arti in record.value:
+            raw_text += repr(arti.value) + "\n"
+    else:
+        raw_text = record.value
 
     # Search space
     snippet_spans = util_find_all_substring_spans(raw_text, evidence_snippet)

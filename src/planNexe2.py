@@ -69,6 +69,7 @@ class myStep(BaseModel):
                             "query_explog",
                             "math_expression_tool",
                             "extract_numeric_from_tool_output",
+                            "write_report",
                             ""
                 ]] = Field(f"must-use tools for this step, should be a subset of the tools available to the agent. read the CANVAS with key Worker_available_tools to see more details about each tools.")
 
@@ -546,6 +547,7 @@ def supervisor_chain_node(state, agent, name):
                     "query_explog",
                     "math_expression_tool",
                     "extract_numeric_from_tool_output",
+                    "write_report",
                     ""
                 ]
                 wrongTools = set(step.required_tools) - set(ToolList)
@@ -674,7 +676,11 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
         else:
             print(f"worker {name} finished the task successfully, now checking tool use...")
             # check if the worker used all required tools
-            tool_use_passed, tool_use_msg = CANVAS.check_required_tool_use(task.required_tools)
+            if task.required_tools == "":
+                tool_use_passed = True
+                tool_use_msg = "No required tools for this step."
+            else:
+                tool_use_passed, tool_use_msg = CANVAS.check_required_tool_use(task.required_tools)
             print(tool_use_msg)
             if tool_use_passed:
                 # LLM sanity check
