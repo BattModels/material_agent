@@ -682,6 +682,10 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
             else:
                 tool_use_passed, tool_use_msg = CANVAS.check_required_tool_use(task.required_tools)
             print(tool_use_msg)
+            # Force true, not as necessary in OER case
+            if not tool_use_passed:
+                tool_use_passed = True
+                tool_use_msg += "\nHowever, we will not enforce the tool use in this case, and let the supervisor decide whether the tool use is necessary or not based on the worker's execution result and notes on CANVAS."
             if tool_use_passed:
                 # LLM sanity check
                 # if LLM_check_passed:
