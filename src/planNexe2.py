@@ -77,8 +77,9 @@ class myStep(BaseModel):
                     "add_resource_suggestion",
                     "generate_structured_report",
                     "extract_text_from_tool_output",
+                    "find_optimal_parameter_from_derived",
                     ""
-                ] = Field(f"The one final tool your worker agent must use to obtain the desired output of a certain step. Please read the CANVAS with key Worker_available_tools to see more details about each tools.")
+                ] = Field(description=f"The one final tool your worker agent must use to obtain the desired output of a certain step. Please read the CANVAS with key Worker_available_tools to see more details about each tools.")
     # what would be that final one tool must use to obtain the desired output of a certain step
 
 class Plan(BaseModel):
@@ -258,12 +259,20 @@ def supervisor_chain_node(state, agent, name):
         supervisorMessage =  f"""
 The overall goal is: {state['inputs']}.
 
-Nothing has been done yet and there is no plan yet. 
+Nothing has been done yet and there is no plan yet.
 
-Please inspect and extract related information from CANVAS, then only update the plan accordingly if needed.
+Please inspect and extract related information from CANVAS, then build the initial plan.
 
-A mid-project report before production run and a final report at the very end are needed. Feel free to ask worker agent to generate other intermediate report if you think it's necessary to let judge evaluate what has been done.
-        """
+Important: you are a coordinator, not a domain expert. Before adding any
+execution steps to the plan (input file generation, job submission,
+calculations), consult with the DFT agent: what are the major calculations
+this objective requires? What known caveats apply to this system class?
+
+A mid-project report before production run and a final report at the
+very end are needed. Feel free to ask the worker agent to generate
+other intermediate reports if you think it is necessary to let the
+judge evaluate what has been done.
+"""
     else:
         supervisorMessage =  f"""
 The overall goal is: {state['inputs']}. 
@@ -278,6 +287,7 @@ the current plan is:
 {plan_str}
 
 Please inspect and extract related information from CANVAS, then only update the plan accordingly if needed.
+If you need to discuss with the worker agent insert extra step(s) at the beginning of the plan, and assign those step(s) to the worker agent you want to talk to.
         """
     old_supervisorMessage = supervisorMessage
     sup_good = False
@@ -323,6 +333,7 @@ Please inspect and extract related information from CANVAS, then only update the
                     "add_resource_suggestion",
                     "generate_structured_report",
                     "extract_text_from_tool_output",
+                    "find_optimal_parameter_from_derived",
                     "",
                 ]
                 # step.required_tools is no longer a list of tools
@@ -481,7 +492,11 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
         else:
             print(f"worker {name} finished the task successfully, now checking tool use...")
             # check if the worker used all required tools
-            tool_use_passed, tool_use_msg = CANVAS.check_required_tool_use(task.required_tools)
+            if task.required_tools == "" or task.required_tools == "submit_and_monitor_job":
+                tool_use_passed = True
+                tool_use_msg = "No required tools for this step."
+            else:
+                tool_use_passed, tool_use_msg = CANVAS.check_required_tool_use(task.required_tools)
             print(tool_use_msg)
             if tool_use_passed:
                 # LLM sanity check
@@ -609,6 +624,7 @@ def create_planning_graph(config: dict) -> StateGraph:
         calculate_lc,
         generate_convergence_test,
         find_optimal_parameter,
+        find_optimal_parameter_from_derived,
         generate_eos_test,
         read_energy_from_output,
         get_convergence_suggestions,

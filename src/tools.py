@@ -1232,7 +1232,7 @@ def write_QE_script_w_ASE(
     filename: Annotated[str, "Name of the Quantum Espresso input file, end with .pwi"],
     inputAtomsDir_w_ref: Annotated[Tuple[str, str], "Tuple of (input_atoms_dir, source_result_id). value at index 0 is the Directory of the input Atoms object (i.e. traj or xyz), or the name of the job that contains the relaxed structure (i.e. xxxx.pwi); value at index 1 is the reference source_result_id of the previous tool output where the structure was generated. The source_result_id accepts an 8-char id to reference the output, or `<8-char-id>.<param_name>` to reference an input parameter of a past tool call (see `list_referenceable_inputs`)."],
     ensembleCalculation: Annotated[bool, "Whether this calculation is ensemble calculation"],
-    calculation: Annotated[str, "Type of calculation to perform, e.g. 'scf', 'relax', or 'ensemble'. Set to 'ensemble', when running ensemble calculation, set to 'scf' when generating template for convergence test."],
+    calculation: Annotated[str, "Type of calculation to perform, e.g. 'scf', 'relax', or 'ensemble'. Set to 'ensemble', when running ensemble calculation, set to 'scf' when generating template for DFT parameter convergence test,  set to 'relax' when generating template for structural convergence test"],
     restart_mode: Annotated[Literal['from_scratch', 'restart'], "Restart mode"],
     prefix: Annotated[str, "Prefix for the output files"],
     disk_io: Annotated[Literal['none'], "Disk I/O level"],
@@ -1913,15 +1913,39 @@ def generate_convergence_test(
     ],
 ):
     '''
-    Using another QE input file as a template, generate convergence test
-    input scripts by varying ONE thing while keeping everything else the
-    same, and save the job list. Two modes: numerical parameter sweep
-    ('ecutwfc' / 'degauss' / 'kspacing') reuses the template structure
-    across jobs and varies only the named DFT parameter; structural sweep
-    ('inputAtomsDir') uses a different upstream-generated structure per
-    job with all DFT parameters inherited from the template, and kpoints
-    recomputed per-job from each structure's cell using the template's
-    kspacing.
+    Using another QE input file as a template, generate a BATCH of QE
+    input scripts by varying ONE thing while keeping everything else
+    the same, and save the job list.
+
+    NOTE on workflow: this tool generates one batch of input scripts.
+    For simple convergence tests where each data point is one DFT
+    calculation and the converging quantity is read directly from that
+    calculation's output, calling this tool once is enough — submit
+    the generated jobs and then call `find_optimal_parameter` on the
+    resulting .pwo files.
+
+    For more complex convergence tests where each data point's
+    converging quantity is a DERIVED value computed from multiple DFT
+    calculations (e.g. adsorption-energy convergence over slab
+    thickness — each data point's Eads needs clean-slab,
+    adsorbate-on-slab, and adsorbate-in-vacuum calculations), this
+    tool generates ONLY ONE of the needed batches. You will need to
+    call it again (or use other input-generation tools such as
+    `write_QE_script_w_ASE`) to produce the other DFT inputs needed
+    for each data point's derived-quantity calculation, then use
+    `calculate_formation_E` (or a similar derived-quantity tool) for
+    each data point, then use `find_optimal_parameter_from_derived`
+    on the resulting derived quantities. Do not assume one call of
+    this tool fully sets up the sweep — re-read the supervisor's
+    instructions and plan the per-batch breakdown accordingly.
+
+    Two modes: numerical parameter sweep ('ecutwfc' / 'degauss' /
+    'kspacing') reuses the template structure across jobs and varies
+    only the named DFT parameter; structural sweep ('inputAtomsDir')
+    uses a different upstream-generated structure per job with all
+    DFT parameters inherited from the template, and kpoints
+    recomputed per-job from each structure's cell using the
+    template's kspacing.
 
     reference_id in the output ties with: generated convergence-test job list, list[str]
     '''
@@ -2254,7 +2278,7 @@ def generate_convergence_test(
         for job_name in job_list
     }
 
-    return f"Job list is saved scucessfully. \nIDs for each generated files and their varying parameters are shown below:\n{out_id_dict}. Please tell the supervisor in your response that convergence job has generated sucessfully, please continue to submit the jobs"
+    return f"Job list is saved scucessfully. \nIDs for each generated files and their varying parameters are shown below:\n{out_id_dict}. \n\nThis batch is now ready. If your overall convergence test uses each generated file's energy as the converging quantity directly (single-output convergence), you can submit these jobs and then call `find_optimal_parameter`. If the converging quantity is a DERIVED value computed from multiple calculations (e.g. adsorption energy), this is only ONE of the input-script batches you need — confirm with the supervisor whether more input scripts must be generated before submission."
 
 
 # @tool
@@ -2927,7 +2951,14 @@ def find_optimal_parameter(
         "List of (parameter_value, source_result_id) pairs. Each parameter_value is the swept value used in the corresponding filename. Aligned by index with `filename_w_ref`. Each source_result_id accepts an 8-char id to reference the output, or `<8-char-id>.<param_name>` to reference an input parameter of a past tool call (see `list_referenceable_inputs`).",
     ],
     reference_file: Annotated[str, "Among the list of files, the reference_file filename corresponding to the most expensive / most accurate reference calculation."],
-    threshold: Annotated[float, "Maximum allowed absolute energy difference in eV from the reference energy."],
+    threshold: Annotated[float, "Maximum allowed absolute energy difference in eV from the reference energy (interpreted per the `comparison_mode` you choose: absolute total-energy diff in eV, or per-atom energy diff in eV/atom)."],
+    comparison_mode: Annotated[
+        Literal["absolute", "per_atom"],
+        "How to measure each file's energy difference from the reference. "
+        "'absolute' compares total energies directly (units: eV). "
+        "'per_atom' divides the absolute difference by the number of "
+        "atoms in each file (units: eV/atom)."
+    ],
     context: Annotated[
         str,
         "1-2 sentence describing which study or exploration this tool call "
@@ -2946,7 +2977,7 @@ def find_optimal_parameter(
         "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
         "supports it, and the expected effect on the output. "
         "The keys must include: 'sweeping_parameter', 'filename', 'parameters',"
-        "'reference_file', 'threshold'.",
+        "'reference_file', 'threshold', 'comparison_mode'.",
     ],
 ) -> Dict[str, Any]:
     """
@@ -2955,6 +2986,16 @@ def find_optimal_parameter(
     settings, and you want to find the cheapest setting of `sweeping_parameter`
     that still matches the reference within `threshold`. Run this once per
     parameter you want to optimize.
+
+    Use this tool when each data point's convergence quantity is the
+    energy read directly from a single .pwo file (the typical case for
+    DFT-settings convergence and for simple structural convergence
+    where the energy of a single calculation is the converging quantity).
+    For multi-step convergence — where the converging quantity is a
+    derived value computed from multiple DFT jobs (e.g. adsorption
+    energy convergence over slab thickness, where each data point's
+    Eads is the output of `calculate_formation_E` on three input
+    files) — use `find_optimal_parameter_from_derived` instead.
 
     `filename_w_ref` and `parameters_w_ref` must have equal length and be
     aligned by index: entry i is `(filename_i, ref_id_a)` and `(parameter_i,
@@ -3014,15 +3055,24 @@ def find_optimal_parameter(
     for filename, param_value in Filename_n_parameters:
         tmpAtom = read(os.path.join(WORKING_DIRECTORY, filename))
         energy = tmpAtom.get_potential_energy()
-        Ediff.append(abs(energy - reference_energy)/len(tmpAtom))
-        if abs(energy - reference_energy)/len(tmpAtom) <= threshold:
+        if comparison_mode == "per_atom":
+            diff = abs(energy - reference_energy) / len(tmpAtom)
+        else:  # "absolute"
+            diff = abs(energy - reference_energy)
+        Ediff.append(diff)
+        if diff <= threshold:
             acceptable.append((filename, param_value))
-        
+
+    ediff_ylabel = (
+        "Absolute Energy Difference per atom (eV/atom)"
+        if comparison_mode == "per_atom"
+        else "Absolute Energy Difference (eV)"
+    )
     plt.figure()
     plt.plot(bare_parameters, Ediff, marker='o')
     plt.xlabel(sweeping_parameter)
-    plt.ylabel('Absolute Energy Difference (eV)')
-    plt.title(f'Energy Difference from Reference vs {sweeping_parameter}')
+    plt.ylabel(ediff_ylabel)
+    plt.title(f'Energy Difference from Reference vs {sweeping_parameter} ({comparison_mode})')
     plt.axhline(y=threshold, color='r', linestyle='--', label='Threshold')
     plt.legend()
     plt.savefig(os.path.join(WORKING_DIRECTORY, f'{sweeping_parameter}_convergence_plot.png'))
@@ -3054,9 +3104,10 @@ def find_optimal_parameter(
             "parameters": bare_parameters,
             "reference_file": reference_file,
             "threshold": threshold,
+            "comparison_mode": comparison_mode,
         },
         value=chosen[1],
-        description=f"The most optimal parameter value for production run based on the reference file {reference_file} and the threshold {threshold}. The chosen parameter value is {chosen[1]} with file name {chosen[0]}. The tool automatically append .pwo to the all filenames to read the output files.",
+        description=f"The most optimal parameter value for production run based on the reference file {reference_file} and the threshold {threshold} ({comparison_mode} comparison). The chosen parameter value is {chosen[1]} with file name {chosen[0]}. The tool automatically append .pwo to the all filenames to read the output files.",
         reasons=merged_reasons,
         parent_result_ids=parent_result_ids,
         parent_result_ids_w_args=param_sources,
@@ -3064,6 +3115,415 @@ def find_optimal_parameter(
     )
 
     return f"Please choose {sweeping_parameter}={chosen[1]}. result_ID={id}."
+
+
+def _walk_to_axis_source(
+    start_ref: str,
+    target_bare_id: str,
+    max_depth: int = 50,
+) -> Tuple[bool, str]:
+    """Breadth-first walk from `start_ref` backward through
+    `parent_result_ids` looking for an artifact whose bare id equals
+    `target_bare_id`. Returns (found, trace_string).
+
+    `trace_string` is a human-readable, judge-readable summary of the
+    walk: the chain of artifact ids and tool names visited from
+    `start_ref` to `target_bare_id` (or the full set of ancestors
+    explored, if not found).
+
+    Dotted refs are tolerated in `parent_result_ids` (the dot suffix
+    is stripped for ID comparison and lookup).
+
+    The walker is depth-limited as a safety net; in practice chains
+    are short, but a cycle or pathological registry could otherwise
+    spin.
+    """
+    start_bare = start_ref.split(".", 1)[0] if "." in start_ref else start_ref
+    if start_bare == target_bare_id:
+        return True, f"{start_bare} (start == target)"
+
+    # BFS: queue entries are (bare_id, path_from_start).
+    visited: set = {start_bare}
+    queue: List[Tuple[str, List[Tuple[str, str]]]] = []
+
+    try:
+        start_artifact = CANVAS.get_artifact(start_bare)
+        start_tool = getattr(start_artifact, "tool_name", "?")
+    except Exception as e:                                  # noqa: BLE001
+        return False, f"could not load starting artifact {start_bare}: {e}"
+
+    queue.append((start_bare, [(start_bare, start_tool)]))
+
+    explored = 0
+    while queue and explored < max_depth:
+        cur_bare, path = queue.pop(0)
+        explored += 1
+        try:
+            artifact = CANVAS.get_artifact(cur_bare)
+        except Exception:                                   # noqa: BLE001
+            continue
+        parents = list(artifact.parent_result_ids or [])
+        for p in parents:
+            if not isinstance(p, str) or not p:
+                continue
+            p_bare = p.split(".", 1)[0] if "." in p else p
+            if p_bare in visited:
+                continue
+            visited.add(p_bare)
+            try:
+                p_artifact = CANVAS.get_artifact(p_bare)
+                p_tool = getattr(p_artifact, "tool_name", "?")
+            except Exception:                               # noqa: BLE001
+                p_tool = "?"
+            new_path = path + [(p_bare, p_tool)]
+            if p_bare == target_bare_id:
+                trace = " → ".join(f"{aid}({tn})" for aid, tn in new_path)
+                return True, trace
+            queue.append((p_bare, new_path))
+
+    # Not found.
+    visited_str = ", ".join(sorted(visited)) if visited else "(none)"
+    return False, f"target {target_bare_id} not reachable from {start_bare}; visited ancestors: {visited_str}"
+
+
+@tool
+def find_optimal_parameter_from_derived(
+    sweeping_parameter: Annotated[
+        str,
+        "Name of the parameter being characterized (e.g. 'n_fixed_layers', "
+        "'vacuum', 'supercell_dim_z', 'ecutwfc'). This is the axis along "
+        "which convergence is being tested. The value must appear as a "
+        "key in the args of an upstream artifact on each data point's "
+        "provenance chain; you declare the axis-source explicitly via "
+        "`axis_values_w_refs` (dotted refs) and the tool verifies the "
+        "binding by chain-walking from each data point back to that "
+        "source.",
+    ],
+    data_points_w_refs: Annotated[
+        List[Tuple[float, str]],
+        "List of (quantity_value, quantity_ref) pairs — one per data "
+        "point in the sweep. Each `quantity_value` is the converging "
+        "derived quantity (e.g. an adsorption energy in eV from a "
+        "`calculate_formation_E` call, a lattice constant from "
+        "`calculate_lc`, etc.); each `quantity_ref` is the "
+        "source_result_id of the tool call that produced that quantity. "
+        "Aligned by index with `axis_values_w_refs`.",
+    ],
+    axis_values_w_refs: Annotated[
+        List[Tuple[float, str]],
+        "List of (axis_value, axis_value_ref) pairs — one per data "
+        "point, aligned by index with `data_points_w_refs`. Each "
+        "`axis_value` is the value of `sweeping_parameter` for that "
+        "data point (e.g. 6 for n_fixed_layers=6). Each "
+        "`axis_value_ref` should be a DOTTED reference of the form "
+        "`<8-char-id>.<param_name>` pointing at the upstream artifact "
+        "whose args contain this sweeping axis value (typically the structure "
+        "or template artifact whose input parameter is being "
+        "characterized; use `list_referenceable_inputs` to discover "
+        "the available param names). "
+    ],
+    reference_ref: Annotated[
+        str,
+        "The quantity_ref (from `data_points_w_refs`) treated as the "
+        "most accurate reference (typically the most expensive / most "
+        "converged calculation). Must equal exactly one of the "
+        "second-element values of `data_points_w_refs`.",
+    ],
+    threshold: Annotated[
+        float,
+        "Maximum allowed absolute difference of each data point's "
+        "quantity from the reference's quantity. Units match the "
+        "derived quantity itself (e.g. eV for adsorption energy). The "
+        "tool always compares in absolute terms — if you want a "
+        "per-atom or otherwise normalized comparison, compute the "
+        "normalized quantity upstream before feeding it in here.",
+    ],
+    context: Annotated[
+        str,
+        "1-2 sentence describing which study or exploration this tool call "
+        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
+        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+        "'one-off check'), and the reason why you call this tool."
+    ],
+    reasons: Annotated[
+        Dict[str, str],
+        "Per-parameter rationale. For each parameter, write 2-3 sentences "
+        "covering: "
+        "(a) THE ROLE THIS PARAMETER plays in the study described in "
+        "`context` (e.g. 'being varied now', 'fixed at converged value from "
+        "prior convergence test', 'inherited from upstream tool', "
+        "'held fixed by design while a sub-study is in progress'); "
+        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
+        "supports it, and the expected effect on the output. "
+        "The keys must include: 'sweeping_parameter', 'data_points', "
+        "'axis_values', 'reference_ref', 'threshold'.",
+    ],
+):
+    """
+    Out of all supplied `axis_values` (different values of the sweeping_parameter),
+    find the cheapest value of `sweeping_parameter` whose DERIVED
+    convergence quantity, data_points, is within `threshold` of the reference data
+    point's quantity.
+
+    Use this tool for multi-step / derived-quantity convergence tests:
+    cases where each data point's converging quantity is not the energy
+    of a single .pwo file, but is computed from multiple DFT jobs via
+    a downstream tool (e.g. adsorption-energy convergence over slab
+    thickness, where each Eads comes from `calculate_formation_E`
+    aggregating clean-slab + adsorbate-on-slab + adsorbate-in-vacuum
+    jobs).
+
+    For the simpler case where each data point IS a single .pwo file
+    and the converging quantity is its energy directly, use
+    `find_optimal_parameter` instead.
+
+    reference_id in the output ties with: the most optimal parameter value for production run, float
+    """
+    # Length check.
+    if len(data_points_w_refs) != len(axis_values_w_refs):
+        return (
+            f"data_points_w_refs and axis_values_w_refs must have the "
+            f"same length; got {len(data_points_w_refs)} and "
+            f"{len(axis_values_w_refs)} respectively."
+        )
+
+    if len(data_points_w_refs) < 2:
+        return (
+            "At least 2 data points are required for a convergence "
+            f"selection; got {len(data_points_w_refs)}."
+        )
+
+    # Per-data-point verifications and chain reachability check.
+    bare_quantity_refs: List[str] = []
+    quantities: List[float] = []
+    axis_value_refs: List[str] = []
+    axis_values: List[float] = []
+    chain_traces: List[str] = []
+
+    for i, ((q_val, q_ref), (a_val, a_ref)) in enumerate(
+        zip(data_points_w_refs, axis_values_w_refs)
+    ):
+        # (1) Value-match on the derived quantity.
+        ok, msg = CANVAS.verify_artifact(q_val, q_ref)
+        if not ok:
+            return (
+                f"Data point {i} ({sweeping_parameter}=?, quantity="
+                f"{q_val}): verification of quantity_ref {q_ref!r} "
+                f"failed: {msg}"
+            )
+
+        # (2) Value-match on the axis value (typically a dotted ref).
+        ok, msg = CANVAS.verify_artifact(a_val, a_ref)
+        if not ok:
+            return (
+                f"Data point {i} ({sweeping_parameter}={a_val}): "
+                f"verification of axis_value_ref {a_ref!r} failed: "
+                f"{msg}. Hint: axis_value_ref is expected to be a "
+                f"dotted reference of the form "
+                f"`<8-char-id>.{sweeping_parameter}`."
+            )
+
+        # Require axis_value_ref to be a dotted reference. A bare
+        # output ref doesn't carry the per-parameter binding semantics
+        # we need; if the agent has a bare ref to an artifact whose
+        # output value is the axis value, they can wrap it via dotted
+        # addressing or use list_referenceable_inputs to find the
+        # right field.
+        if "." not in a_ref:
+            return (
+                f"Data point {i}: axis_value_ref {a_ref!r} must be a "
+                f"dotted reference of the form "
+                f"`<8-char-id>.<param_name>`. The dotted form is "
+                f"required so the binding from the data point to the "
+                f"named axis parameter is explicit. Use "
+                f"`list_referenceable_inputs` to discover available "
+                f"param names on an upstream artifact."
+            )
+        axis_bare = a_ref.split(".", 1)[0]
+        axis_field = a_ref.split(".", 1)[1]
+        if axis_field != sweeping_parameter:
+            return (
+                f"Data point {i}: axis_value_ref {a_ref!r} addresses "
+                f"field {axis_field!r}, but sweeping_parameter is "
+                f"{sweeping_parameter!r}. The dotted-ref field name "
+                f"must match the swept parameter so the binding is "
+                f"unambiguous."
+            )
+
+        # (3) Chain reachability: does axis_bare appear in the
+        #     ancestor set of q_ref?
+        q_bare = q_ref.split(".", 1)[0] if "." in q_ref else q_ref
+        found, trace = _walk_to_axis_source(q_bare, axis_bare)
+        if not found:
+            return (
+                f"Data point {i} ({sweeping_parameter}={a_val}, "
+                f"quantity={q_val}): the axis source artifact "
+                f"{axis_bare} is not reachable from the data point's "
+                f"quantity_ref {q_bare} via the provenance chain. "
+                f"This means the supplied axis_value_ref does not "
+                f"actually characterize this data point's quantity. "
+                f"Trace: {trace}"
+            )
+
+        bare_quantity_refs.append(q_bare)
+        quantities.append(float(q_val))
+        axis_value_refs.append(a_ref)
+        axis_values.append(float(a_val))
+        chain_traces.append(
+            f"  point {i}: {sweeping_parameter}={a_val} → "
+            f"quantity={q_val}; chain: {trace}"
+        )
+
+    # Locate the reference data point.
+    if reference_ref not in bare_quantity_refs:
+        # Allow the agent to supply either the bare or dotted form;
+        # compare against the bare list which is what we resolved.
+        ref_bare = (
+            reference_ref.split(".", 1)[0] if "." in reference_ref
+            else reference_ref
+        )
+        if ref_bare not in bare_quantity_refs:
+            return (
+                f"reference_ref {reference_ref!r} does not match any "
+                f"of the data points' quantity_refs. Supplied "
+                f"data-point refs: {bare_quantity_refs}."
+            )
+        reference_index = bare_quantity_refs.index(ref_bare)
+    else:
+        reference_index = bare_quantity_refs.index(reference_ref)
+
+    reference_quantity = quantities[reference_index]
+    reference_axis_value = axis_values[reference_index]
+
+    # Selection.
+    Qdiff: List[float] = []
+    acceptable: List[Tuple[int, float, float]] = []  # (index, axis_value, quantity)
+    for i, (a_val, q_val) in enumerate(zip(axis_values, quantities)):
+        diff = abs(q_val - reference_quantity)
+        Qdiff.append(diff)
+        if diff <= threshold:
+            acceptable.append((i, a_val, q_val))
+
+    # Convergence plot.
+    WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
+    try:
+        plt.figure()
+        # Sort by axis_value for a readable plot.
+        order = sorted(range(len(axis_values)), key=lambda k: axis_values[k])
+        plt.plot(
+            [axis_values[k] for k in order],
+            [Qdiff[k] for k in order],
+            marker='o',
+        )
+        plt.xlabel(sweeping_parameter)
+        plt.ylabel("Absolute difference of derived quantity")
+        plt.title(
+            f"Derived-quantity convergence vs {sweeping_parameter}"
+        )
+        plt.axhline(y=threshold, color='r', linestyle='--', label='Threshold')
+        plt.legend()
+        plt.savefig(
+            os.path.join(
+                WORKING_DIRECTORY,
+                f"{sweeping_parameter}_derived_convergence_plot.png",
+            )
+        )
+        plt.close()
+    except Exception:                                       # noqa: BLE001
+        # Plot failure should not abort the selection.
+        plt.close()
+
+    if len(acceptable) == 1:
+        return (
+            "Only the reference data point is within threshold. No "
+            "acceptable cheaper setting found. You MUST treat the "
+            "current sweep as insufficient. Leave a note on the "
+            "CANVAS and return immediately with success=False, then "
+            "request more runs with higher-accuracy settings beyond "
+            "the current reference value (rerun the convergence "
+            "tests on a more demanding axis range), and then repeat "
+            "the optimal-setting selection. However, if the "
+            "parameter value is already quite extreme, then this "
+            "may be caused by some other reason — you may suggest "
+            "the supervisor try out something else."
+        )
+
+    # Pick the acceptable point whose axis value is FARTHEST from the
+    # reference axis value — i.e. the "cheapest" point that still
+    # meets the threshold. Matches the cost-saving intent of the
+    # row-1 tool.
+    chosen_index, chosen_axis_value, chosen_quantity = max(
+        acceptable,
+        key=lambda t: abs(t[1] - reference_axis_value),
+    )
+
+    # Build a compact summary table for the registered description.
+    summary_lines: List[str] = []
+    summary_lines.append(
+        f"Convergence summary for {sweeping_parameter} via derived "
+        f"quantity:"
+    )
+    summary_lines.append(
+        f"  axis_value | quantity | |diff_from_ref| | accepted"
+    )
+    for i, (a_val, q_val, qd) in enumerate(
+        zip(axis_values, quantities, Qdiff)
+    ):
+        is_ref = " (REF)" if i == reference_index else ""
+        is_chosen = " (CHOSEN)" if i == chosen_index else ""
+        accepted_str = "yes" if qd <= threshold else "no"
+        summary_lines.append(
+            f"  {a_val} | {q_val} | {qd:.6g} | {accepted_str}"
+            f"{is_ref}{is_chosen}"
+        )
+    summary_lines.append("")
+    summary_lines.append("Per-data-point provenance traces:")
+    summary_lines.extend(chain_traces)
+
+    description = (
+        f"Optimal {sweeping_parameter} = {chosen_axis_value} selected "
+        f"from a derived-quantity convergence test. Reference data "
+        f"point: {sweeping_parameter}={reference_axis_value}, "
+        f"quantity={reference_quantity}. Threshold (absolute): "
+        f"{threshold}. "
+        f"\n\n"
+        + "\n".join(summary_lines)
+    )
+
+    # Provenance for the registered output.
+    #   parent_result_ids — every data point's bare quantity ref, plus
+    #     every distinct axis-source bare id.
+    axis_bare_ids = [a.split(".", 1)[0] for a in axis_value_refs]
+    parent_result_ids = list(set(bare_quantity_refs + axis_bare_ids))
+    param_sources: Dict[str, Any] = {
+        "data_points": bare_quantity_refs,
+        "axis_values": axis_value_refs,
+        "reference_ref": bare_quantity_refs[reference_index],
+    }
+
+    merged_reasons = _merge_context(context, reasons)
+
+    new_id = CANVAS.register_tool_output(
+        tool_name="find_optimal_parameter_from_derived",
+        args={
+            "sweeping_parameter": sweeping_parameter,
+            "data_points": quantities,
+            "axis_values": axis_values,
+            "reference_ref": bare_quantity_refs[reference_index],
+            "threshold": threshold,
+        },
+        value=chosen_axis_value,
+        description=description,
+        reasons=merged_reasons,
+        parent_result_ids=parent_result_ids,
+        parent_result_ids_w_args=param_sources,
+        metadata={},
+    )
+
+    return (
+        f"Please choose {sweeping_parameter}={chosen_axis_value}. "
+        f"result_ID={new_id}."
+    )
 
 
 @tool
