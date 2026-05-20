@@ -1454,13 +1454,13 @@ def browse_df(
         if art is None:
             return f"Error: Reference ID {df_name_ref} not found in CANVAS."
         
-    arg_ph = art.args["pHs"]
-    arg_us = art.args["Us"]
+    # arg_ph = art.args["pHs"]
+    # arg_us = art.args["Us"]
     arg_decomposition_threshold = art.args["decomposition_threshold"]
     arg_filter = art.args.get("filters", [])
     arg_sort = art.args.get("sort", [])
     
-    header = f"Browsing dataframe '{df_name}', created with pHs={arg_ph}, Us={arg_us}, decomposition_threshold={arg_decomposition_threshold}, filters={arg_filter}, sort={arg_sort}.\n"
+    header = f"Browsing dataframe '{df_name}', decomposition_threshold={arg_decomposition_threshold}, filters={arg_filter}, sort={arg_sort}.\n"
 
     # Ensure that the provided start/end indices to not exceed 50 (as speficied in the docstring/annotations):
     if endIdx - startIdx > 50:
