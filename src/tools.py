@@ -615,32 +615,26 @@ def read_explog(
 @tool
 def enter_candidate_in_log(
     reason_or_hypothesis: Annotated[str, "Detailed Reason and hypothesis for selecting this candidate. To be used later for analysis and summarization."],
-    df_name: Annotated[str, "Key of the dataframe in CANVAS containing the candidate entry."],
-    df_name_ref: Annotated[str, "Reference ID for the dataframe name, used for traceability."],
-    MaterialId: Annotated[str, "MaterialId of the candidate in the dataframe."],
+    MaterialId: Annotated[str, "MaterialId of the candidate."],
     MaterialId_ref: Annotated[str, "Reference ID of the result where you find the MaterialId of interests."],
     note: Annotated[str | None, "Any notes you want to add."] = None,
     ) -> str:
     """
-    Initialize a catalyst candidate from an AQ-GNoME dataframe in the experiment log (EXPLOG),
+    Initialize a catalyst candidate in the experiment log (EXPLOG),
     enabling it to be studied further with DFT.
 
-    Reads the candidate's structure from the dataframe stored in CANVAS under
-    `df_name`, initialises an OER catalyst study object.
+    Looks up the candidate's structure directly from the AQ-GNoME database by MaterialId
+    and initialises an OER catalyst study object.
     """
-    for ref in [df_name_ref, MaterialId_ref]:
-        if ref:
-            art = CANVAS.get_artifact(ref)
-            if art is None:
-                return f"Error: Reference ID {ref} not found in CANVAS."
+    if MaterialId_ref:
+        art = CANVAS.get_artifact(MaterialId_ref)
+        if art is None:
+            return f"Error: Reference ID {MaterialId_ref} not found in CANVAS."
 
-    afdb = CANVAS.canvas.get('afdb', None)
-    if afdb is None:
-        afdb = atoms_from_db(None)
-        CANVAS.canvas['afdb'] = afdb
-    
-    df = CANVAS.read(df_name)
-    atoms = afdb.get_atoms_material_id(MaterialId, df)
+    if MaterialId not in _STABILITY_CACHE.df['MaterialId'].values:
+        return f"Error: MaterialId {MaterialId} not found in the AQ-GNoME database."
+
+    atoms = _STABILITY_CACHE.afdb.get_atoms_material_id(MaterialId, _STABILITY_CACHE.df)
     
     CANVAS.write(f"{MaterialId}_OER_catalyst_study_atoms", atoms, 
                  overwrite=True)
@@ -668,18 +662,15 @@ def enter_candidate_in_log(
         tool_name="enter_candidate_in_log",
         args={
             "reason_or_hypothesis": reason_or_hypothesis,
-            "df_name": df_name,
             "MaterialId": MaterialId,
             "note": note,
         },
         value=message,
         description=f"Entry of candidate {MaterialId} into the experiment log with reason: {reason_or_hypothesis} and note: {note}.",
         reasons={'reason_or_hypothesis': reason_or_hypothesis},
-        parent_result_ids=[df_name_ref, MaterialId_ref],
+        parent_result_ids=[MaterialId_ref],
         metadata={
             "reason_or_hypothesis": reason_or_hypothesis,
-            "df_name": df_name,
-            "df_name_ref": df_name_ref,
             "MaterialId": MaterialId,
             "MaterialId_ref": MaterialId_ref,
             "note": note,
@@ -1170,30 +1161,35 @@ class _StabilityCache:
     MAX_MAGNETIC_SITES: int = 10
 
     def __init__(self):
-        print("  [1/4] Loading Data_Handler (CSVs + H5PY databases)...", flush=True)
+        print("  [1/5] Loading Data_Handler (CSVs + H5PY databases)...", flush=True)
         _t = time.time()
         self.dh = Data_Handler(solid_filter=self.SOLID_FILTER,
                                gga_only=self.GGA_ONLY,
                                path_to_data_directory=None)
-        print(f"  [1/4] Done in {time.time() - _t:.1f}s.", flush=True)
+        print(f"  [1/5] Done in {time.time() - _t:.1f}s.", flush=True)
 
-        print("  [2/4] Applying element filters...", flush=True)
+        print("  [2/5] Applying element filters...", flush=True)
         _t = time.time()
         self.dh.remove_entries_with_elements(self.ELEMENTS_TO_EXCLUDE)
         self.dh.remove_entries_without_elements(self.ELEMENTS_TO_INCLUDE, True)
-        print(f"  [2/4] Done in {time.time() - _t:.1f}s.", flush=True)
+        print(f"  [2/5] Done in {time.time() - _t:.1f}s.", flush=True)
 
-        print("  [3/4] Applying dimensionality filter (keep 3D only)...", flush=True)
+        print("  [3/5] Applying dimensionality filter (keep 3D only)...", flush=True)
         _t = time.time()
         wdf = self.dh._working_df
         wdf = wdf[wdf['Dimensionality Cheon'] == '3D']
         self.dh._working_df = wdf
-        print(f"  [3/4] Done in {time.time() - _t:.1f}s. Entries remaining: {len(wdf)}", flush=True)
+        print(f"  [3/5] Done in {time.time() - _t:.1f}s. Entries remaining: {len(wdf)}", flush=True)
 
-        print("  [4/4] Snapshotting filtered dataframe...", flush=True)
+        print("  [4/5] Snapshotting filtered dataframe...", flush=True)
         _t = time.time()
         self._df = self.dh.get_df()
-        print(f"  [4/4] Done in {time.time() - _t:.1f}s.", flush=True)
+        print(f"  [4/5] Done in {time.time() - _t:.1f}s.", flush=True)
+
+        print("  [5/5] Opening ASE atoms database...", flush=True)
+        _t = time.time()
+        self.afdb = atoms_from_db(None)
+        print(f"  [5/5] Done in {time.time() - _t:.1f}s.", flush=True)
 
     @property
     def df(self) -> pd.DataFrame:
