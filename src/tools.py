@@ -47,15 +47,12 @@ import contextlib
 from autocat.surface import generate_surface_structures
 from autocat.adsorption import get_adsorption_sites, get_adsorbate_height_estimate
 from pymatgen.io.ase import AseAtomsAdaptor
+from pymatgen.analysis.magnetism.analyzer import DEFAULT_MAGMOMS
 from src import var
 import pickle
 from ursa.agents import ArxivAgent
 
-from GNoME_aqueous_stability.src.gnome_aqueous_stability.data_utils import Data_Handler
-from GNoME_aqueous_stability.src.gnome_aqueous_stability.analysis_utils import (
-    Stable_Entries, Stability_Criteria, get_simplified_df, 
-    atoms_from_db
-)
+from aq_gnome import Data_Handler, Stable_Entries, Stability_Criteria, get_simplified_df, atoms_from_db
 from gnome_dreams_oer_screening.oer.oer_study import OER_catalyst_study
 from gnome_dreams_oer_screening.explog.explog import EXPLOG
 from gnome_dreams_oer_screening.vasp.magnetic_enumeration import (
@@ -1115,21 +1112,112 @@ def list_adsorption_sites(
     return f"{out_string}\nMessage_ID: {id}. Please refer to this ID if you want to refer back to this message later or use the adsorption sites information for further analysis or decision making."
 
 
+def _count_magnetic_sites_vectorized(compositions: pd.Series) -> pd.Series:
+    """
+    Vectorized alternative to applying count_magnetic_sites_from_formula row-by-row.
+
+    How it works:
+      1. str.extractall runs a single C-level regex pass over the entire Series,
+         pulling out every (element_symbol, count) pair from every formula string
+         at once — e.g. "Fe2O3" yields [("Fe","2"), ("O","3")].
+         The result is a multi-index DataFrame: outer index = original row index,
+         inner index = match number within that row.
+
+      2. We cast the count column to int and keep only rows whose element symbol
+         appears in _MAGNETIC_ELEMENTS (a frozenset built once from pymatgen's
+         DEFAULT_MAGMOMS keys).
+
+      3. groupby(level=0) groups by the original row index and sums the remaining
+         counts, giving one total per formula.
+
+      4. reindex restores any rows that had zero magnetic atoms (they were dropped
+         by the filter in step 2) and fills them with 0.
+
+    This avoids constructing a pymatgen Composition object per row, which is the
+    bottleneck in the .apply() approach on a database of hundreds of thousands of entries.
+
+    Assumes formulas always carry explicit integer counts per element
+    (e.g. "Cs1S6Zr3"), which holds for the GNoME dataset.
+    """
+    _magnetic_elements = frozenset(DEFAULT_MAGMOMS.keys())
+
+    extracted = compositions.str.extractall(r'([A-Z][a-z]?)(\d+)')
+    extracted.columns = ['element', 'count']
+    extracted['count'] = extracted['count'].astype(int)
+    extracted = extracted[extracted['element'].isin(_magnetic_elements)]
+    result = extracted.groupby(level=0)['count'].sum()
+    return result.reindex(compositions.index, fill_value=0)
+
+
+class _StabilityCache:
+    """
+    Initialised once at module load. Loads Data_Handler, applies all standard
+    screening filters, and stores the filtered df for the acidic-OER workflow.
+    """
+    SOLID_FILTER: bool = True
+    GGA_ONLY: bool = False
+    PHS: float = 0              # pH point (single value = exact grid point, not a range)
+    US: list[float] = [1.2, 2.0]  # U vs SHE window (V)
+
+    ELEMENTS_TO_EXCLUDE: list[str] = [
+        'P', 'B', 'S', 'C', 'F',
+        'Tc', 'Ra', 'Rf', 'Db', 'Sg', 'Bh', 'Hs', 'Mt', 'Ds', 'Rg', 'Cn',
+        'Nh', 'Fl', 'Mc', 'Lv', 'Ts', 'Og', 'Pm', 'Ac', 'Th', 'Pa',
+        'U', 'Np', 'Pu', 'Am', 'Cm', 'Bk', 'Cf', 'Es', 'Fm', 'Md', 'No',
+        'Lr', 'Po', 'At', 'Rn',
+    ]
+    ELEMENTS_TO_INCLUDE: list[str] = ['O']
+    MAX_MAGNETIC_SITES: int = 10
+
+    def __init__(self):
+        print("  [1/4] Loading Data_Handler (CSVs + H5PY databases)...", flush=True)
+        _t = time.time()
+        self.dh = Data_Handler(solid_filter=self.SOLID_FILTER,
+                               gga_only=self.GGA_ONLY,
+                               path_to_data_directory=None)
+        print(f"  [1/4] Done in {time.time() - _t:.1f}s.", flush=True)
+
+        print("  [2/4] Applying element filters...", flush=True)
+        _t = time.time()
+        self.dh.remove_entries_with_elements(self.ELEMENTS_TO_EXCLUDE)
+        self.dh.remove_entries_without_elements(self.ELEMENTS_TO_INCLUDE, True)
+        print(f"  [2/4] Done in {time.time() - _t:.1f}s.", flush=True)
+
+        print("  [3/4] Applying dimensionality filter (keep 3D only)...", flush=True)
+        _t = time.time()
+        wdf = self.dh._working_df
+        wdf = wdf[wdf['Dimensionality Cheon'] == '3D']
+        self.dh._working_df = wdf
+        print(f"  [3/4] Done in {time.time() - _t:.1f}s. Entries remaining: {len(wdf)}", flush=True)
+
+        print("  [4/4] Snapshotting filtered dataframe...", flush=True)
+        _t = time.time()
+        self._df = self.dh.get_df()
+        print(f"  [4/4] Done in {time.time() - _t:.1f}s.", flush=True)
+
+    @property
+    def df(self) -> pd.DataFrame:
+        return self._df.copy()
+
+print("Loading GNoME database into _STABILITY_CACHE (may take several minutes)...", flush=True)
+_t0 = time.time()
+_STABILITY_CACHE = _StabilityCache()
+print(f"GNoME database loaded in {time.time() - _t0:.1f}s.", flush=True)
+
+
 @tool
 def OER_data_analasis_v2(
-    pHs: Annotated[Union[List[float], float], "The pH in which the materials should be stable, may either be a float (specifying a single pH) or a pH range specified as two floats in a list i.e. [min, max]"],
-    Us: Annotated[Union[List[float], float], "Electrochemical potential in which the materials should be stable, may either be a float (specifying a single potential) or a potential range specified as two floats in a list i.e. [min, max]"],
+    # pHs: Annotated[Union[List[float], float], "The pH in which the materials should be stable, may either be a float (specifying a single pH) or a pH range specified as two floats in a list i.e. [min, max]"],
+    # Us: Annotated[Union[List[float], float], "Electrochemical potential in which the materials should be stable, may either be a float (specifying a single potential) or a potential range specified as two floats in a list i.e. [min, max]"],
     decomposition_threshold: Annotated[float, "Decomposition energy threshold for stability criteria, in units of eV/atom (pourbaix stability)"],
-    solid_filter: Annotated[bool, "Whether to apply solid filter: which excludes compounds from the Pourbaix-stability calculations which are not located on the solid-phase convex hull."],
-    gga_only: Annotated[bool, "Whether to use only GGA calculations (True), or include r2SCAN data via the MP-mixing scheme (False). GGA data will be applied when no r2SCAN data is available regardless."],
     save_name: Annotated[str, "Key under which the resulting dataframe is saved in CANVAS. Use a descriptive name to distinguish between runs with different criteria."],
-    reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'pHs', 'Us', 'decomposition_threshold', 'solid_filter', 'gga_only', 'save_name', 'filters', 'sort'"],
+    reasons: Annotated[Dict[str, str], "reason behind each parameter choice. For each parameter explain why do you make such choice? proof? what potential effect choosing such parameter has on the output? any hypothesis are you testing (it's okay to say no)? how did you obtained the value? The keys should be: 'decomposition_threshold', 'save_name', 'filters', 'sort'"],
     overwrite: Annotated[bool, "If True, overwrite an existing dataframe stored under the same key in CANVAS. If False (default), the tool will abort if a dataframe with that key already exists."] = False,
     # dir_of_data: Annotated[Optional[str], "Path to data directory. If None, use default data directory."] = None,
     # elements_to_exclude: Annotated[List[str], "List of element symbols to exclude from the analysis."] = [], 
     # elements_whic_must_be_included: Annotated[List[str], "List of element symbols that must be included in the analysis."] = [],
-    ref_pHs: Annotated[Union[List[str], str], "List or a single value of reference_ID where you determined the value of pH(s) from"] = "",
-    ref_Us: Annotated[Union[List[str], str], "List or a single value of reference_ID where you determined the value of potential(s) from"] = "",
+    # ref_pHs: Annotated[Union[List[str], str], "List or a single value of reference_ID where you determined the value of pH(s) from"] = "",
+    # ref_Us: Annotated[Union[List[str], str], "List or a single value of reference_ID where you determined the value of potential(s) from"] = "",
     filters: List[Filter] = [],
     sort: List[SortSpec] = [],
     ) -> str:
@@ -1148,66 +1236,42 @@ def OER_data_analasis_v2(
         - Elements P, B, S, C, F are excluded.
         - All radioactive elements are excluded.
         - Only O-containing materials are included.
+        - Candidates already present in the experiment log (EXPLOG) are excluded.
 
     The optional `filters` and `sort` parameters can be used to further refine
     or order the results based on the output dataframe columns.
     """
     
     # verify refs
+    # for refs in [ref_pHs, ref_Us]:
+    #     refs = refs if isinstance(refs, list) else [refs]
+    #     for ref in refs:
+    #         if ref:
+    #             art = CANVAS.get_artifact(ref)
+    #             if art is None:
+    #                 return f"Error: Reference ID {ref} not found in CANVAS."
     
-    for refs in [ref_pHs, ref_Us]:
-        refs = refs if isinstance(refs, list) else [refs]
-        for ref in refs:
-            if ref:
-                art = CANVAS.get_artifact(ref)
-                if art is None:
-                    return f"Error: Reference ID {ref} not found in CANVAS."
-            
+    # Data handler with all standard filters pre-applied:
+    dh = _STABILITY_CACHE.dh  
 
-    dh = Data_Handler(
-    # Whether to apply solid filter:
-        solid_filter = solid_filter, 
-    # Whether to use only GGA calculations (True), or include r2SCAN data via the MP-mixing scheme (False):
-        gga_only = gga_only,
-    # Path to data directory. None if not specified in config yaml:
-        path_to_data_directory = var.OTHER_GLOBAL_VARIABLES.get('path_to_data_directory', None)
-        
-        )
-    
-    # ------------------------------------------------------------------
-    # A USER DEFINED FILTER: <<< ---- NOTE edit also dock string if this is removed
-    elements_to_exclude = ['P', 'B', 'S', 'C', 'F'] 
-    elements_whic_must_be_included = ['O']
-
-    # Add radioactive elements to the exclusion list:
-    radioactive_elements = ['Tc',  'Ra', 'Rf', 'Db', 'Sg', 'Bh', 'Hs',
-                            'Mt', 'Ds', 'Rg', 'Cn', 'Nh', 'Fl', 'Mc', 
-                            'Lv', 'Ts', 'Og', 'Pm', 'Ac', 'Th', 'Pa', 
-                            'U', 'Np', 'Pu', 'Am', 'Cm', 'Bk', 'Cf', 
-                            'Es', 'Fm', 'Md', 'No', 'Lr', 'Po', 'At', 
-                            'Rn']
-    elements_to_exclude += radioactive_elements
-    
-    if len(elements_to_exclude) > 0:
-        dh.remove_entries_with_elements(elements_to_exclude)
-    if len(elements_whic_must_be_included) > 0:
-        dh.remove_entries_without_elements(elements_whic_must_be_included, True)
-    # ------------------------------------------------------------------
-    
-    SCS = [Stability_Criteria(pHs=pHs, Us=Us, decomposition_threshold=decomposition_threshold)]
-    
+    # Stablity criteria, with decomposition threshold set by the agent:
+    SCS = [Stability_Criteria(pHs = _STABILITY_CACHE.PHS,
+                              Us = _STABILITY_CACHE.US,
+                              decomposition_threshold = decomposition_threshold)]
+    # Define the sorter object, and get entries that satisfy the stability criteria:
     se = Stable_Entries(dh, SCS)
-    df = se.get_stable_df()
+    df = se.get_stable_df() # df with stable entries
 
-    # ------------------------------------------------------------------
-    # Prost processing removal:
-    df = df[df['Dimensionality Cheon'] == '3D'] # 3D cells only!
-    df = df.loc[df["Composition"].apply(count_magnetic_sites_from_formula) 
-                <= 10] # NOTE HARD LIMIT ON MAGNETIC ATOMS IN UNTCELL
-    # ------------------------------------------------------------------
+    # Applied here (not at cache load time) because it runs row-by-row in Python
+    # and is fast on the small stable subset but slow on the full database.
+    df = df[df['Composition'].apply(count_magnetic_sites_from_formula) <= _STABILITY_CACHE.MAX_MAGNETIC_SITES]
+
+    # Exclude candidates already being studied in the experiment log
+    explog_ids = set(EXPLOG.relational_frame.candidates.df["candidate_id"].tolist())
+    df = df[~df['MaterialId'].isin(explog_ids)]
     
     df = df_query(df, filters, sort)
-    df = get_simplified_df(df) # <<<<---- new change 2026-02-18
+    df = get_simplified_df(df)
     if len(df) == 0:
         return "No stable entries found based on the specified criteria and filters."
     
@@ -1221,28 +1285,26 @@ def OER_data_analasis_v2(
     if "already exists" in canvas_result:
         return f"Aborted: {canvas_result} Use overwrite=True to overwrite."
     
-    tmp_ref_pHs = ref_pHs if isinstance(ref_pHs, list) else [ref_pHs]
-    tmp_ref_Us = ref_Us if isinstance(ref_Us, list) else [ref_Us]
+    # tmp_ref_pHs = ref_pHs if isinstance(ref_pHs, list) else [ref_pHs]
+    # tmp_ref_Us = ref_Us if isinstance(ref_Us, list) else [ref_Us]
     
-    parent_result_ids = [ref for ref in [*tmp_ref_pHs, *tmp_ref_Us] if ref] # only include non-empty refs
-    print("from tool OER_data_analasis_v2, parent_result_ids determined to be:")
-    print(parent_result_ids)
+    # parent_result_ids = [ref for ref in [*tmp_ref_pHs, *tmp_ref_Us] if ref] # only include non-empty refs
+    # print("from tool OER_data_analasis_v2, parent_result_ids determined to be:")
+    # print(parent_result_ids)
     
     df_id = CANVAS.register_tool_output(
         tool_name="OER_data_analasis_v2",
         args={
-            "pHs": pHs,
-            "Us": Us,
+            # "pHs": pHs,
+            # "Us": Us,
             "decomposition_threshold": decomposition_threshold,
-            "solid_filter": solid_filter,
-            "gga_only": gga_only,
             "save_name": save_name,
             "overwrite": overwrite,
         },
         value=save_name,
         description=f"key name of the saved dataframe",
         reasons=reasons,
-        parent_result_ids=parent_result_ids,
+        # parent_result_ids=parent_result_ids,
         metadata={},
     )
     
@@ -1255,24 +1317,74 @@ def OER_data_analasis_v2(
     result_id = CANVAS.register_tool_output(
         tool_name="OER_data_analasis_v2",
         args={
-            "pHs": pHs,
-            "Us": Us,
+            # "pHs": pHs,
+            # "Us": Us,
             "decomposition_threshold": decomposition_threshold,
-            "solid_filter": solid_filter,
-            "gga_only": gga_only,
             "save_name": save_name,
             "overwrite": overwrite,
         },
         value=outStr,
         description=f"Out string of the tool",
         reasons=reasons,
-        parent_result_ids=parent_result_ids,
+        # parent_result_ids=parent_result_ids,
         metadata={},
     )
     
     outStr += f"\nIf you want to reference any other information of the tool result, please refer to the result ID {result_id} if you need to use them to make decisions or conclusions."
     
     return outStr
+
+
+
+
+@tool
+def get_candidate_data(
+    material_ids: Annotated[List[str], "List of MaterialIds to retrieve from the database."],
+) -> str:
+    """
+    For a given list of MaterialIds, retrieve their full database rows from the
+    AQ-GNoME dataset, including composition, bandgap, HHI availability/cost indices,
+    disorder probability, and other properties.
+
+    An additional column is appended with the worst-case Pourbaix decomposition
+    energy (eV/atom) across the standard acidic-OER window stored in
+    _STABILITY_CACHE (pH 0, U [1.2, 2.0] V vs SHE). The column is named
+    e.g. 'max_dG_U[1.2,2.0]_pH0'. Lower values mean greater thermodynamic
+    stability; negative values are fully stable in the window.
+
+    Standard filters are pre-applied (solid_filter=True, gga_only=False, O-containing,
+    no P/B/S/C/F/radioactives, 3D only, ≤10 magnetic sites). Results are sorted
+    by the stability column ascending.
+    """
+    df = _STABILITY_CACHE.df  # returns a copy via @property
+    df = df[df['MaterialId'].isin(material_ids)]
+
+    not_found = [mid for mid in material_ids if mid not in df['MaterialId'].values]
+    # TODO: reconsider handling before production — currently raises hard error
+    if not_found:
+        raise ValueError(f"MaterialIds not found in database: {not_found}")
+
+    dh = _STABILITY_CACHE.dh
+    # decomposition_threshold=10**5: dummy large value — only window indices are used, never evaluate()
+    sc = Stability_Criteria(pHs=_STABILITY_CACHE.PHS, Us=_STABILITY_CACHE.US,
+                            decomposition_threshold=10**5)
+
+    max_decomp_values = []
+    for _, row in df.iterrows():
+        mixed_pbx_id = row['mixed_pbx_save_id']
+        if mixed_pbx_id != 'Not computed':
+            decom_G = dh.mixed_results.read_id(mixed_pbx_id)
+        else:
+            decom_G = dh.gga_results.read_id(row['gga_only_pbx_save_id'])
+        max_decomp_values.append(sc.max_dG_in_region(decom_G))
+
+    df = df.copy()
+    df[sc.col_name] = max_decomp_values
+    df = df.sort_values(sc.col_name)
+    df = get_simplified_df(df)
+
+    return df.to_string(index=True)
+
 
 # @tool
 # def extract_df(
