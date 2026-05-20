@@ -77,31 +77,31 @@ except ImportError:
 ##################################################################################################
 import asyncio  # If needed for defining async_func
 
-# async def _arXiv_search(arxiv_search_query, context):  # Your async operation
-#     config = var.OTHER_GLOBAL_VARIABLES
-#     ursaWorkspace = Path(os.path.join(var.my_WORKING_DIRECTORY, "ursa_workspace"))
-#     llm = ChatAnthropic(model="claude-haiku-4-5-20251001", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-#     agent = ArxivAgent(llm=llm, process_images=False, max_results=1, workspace=ursaWorkspace)
-#     result = await agent.ainvoke(
-#         arxiv_search_query=arxiv_search_query, 
-#         context=context
-#     )
-#     os.makedirs(ursaWorkspace/"arxiv_papers_used", exist_ok=True)
-#     # move all files under ursaWorkspace / "arxiv_papers" into ursaWorkspace/"arxiv_papers_used"
-#     for file in os.listdir(ursaWorkspace/"arxiv_papers"):
-#         os.rename(ursaWorkspace/"arxiv_papers"/file, ursaWorkspace/"arxiv_papers_used"/file)
-    
-#     return result["final_summary"]
-
-# FOR DEMO 
 async def _arXiv_search(arxiv_search_query, context):  # Your async operation
     config = var.OTHER_GLOBAL_VARIABLES
+    ursaWorkspace = Path(os.path.join(var.my_WORKING_DIRECTORY, "ursa_workspace"))
     llm = ChatAnthropic(model="claude-haiku-4-5-20251001", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-    result = await llm.ainvoke(
-        [("user", f"Please answer the question: {arxiv_search_query} with context: {context}.")]
+    agent = ArxivAgent(llm=llm, process_images=False, max_results=3, workspace=ursaWorkspace)
+    result = await agent.ainvoke(
+        arxiv_search_query=arxiv_search_query, 
+        context=context
     )
+    os.makedirs(ursaWorkspace/"arxiv_papers_used", exist_ok=True)
+    # move all files under ursaWorkspace / "arxiv_papers" into ursaWorkspace/"arxiv_papers_used"
+    for file in os.listdir(ursaWorkspace/"arxiv_papers"):
+        os.rename(ursaWorkspace/"arxiv_papers"/file, ursaWorkspace/"arxiv_papers_used"/file)
     
-    return result.content
+    return result["final_summary"]
+
+# FOR DEMO 
+# async def _arXiv_search(arxiv_search_query, context):  # Your async operation
+#     config = var.OTHER_GLOBAL_VARIABLES
+#     llm = ChatAnthropic(model="claude-haiku-4-5-20251001", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+#     result = await llm.ainvoke(
+#         [("user", f"Please answer the question: {arxiv_search_query} with context: {context}.")]
+#     )
+    
+#     return result.content
 
 
 @tool
@@ -1300,6 +1300,8 @@ def OER_data_analasis_v2(
             "decomposition_threshold": decomposition_threshold,
             "save_name": save_name,
             "overwrite": overwrite,
+            "filters":filters, 
+            "sort":sort
         },
         value=save_name,
         description=f"key name of the saved dataframe",
@@ -1441,11 +1443,19 @@ def browse_df(
     Returns the selected rows as a string with row index. The row index refers to
     the position in the filtered/sorted dataframe, not the original stored dataframe.
     """
-    for ref in [df_name_ref]:
-        if ref:
-            art = CANVAS.get_artifact(ref)
-            if art is None:
-                return f"Error: Reference ID {ref} not found in CANVAS."
+    
+    if df_name_ref:
+        art = CANVAS.get_artifact(df_name_ref)
+        if art is None:
+            return f"Error: Reference ID {df_name_ref} not found in CANVAS."
+        
+    arg_ph = art.args["pHs"]
+    arg_us = art.args["Us"]
+    arg_decomposition_threshold = art.args["decomposition_threshold"]
+    arg_filter = art.args.get("filters", [])
+    arg_sort = art.args.get("sort", [])
+    
+    header = f"Browsing dataframe '{df_name}', created with pHs={arg_ph}, Us={arg_us}, decomposition_threshold={arg_decomposition_threshold}, filters={arg_filter}, sort={arg_sort}.\n"
 
     # Ensure that the provided start/end indices to not exceed 50 (as speficied in the docstring/annotations):
     if endIdx - startIdx > 50:
@@ -1464,7 +1474,7 @@ def browse_df(
     if total > endIdx:
         footer += f" Call again with startIdx={endIdx} to see more rows."
         
-    outStr = result + footer
+    outStr = header + result + footer
     
     id = CANVAS.register_tool_output(
         tool_name="browse_df",
