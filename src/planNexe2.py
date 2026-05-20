@@ -847,6 +847,7 @@ def create_planning_graph(config: dict) -> StateGraph:
         read_my_canvas,
         inspect_explog,
         query_explog,
+        get_candidate_data,
         ]
     
     supervisor_agent = create_agent(
@@ -916,7 +917,8 @@ def create_planning_graph(config: dict) -> StateGraph:
         wait_for_update,
         query_explog,
         math_expression_tool,
-        extract_numeric_from_tool_output
+        extract_numeric_from_tool_output,
+        get_candidate_data,
         ]
     # oer_agent = create_react_agent(workerllm, tools=oer_tools,
     #                                prompt=oer_agent_prompt)

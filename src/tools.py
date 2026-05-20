@@ -1342,32 +1342,32 @@ def OER_data_analasis_v2(
 @tool
 def get_candidate_data(
     material_ids: Annotated[List[str], "List of MaterialIds to retrieve from the database."],
+    sort: List[SortSpec] = [],
 ) -> str:
     """
-    For a given list of MaterialIds, retrieve their full database rows from the
-    AQ-GNoME dataset, including composition, bandgap, HHI availability/cost indices,
-    disorder probability, and other properties.
+    Retrieve database rows for one or more MaterialIds from the AQ-GNoME dataset.
 
-    An additional column is appended with the worst-case Pourbaix decomposition
-    energy (eV/atom) across the standard acidic-OER window stored in
-    _STABILITY_CACHE (pH 0, U [1.2, 2.0] V vs SHE). The column is named
-    e.g. 'max_dG_U[1.2,2.0]_pH0'. Lower values mean greater thermodynamic
-    stability; negative values are fully stable in the window.
+    Returns a table with columns: MaterialId, Composition, Reduced Formula, Elements,
+    NSites, Crystal System, Bandgap, Disorder Probability, average_HHI_P,
+    average_HHI_R, average_HHI_P_excluding_O_H, average_HHI_R_excluding_O_H,
+    max_HHI_P, max_HHI_R, and the maximum (worst-case) Pourbaix decomposition energy
+    (eV/atom) across pH=0 and U in [1.2, 2.0] V vs SHE. A value d 0 eV/atom means
+    the material is the most stable known phase in the range. Larger positive values
+    indicate the material is increasingly prone to decompose into more stable phases.
+    By default results are returned in the same order as the input `material_ids` list;
+    use the `sort` parameter to override.
 
-    Standard filters are pre-applied (solid_filter=True, gga_only=False, O-containing,
-    no P/B/S/C/F/radioactives, 3D only, ≤10 magnetic sites). Results are sorted
-    by the stability column ascending.
+    If a requested MaterialId is not found in the screened database, it is reported
+    in the return string.
     """
-    df = _STABILITY_CACHE.df  # returns a copy via @property
+    df = _STABILITY_CACHE.df
     df = df[df['MaterialId'].isin(material_ids)]
 
     not_found = [mid for mid in material_ids if mid not in df['MaterialId'].values]
-    # TODO: reconsider handling before production — currently raises hard error
-    if not_found:
-        raise ValueError(f"MaterialIds not found in database: {not_found}")
+    if df.empty:
+        return f"None of the requested MaterialIds were found in the screened database: {not_found}"
 
     dh = _STABILITY_CACHE.dh
-    # decomposition_threshold=10**5: dummy large value — only window indices are used, never evaluate()
     sc = Stability_Criteria(pHs=_STABILITY_CACHE.PHS, Us=_STABILITY_CACHE.US,
                             decomposition_threshold=10**5)
 
@@ -1382,10 +1382,19 @@ def get_candidate_data(
 
     df = df.copy()
     df[sc.col_name] = max_decomp_values
-    df = df.sort_values(sc.col_name)
+
+    if sort:
+        df = df_query(df, filters=[], sort=sort)
+    else:
+        id_order = {mid: i for i, mid in enumerate(material_ids)}
+        df = df.sort_values('MaterialId', key=lambda col: col.map(id_order))
+
     df = get_simplified_df(df)
 
-    return df.to_string(index=True)
+    out = df.to_string(index=True)
+    if not_found:
+        out += f"\nNote: the following MaterialIds were not found in the screened database: {not_found}"
+    return out
 
 
 # @tool
