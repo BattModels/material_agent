@@ -492,11 +492,12 @@ You have a maximum of 1 hours to complete the entire study and make your final r
     CANVAS.write("Worker_available_tools", Worker_available_tools)
 
 
+    print("Building agent graph...", flush=True)
     rawGraph = create_planning_graph(config)
     # graph = create_graph(config)
     llm_config = {"thread_id": "1", 'recursion_limit': 2000}
 
-    print("Start, check the log file for details")
+    print("Start, check the log file for details", flush=True)
     log_filename = f"./log/agent_stream_{int(time.time())}.log"  # Add timestamp to filename
     with open(log_filename, "a") as log_file:
         log_file.write(f"=== Session started at {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n\n")
@@ -513,7 +514,7 @@ You have a maximum of 1 hours to complete the entire study and make your final r
 
         if overwrite:
             inputs = {
-                "inputs": f"{revised_message_v6}",
+                "inputs": f"{minimal_test_message}",
                 "plan": [],
                 "past_steps": [],
                 # NOTE: init boss answers state explicitly...
@@ -551,7 +552,7 @@ You have a maximum of 1 hours to complete the entire study and make your final r
             print(f"Time since the start of the session: {time.time() - var.startTime} seconds")
             llm_config = snap.config
             CANVAS.canvas = snap.values["canvas"]
-            CANVAS.result_registry = snap.values["artifacts"]
+            CANVAS.result_registry = snap.values.get("artifacts", {})
             CANVAS.print()
             print(CANVAS)
             EXPLOG.relational_frame.candidates.df = snap.values["explog_candidates"]
