@@ -552,7 +552,7 @@ You have a maximum of 1 hours to complete the entire study and make your final r
             print(f"Time since the start of the session: {time.time() - var.startTime} seconds")
             llm_config = snap.config
             CANVAS.canvas = snap.values["canvas"]
-            CANVAS.result_registry = snap.values.get("artifacts", {})
+            CANVAS.result_registry = snap.values["artifacts"]
             CANVAS.print()
             print(CANVAS)
             EXPLOG.relational_frame.candidates.df = snap.values["explog_candidates"]

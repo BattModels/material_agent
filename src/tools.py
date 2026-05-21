@@ -617,6 +617,8 @@ def enter_candidate_in_log(
     reason_or_hypothesis: Annotated[str, "Detailed Reason and hypothesis for selecting this candidate. To be used later for analysis and summarization."],
     MaterialId: Annotated[str, "MaterialId of the candidate."],
     MaterialId_ref: Annotated[str, "Reference ID of the result where you find the MaterialId of interests."],
+    # TODO: make required — remove = "" and add: if not df_name_ref: return "Error: df_name_ref must be provided."
+    df_name_ref: Annotated[str, "Reference ID of the dataframe result (e.g. from OER_data_analasis_v2 or browse_df) used to select this candidate. Used for DAG provenance only."] = "",
     note: Annotated[str | None, "Any notes you want to add."] = None,
     ) -> str:
     """
@@ -626,10 +628,11 @@ def enter_candidate_in_log(
     Looks up the candidate's structure directly from the AQ-GNoME database by MaterialId
     and initialises an OER catalyst study object.
     """
-    if MaterialId_ref:
-        art = CANVAS.get_artifact(MaterialId_ref)
-        if art is None:
-            return f"Error: Reference ID {MaterialId_ref} not found in CANVAS."
+    for ref in [MaterialId_ref, df_name_ref]:
+        if ref:
+            art = CANVAS.get_artifact(ref)
+            if art is None:
+                return f"Error: Reference ID {ref} not found in CANVAS."
 
     if MaterialId not in _STABILITY_CACHE.df['MaterialId'].values:
         return f"Error: MaterialId {MaterialId} not found in the AQ-GNoME database."
@@ -668,11 +671,12 @@ def enter_candidate_in_log(
         value=message,
         description=f"Entry of candidate {MaterialId} into the experiment log with reason: {reason_or_hypothesis} and note: {note}.",
         reasons={'reason_or_hypothesis': reason_or_hypothesis},
-        parent_result_ids=[MaterialId_ref],
+        parent_result_ids=[r for r in [MaterialId_ref, df_name_ref] if r],
         metadata={
             "reason_or_hypothesis": reason_or_hypothesis,
             "MaterialId": MaterialId,
             "MaterialId_ref": MaterialId_ref,
+            "df_name_ref": df_name_ref,
             "note": note,
         }
     )
@@ -1436,7 +1440,7 @@ def browse_df(
     sorting, and pagination.
 
     Filters and sort are applied first to the full dataframe, then the specified
-    row window [startIdx, endIdx) is returned. This allows systematic exploration
+    row window [startIdx, endIdx] is returned. This allows systematic exploration
     of large dataframes — for example, narrowing down candidates by column
     values without modifying the stored dataframe.
 
@@ -1868,6 +1872,7 @@ def math_expression_tool(
     Evaluate a math expression on arbitrary input floats.
     Inputs are mapped by order to x0, x1, x2, ...
     reference_id in the output ties with: computed math result, float
+    Never recaluclate resutls in the EXPLOG.
     """
     if not values_w_ref:
         return "No values were provided."

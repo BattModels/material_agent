@@ -67,8 +67,9 @@ class myStep(BaseModel):
                             "read_explog",
                             "wait_for_update",
                             "query_explog",
-                            "math_expression_tool",
-                            "extract_numeric_from_tool_output",
+                            # "math_expression_tool",
+                            # "extract_numeric_from_tool_output",
+                            "get_candidate_data",
                             "write_report",
                             ""
                 ]] = Field(f"must-use tools for this step, should be a subset of the tools available to the agent. read the CANVAS with key Worker_available_tools to see more details about each tools.")
@@ -545,9 +546,10 @@ def supervisor_chain_node(state, agent, name):
                     "read_explog",
                     "wait_for_update",
                     "query_explog",
-                    "math_expression_tool",
-                    "extract_numeric_from_tool_output",
+                    # "math_expression_tool",
+                    # "extract_numeric_from_tool_output",
                     "write_report",
+                    "get_candidate_data",
                     ""
                 ]
                 wrongTools = set(step.required_tools) - set(ToolList)
@@ -847,7 +849,6 @@ def create_planning_graph(config: dict) -> StateGraph:
         read_my_canvas,
         inspect_explog,
         query_explog,
-        get_candidate_data,
         ]
     
     supervisor_agent = create_agent(
@@ -916,8 +917,8 @@ def create_planning_graph(config: dict) -> StateGraph:
         read_explog,
         wait_for_update,
         query_explog,
-        math_expression_tool,
-        extract_numeric_from_tool_output,
+        # math_expression_tool,
+        # extract_numeric_from_tool_output,
         get_candidate_data,
         ]
     # oer_agent = create_react_agent(workerllm, tools=oer_tools,
