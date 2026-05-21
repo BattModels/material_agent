@@ -422,6 +422,24 @@ def old_inspect_explog(only_get_updates: Annotated[bool, "Whether to only get up
 
     return finalAnswer
 
+def _drop_redundant_oh_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """For each OH adsorption group (same candidate, termination, and site index),
+    keep only the row with the final G(OH) value. Groups with no G(OH) value
+    (all failed or still in progress) are kept in full."""
+    oh_mask = df['job_type'] == 'OH_adsorption'
+    if not oh_mask.any():
+        return df
+    group_keys = ['candidate_id', 'termination_index', 'site_index']
+    has_winner = (
+        df.loc[oh_mask]
+        .groupby(group_keys, dropna=False)['G(OH)']
+        .transform(lambda x: x.notna().any())
+    )
+    redundant = pd.Series(False, index=df.index)
+    redundant.loc[oh_mask] = df.loc[oh_mask, 'G(OH)'].isna() & has_winner
+    return df[~redundant]
+
+
 @tool
 def query_explog(
     table_name: Annotated[str, "Table to query: 'candidates' (one row per candidate, with best available OER metrics) or 'processes' (one row per DFT job, with per-site adsorption energies and overpotentials)."],
@@ -479,22 +497,7 @@ def query_explog(
     filteredDF = df_query(df, filters, sort)
 
     if hide_redundant_oh and table_name == 'processes':
-        oh_mask = filteredDF['job_type'] == 'OH_adsorption'
-        if oh_mask.any():
-            group_keys = ['candidate_id', 'termination_index', 'site_index']
-            # Each OH site submits 3 jobs (varied initial positions) to find the global minimum.
-            # Once a winner exists (G(OH) non-NaN), the other rows for that site carry no
-            # information. Flag groups that contain at least one populated G(OH) value.
-            has_winner = (
-                filteredDF.loc[oh_mask]
-                .groupby(group_keys, dropna=False)['G(OH)']
-                .transform(lambda x: x.notna().any())
-            )
-            # A row is redundant if it is an OH job with no G(OH) value and its group has a winner.
-            # Groups with no winner (all failed/pending) are kept in full.
-            redundant = pd.Series(False, index=filteredDF.index)
-            redundant.loc[oh_mask] = filteredDF.loc[oh_mask, 'G(OH)'].isna() & has_winner
-            filteredDF = filteredDF[~redundant]
+        filteredDF = _drop_redundant_oh_rows(filteredDF)
 
     total_rows = len(filteredDF)
     end_idx = min(start_idx + 50, total_rows)
@@ -540,6 +543,9 @@ def read_explog(
     Details such as the site type, on-top element, closest neighboring elements, reduced coordination, G(O), G(OH),
     G(OOH) from the OH-OOH scaling relation, ideal overpotential, and overpotential from the scaling relation are
     provided given the necessary calculations have finished.
+
+    Three OH jobs are run per site to find the global minimum. Only the global minimum row
+    (G(OH) populated) is shown once it is available.
     """
     _ = EXPLOG.update_log() # get the latest updates from the job handler and update the relational frame accordingly
     # save EXPLOG into a pickle file under WORKING_DIRECTORY for record and future reference
@@ -548,8 +554,9 @@ def read_explog(
     cadidate_row_df = EXPLOG.relational_frame.candidates[candidate_id].df
     cadidate_row_df = cadidate_row_df.copy().drop(columns=["study_obj"])
     related_process_df = EXPLOG.relational_frame.candidates[candidate_id].processes.df
-    related_process_df = related_process_df.copy().drop(columns=["VASP_dir"])    
-    
+    related_process_df = related_process_df.copy().drop(columns=["VASP_dir"])
+    related_process_df = _drop_redundant_oh_rows(related_process_df)
+
     answer = f"Candidate information:\n{cadidate_row_df.to_string(index=False)}\n\nRelated processes information:\n{related_process_df.to_string(index=False)}\n"
     # for each row in related_process_df, if the job_type is either O_adsorption or OH_adsorption, add the corresponding site information to the answer by calling the _list_adsorption_sites function
     
