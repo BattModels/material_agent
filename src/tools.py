@@ -86,7 +86,7 @@ async def _arXiv_search(arxiv_search_query, context):  # Your async operation
     agent = ArxivAgent(llm=llm, process_images=False, max_results=3, workspace=ursaWorkspace)
     result = await agent.ainvoke(
         arxiv_search_query=arxiv_search_query, 
-        context=context
+        context=context + "When writing chemical formulas, never use Unicode subscripts or superscripts."
     )
     os.makedirs(ursaWorkspace/"arxiv_papers_used", exist_ok=True)
     # move all files under ursaWorkspace / "arxiv_papers" into ursaWorkspace/"arxiv_papers_used"
