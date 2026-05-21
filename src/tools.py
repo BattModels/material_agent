@@ -8,6 +8,7 @@ import pandas as pd
 from src.utils import *
 from src.myCANVAS import CANVAS, ListedArtifact
 from ase import Atoms, Atom
+from pydantic import StrictStr, StrictFloat
 from langchain.tools import tool
 from langchain_anthropic import ChatAnthropic
 # from langchain_openai import AzureChatOpenAI
@@ -191,7 +192,8 @@ def math_expression_tool(
             },
             value=result,
             description=f"Result of evaluating expression '{expression}' with mapping {mapping}",
-            reasons=merged_reasons,
+            context=context,
+        reasons=merged_reasons,
             parent_result_ids=list(set(bare_refs)),
             parent_result_ids_w_args={"values": bare_refs},
             metadata={"mapping": mapping},
@@ -276,6 +278,510 @@ def list_referenceable_inputs(
     )
     return "\n".join(lines)
 
+# ----------------------------------------------------------------------
+# search_artifacts internals
+# ----------------------------------------------------------------------
+
+def _norm_query_term(term: Any) -> Optional[Dict[str, Any]]:
+    """Normalize a single query term (str, float, or list of str) into a
+    matcher dict. Returns None if the term is empty / not searchable.
+
+    Matcher dict shape:
+      {"kind": "str" | "float" | "list_str",
+       "value": <original term>,
+       "str_form": <lowercase string>,    # for "str" only
+       "float_value": <float>,            # for "float" only
+       "list_forms": [<lowercase str>, ...]}   # for "list_str" only
+
+    For "float" matching against a string-valued category, we DO NOT
+    treat the query as a substring — instead we extract numeric tokens
+    from the category text via the shared util_numeric_matches_in_region
+    helper, parse each, and compare numerically with tolerance. This
+    avoids the classic false positive where '60' matches inside '160'.
+    """
+    if term is None:
+        return None
+    if isinstance(term, bool):
+        # bool is a subclass of int; reject explicitly to avoid surprises
+        print("BOOL!")
+        return None
+    if isinstance(term, (int, float)):
+        return {
+            "kind": "float",
+            "value": term,
+            "float_value": float(term),
+        }
+    if isinstance(term, str):
+        if not term.strip():
+            return None
+        return {
+            "kind": "str",
+            "value": term,
+            "str_form": term.lower(),
+        }
+    if isinstance(term, list):
+        cleaned = [s.lower() for s in term if isinstance(s, str) and s.strip()]
+        if not cleaned:
+            return None
+        return {
+            "kind": "list_str",
+            "value": term,
+            "list_forms": cleaned,
+        }
+    return None
+
+
+def _atoms_from_args(args: Dict[str, Any]) -> Tuple[List[str], List[float]]:
+    """Decompose an args dict into (string_atoms, numeric_atoms).
+
+    - For each `(key, value)` pair we always include `"<key>=<value_repr>"`
+      as a string atom so list-of-strings queries (which need all terms
+      in one atom) can match key+value pairs naturally (e.g. searching
+      `["ecutwfc", "80"]` against `args["ecutwfc"]=80` finds the atom
+      "ecutwfc=80").
+    - Numeric values (int / float, excluding bool) ALSO contribute
+      directly to numeric_atoms so float queries match by numeric
+      equality without going through stringification or regex
+      tokenization (avoids edge cases like numpy scalars whose repr
+      differs from the standard form).
+    - When a value is itself a list/tuple, we descend ONE level and
+      apply the same rule per element (string element → its own
+      string atom; numeric element → numeric atom; otherwise → repr
+      as string atom).
+    """
+    string_atoms: List[str] = []
+    numeric_atoms: List[float] = []
+    if not args:
+        return string_atoms, numeric_atoms
+
+    def _ingest_value(value: Any) -> None:
+        if isinstance(value, bool):
+            string_atoms.append(repr(value))
+            return
+        if isinstance(value, (int, float)):
+            numeric_atoms.append(float(value))
+            return
+        if isinstance(value, str):
+            string_atoms.append(value)
+            return
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                if isinstance(item, bool):
+                    string_atoms.append(repr(item))
+                elif isinstance(item, (int, float)):
+                    numeric_atoms.append(float(item))
+                elif isinstance(item, str):
+                    string_atoms.append(item)
+                else:
+                    string_atoms.append(repr(item))
+            return
+        string_atoms.append(repr(value))
+
+    for k, v in args.items():
+        # Pair-atom keeps key and value together for list-of-strings
+        # queries that need both terms in one atom.
+        string_atoms.append(f"{k}={v!r}")
+        # And the value (or its elements) contribute independently for
+        # numeric matching and for individual-element string matching.
+        _ingest_value(v)
+    return string_atoms, numeric_atoms
+
+
+def _category_atoms(
+    artifact: Any, category: str
+) -> Tuple[List[str], List[float]]:
+    """Return (string_atoms, numeric_atoms) for the requested category
+    on `artifact`. String matching iterates string_atoms; numeric
+    matching checks numeric_atoms directly and (for text categories)
+    also tokenizes inside each string atom via the regex helper.
+
+    Behaviors per category:
+      - tool_name / description / context: one string atom (the field
+        itself). Numeric matching also tokenizes inside the text.
+      - args: see `_atoms_from_args` — key=value pair atoms plus
+        per-value atoms (numeric values go to numeric_atoms;
+        list-valued args expand one level).
+      - value: if numeric, one numeric atom. If string, one string
+        atom. If list/tuple, each element is an atom of the
+        appropriate kind. If anything else (dict, custom object),
+        one string atom (its repr).
+      - Note: this function is NEVER called on a ListedArtifact, so
+        `value` will never be the nested-artifact-list case.
+
+    Missing or empty categories yield ([], []).
+    """
+    if category == "tool_name":
+        s = str(getattr(artifact, "tool_name", "") or "")
+        return ([s] if s else [], [])
+    if category == "description":
+        s = str(getattr(artifact, "description", "") or "")
+        return ([s] if s else [], [])
+    if category == "context":
+        s = str(getattr(artifact, "context", "") or "")
+        return ([s] if s else [], [])
+    if category == "args":
+        return _atoms_from_args(getattr(artifact, "args", {}) or {})
+    if category == "value":
+        v = getattr(artifact, "value", None)
+        if v is None:
+            return ([], [])
+        if isinstance(v, bool):
+            return ([repr(v)], [])
+        if isinstance(v, (int, float)):
+            return ([], [float(v)])
+        if isinstance(v, str):
+            return ([v], [])
+        if isinstance(v, (list, tuple)):
+            string_atoms: List[str] = []
+            numeric_atoms: List[float] = []
+            for item in v:
+                if isinstance(item, bool):
+                    string_atoms.append(repr(item))
+                elif isinstance(item, (int, float)):
+                    numeric_atoms.append(float(item))
+                elif isinstance(item, str):
+                    string_atoms.append(item)
+                else:
+                    string_atoms.append(repr(item))
+            return (string_atoms, numeric_atoms)
+        return ([repr(v)], [])
+    return ([], [])
+
+
+def _matches_category(
+    matcher: Dict[str, Any],
+    string_atoms: List[str],
+    numeric_atoms: List[float],
+) -> bool:
+    """Apply a normalized matcher to one category's atom view.
+
+    String matching: at least one string_atom (lowercased) contains
+    the query.
+
+    List-of-strings matching: at least one string_atom (lowercased)
+    contains EVERY listed term. The terms must all be in the same
+    atom — not split across atoms — so searching `['ecutwfc', '80']`
+    requires a single atom like "ecutwfc=80" containing both terms.
+
+    Float matching: numeric_atoms checked first by equality with
+    tolerance 1e-6. If no numeric match, each string_atom is also
+    tokenized via the regex helper so numbers embedded in narrative
+    text ("Energy from ecutwfc=80 calculation") are still found,
+    while substrings like '60' inside '160' are correctly rejected
+    by the regex lookarounds.
+    """
+    lowered: List[str] = [s.lower() for s in string_atoms]
+    if matcher["kind"] == "str":
+        target = matcher["str_form"]
+        return any(target in a for a in lowered)
+    if matcher["kind"] == "list_str":
+        terms = matcher["list_forms"]
+        return any(all(t in a for t in terms) for a in lowered)
+    if matcher["kind"] == "float":
+        target = matcher["float_value"]
+        tol = 1e-6
+        # Direct numeric equality on the category's numeric atoms.
+        for n in numeric_atoms:
+            if abs(n - target) <= tol:
+                return True
+        # Regex-tokenized numeric matching inside string atoms (for
+        # numbers embedded in description / context / etc).
+        for atom in string_atoms:
+            if not atom:
+                continue
+            try:
+                hits = util_numeric_matches_in_region(
+                    atom, 0, len(atom), target, tol
+                )
+                if hits:
+                    return True
+            except Exception:                                   # noqa: BLE001
+                # Defensive: if the helper raises for any reason, skip
+                # this atom and move on.
+                continue
+        return False
+    return False
+
+
+_SEARCHABLE_CATEGORIES = ("tool_name", "args", "value", "description", "context")
+
+
+def _build_result_dict(
+    artifact: Any,
+    parent_result_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build the per-result dict surfaced to the agent.
+
+    When the match is on a component of a ListedArtifact, pass
+    `parent_result_id` so the surfaced result_id is the parent's
+    (the agent uses the parent's id downstream and does not care
+    which specific component matched).
+    """
+    v_preview = repr(getattr(artifact, "value", None))
+    if len(v_preview) > 100:
+        v_preview = v_preview[:97] + "..."
+    rid = parent_result_id if parent_result_id is not None else getattr(
+        artifact, "result_id", ""
+    )
+    return {
+        "result_id": rid,
+        "tool_name": getattr(artifact, "tool_name", ""),
+        "value_preview": v_preview,
+        "args": getattr(artifact, "args", {}) or {},
+        "description": getattr(artifact, "description", ""),
+        "context": getattr(artifact, "context", ""),
+    }
+
+
+@tool
+def search_artifacts(
+    query: Annotated[
+        Optional[Union[StrictStr, StrictFloat, List[StrictStr]]],
+        "Broad search query. May be a single string (substring match, "
+        "case-insensitive), a single float (numeric matching: tokens "
+        "are extracted from each category's string content with "
+        "word-boundary guards and compared numerically with tolerance "
+        "1e-6 — so a query of 60.0 matches 60 in 'ecutwfc=60' but does "
+        "NOT match the '60' inside '160'; also matches the artifact's "
+        "value field directly if numeric), or a list of strings (ALL "
+        "listed strings must appear in the SAME category; matches "
+        "across categories do not count). An artifact is a broad-query "
+        "match if AT LEAST ONE of its categories (tool_name, args, "
+        "value, description, context) satisfies the query. Pass "
+        "null/None to disable the broad query (filters must then be "
+        "provided)."
+    ],
+    filters: Annotated[
+        Optional[Dict[str, Union[str, float, List[str]]]],
+        "Per-category structured filters. Keys may be any of: "
+        "'tool_name', 'args', 'value', 'description', 'context'. Each "
+        "value is matched the SAME way as `query` (string substring, "
+        "float numeric tokens, or list-of-strings all-in-one-category) "
+        "but constrained to its named category. Multiple filters are "
+        "AND-ed: an artifact matches only if every filter's category "
+        "satisfies its filter. Pass null/None to disable structured "
+        "filtering (the broad query must then be provided). May be "
+        "used together with `query`; in that case both the broad "
+        "query and every filter must match."
+    ],
+    order: Annotated[
+        Literal["ascending", "descending"],
+        "Required: chronological order of results by artifact creation "
+        "timestamp. 'ascending' returns oldest matches first; "
+        "'descending' returns newest matches first. Use 'descending' "
+        "when looking for recently created artifacts (the common case "
+        "during ongoing work); use 'ascending' when reconstructing the "
+        "earliest history of a study."
+    ],
+    max_results: Annotated[
+        int,
+        "Maximum number of result dicts to return. Default 20. If more "
+        "matches exist than `max_results`, the response includes a "
+        "note indicating the truncation so you can refine the query."
+    ] = 20,
+):
+    """
+    Search the registered-artifact registry by content, returning the
+    matching artifacts' result_ids along with semantic context (tool
+    name, args, description, context line, value preview).
+
+    Use this tool whenever you need to find the right result_id for a
+    value but don't remember exactly which past tool call produced it.
+    Typical queries:
+      - `query="ecutwfc 80"` → finds artifacts whose tool/args/
+        description/context mention 'ecutwfc 80' as substring.
+      - `query=80.0` → finds artifacts whose value is 80 (with
+        tolerance 1e-6), or whose args contain 80 as a numeric value
+        (including inside list-valued args like
+        `varying_parameter_values=[40, 60, 80, 100]`), or whose
+        description/context mentions 80 as a delimited number
+        ("ecutwfc=80 calculation"). Word-boundary aware: a query of
+        60.0 does NOT match '60' inside '160' or '600'.
+      - `filters={"tool_name": "calculate_formation_E"}` → finds every
+        adsorption-energy calculation result.
+      - `filters={"context": "convergence test for ecutwfc"}` → finds
+        every artifact registered under that study context.
+      - `query=["ecutwfc", "80"], filters={"tool_name":
+        "generate_convergence_test"}` → finds the specific generate-
+        convergence-test artifact that varied ecutwfc=80. The two
+        terms must appear together in the same atom (e.g. the args
+        atom "varying_parameter_name='ecutwfc'" alone is not enough;
+        an args atom like "ecutwfc=80" or a description containing
+        both is needed).
+
+    The five searchable categories are:
+      - tool_name: the tool that produced the artifact (one string
+        atom).
+      - args: each `(key, value)` pair contributes a "key=repr(value)"
+        string atom (preserving key-value adjacency for
+        list-of-strings queries), AND each numeric value contributes
+        a direct numeric atom for float queries (no stringification).
+        When an args value is itself a list, each element contributes
+        its own atom of the appropriate kind.
+      - value: if numeric, one numeric atom. If string, one string
+        atom. If list, each element is its own atom (numeric or
+        string). Other types (dict, custom objects) contribute their
+        repr as a string atom. NOTE: this function is NEVER called on
+        a ListedArtifact (see below), so the nested-artifact-list
+        case never enters here.
+      - description: one string atom (the description text). Float
+        queries find embedded numeric tokens via word-boundary regex.
+      - context: one string atom (the context line). Same numeric
+        tokenization behavior as description.
+
+    Note on ListedArtifacts: an artifact whose value is a list of
+    nested NumericArtifact/OtherArtifact components is searched at the
+    COMPONENT level only. Each component is checked independently
+    (using its own tool_name/args/value/description/context), and
+    each matching component contributes a separate result dict
+    surfaced under the PARENT's result_id. The parent's own
+    metadata does NOT independently contribute a top-level match —
+    if no component matches, the ListedArtifact contributes nothing,
+    even when the parent's description or context would have matched.
+    This keeps the granularity of matches aligned with what the agent
+    can act on (the parent ref is what gets used downstream; the
+    components carry their own semantic content for matching).
+
+    Each returned result is a dict with keys:
+      - result_id (for component-level matches, the parent
+        ListedArtifact's id)
+      - tool_name (for component-level matches, the component's
+        tool_name, not the parent's)
+      - value_preview (repr of value, truncated to ~100 chars)
+      - args (the matched artifact's input arguments dict — for
+        component-level matches, the COMPONENT's args, not the
+        parent's)
+      - description
+      - context
+
+    At least one of `query` or `filters` must be supplied; an empty
+    search is rejected (use `inspect_my_canvas` to browse the CANVAS
+    contents directly).
+    """
+    # Normalize the broad query into a matcher.
+    query_matcher = _norm_query_term(query) if query is not None else None
+
+    # Normalize filters into per-category matchers.
+    filter_matchers: Dict[str, Dict[str, Any]] = {}
+    if filters:
+        for cat, term in filters.items():
+            if cat not in _SEARCHABLE_CATEGORIES:
+                return (
+                    f"Unknown filter category {cat!r}. Allowed categories: "
+                    f"{list(_SEARCHABLE_CATEGORIES)}."
+                )
+            m = _norm_query_term(term)
+            if m is None:
+                return (
+                    f"Filter for category {cat!r} is empty or has an "
+                    f"unsupported type (got {term!r}). Supply a non-empty "
+                    f"string, a float, or a non-empty list of strings."
+                )
+            filter_matchers[cat] = m
+            
+    
+    print(f"query is {query!r} → matcher {query_matcher}")
+    print(f"filters are {filters!r} → matchers {filter_matchers}")
+    if query_matcher is None and not filter_matchers:
+        return (
+            "Empty search rejected. Supply at least one of `query` "
+            "(broad search) or `filters` (per-category structured "
+            "search). Use `inspect_my_canvas` to browse CANVAS keys, "
+            "or `list_referenceable_inputs` to enumerate a specific "
+            "artifact's input parameters."
+        )
+
+    if max_results <= 0:
+        return f"max_results must be positive; got {max_results}."
+
+    # Build sorted iteration order.
+    registry = getattr(CANVAS, "result_registry", {}) or {}
+    if not registry:
+        return "Artifact registry is empty — no artifacts have been registered yet."
+
+    items = list(registry.items())
+    items.sort(
+        key=lambda kv: getattr(kv[1], "timeStamp", 0.0),
+        reverse=(order == "descending"),
+    )
+
+    results: List[Dict[str, Any]] = []
+    total_matched_before_cap = 0
+
+    def _check_artifact_level(art: Any) -> bool:
+        """Apply query + filters to an artifact (or a list-component)
+        and return True if it matches. Per-category atom views are
+        computed once per artifact."""
+        # Precompute category atom views once.
+        cat_views: Dict[str, Tuple[List[str], List[float]]] = {
+            c: _category_atoms(art, c) for c in _SEARCHABLE_CATEGORIES
+        }
+        # Broad query: at least one category must match.
+        if query_matcher is not None:
+            broad_hit = False
+            for c in _SEARCHABLE_CATEGORIES:
+                str_atoms, num_atoms = cat_views[c]
+                if _matches_category(query_matcher, str_atoms, num_atoms):
+                    broad_hit = True
+                    break
+            if not broad_hit:
+                return False
+        # Filters: every named category must match its filter.
+        for c, m in filter_matchers.items():
+            str_atoms, num_atoms = cat_views[c]
+            if not _matches_category(m, str_atoms, num_atoms):
+                return False
+        return True
+
+    for rid, artifact in items:
+        if artifact is None:
+            continue
+        if isinstance(artifact, ListedArtifact):
+            # ListedArtifact contributes ONLY through its components.
+            # _category_atoms is never invoked on a ListedArtifact, so
+            # the components' own fields (their own tool_name, args,
+            # value, description, context) are what get matched. If no
+            # component matches, this ListedArtifact contributes
+            # nothing — even if the parent's own description/context
+            # would have matched. This is by design: matches surface
+            # at the granularity the agent can act on.
+            for i, comp in enumerate(artifact.value or []):
+                if not _check_artifact_level(comp):
+                    continue
+                total_matched_before_cap += 1
+                if len(results) < max_results:
+                    # Surface under the PARENT's result_id — the agent
+                    # always references the parent ref when using this
+                    # artifact downstream.
+                    results.append(
+                        _build_result_dict(
+                            comp,
+                            parent_result_id=artifact.result_id,
+                        )
+                    )
+        else:
+            # Non-ListedArtifact: standard parent-level match.
+            if _check_artifact_level(artifact):
+                total_matched_before_cap += 1
+                if len(results) < max_results:
+                    results.append(_build_result_dict(artifact))
+
+    truncated = total_matched_before_cap > max_results
+
+    out: Dict[str, Any] = {
+        "n_matches": total_matched_before_cap,
+        "n_returned": len(results),
+        "order": order,
+        "results": results,
+    }
+    if truncated:
+        out["note"] = (
+            f"More than max_results ({max_results}) matched; "
+            f"{total_matched_before_cap - max_results} additional matches "
+            f"are not shown. Refine `query` or `filters` to narrow the "
+            f"search."
+        )
+    return out
 
 @tool
 def extract_numeric_from_tool_output(
@@ -397,6 +903,7 @@ def extract_numeric_from_tool_output(
         },
         value=registring_value,
         description=description,
+        context=context,
         reasons=merged_reasons,
         parent_result_ids=[source_tool_call_id],
         parent_result_ids_w_args={"source_tool_call_id": source_tool_call_id},
@@ -565,6 +1072,7 @@ def extract_text_from_tool_output(
         },
         value=text,
         description=description,
+        context=context,
         reasons=merged_reasons,
         parent_result_ids=[source_tool_call_id],
         parent_result_ids_w_args={"source_tool_call_id": source_tool_call_id},
@@ -717,6 +1225,7 @@ def inspect_ase_atoms(
         args={"atomsFilename": atomsFilename},
         value=result,
         description=f"Inspection result of ASE Atoms object from {atomsFilename}",
+        context=context,
         reasons=merged_reasons,
         parent_result_ids=[atomsFilename_ref],
         parent_result_ids_w_args={"atomsFilename": atomsFilename_ref},
@@ -850,6 +1359,7 @@ def get_ase_atoms_property(
         },
         value=value,
         description=f"{key} property extracted from ASE Atoms object from {atomsFilename}",
+        context=context,
         reasons=merged_reasons,
         parent_result_ids=[atomsFilename_ref],
         parent_result_ids_w_args={"atomsFilename": atomsFilename_ref},
@@ -905,6 +1415,7 @@ def init_structure_data(
         },
         value=f"{element}-{lattice}.xyz",
         description="Path of the saved initial structure data file.",
+        context=context,
         reasons=merged_reasons,
         parent_result_ids=[],
         metadata={},
@@ -1031,7 +1542,8 @@ def generateSurface_and_getPossibleSite(
             args=common_args,
             value=v,
             description=f"Adsorption {k} site",
-            reasons=merged_reasons,
+            context=context,
+        reasons=merged_reasons,
             parent_result_ids=parent_result_ids,
             parent_result_ids_w_args=param_sources,
             metadata={},
@@ -1050,6 +1562,7 @@ def generateSurface_and_getPossibleSite(
         args=common_args,
         value=f"surface{surfaceFilename}",
         description="Path of the saved surface structure file in traj format.",
+        context=context,
         reasons=merged_reasons,
         parent_result_ids=parent_result_ids,
         parent_result_ids_w_args=param_sources,
@@ -1107,6 +1620,7 @@ def generate_myAdsorbate(
         },
         value=f"adsorbates/{AdsorbateFileName}",
         description="Path of the saved adsorbate structure file in traj format.",
+        context=context,
         reasons=merged_reasons,
         parent_result_ids=[],
         metadata={},
@@ -1214,6 +1728,7 @@ def add_myAdsorbate(
         },
         value=relaPath,
         description="Path of the saved surface with adsorbate structure file in traj format.",
+        context=context,
         reasons=merged_reasons,
         parent_result_ids=parent_result_ids,
         parent_result_ids_w_args=param_sources,
@@ -1420,6 +1935,7 @@ def write_QE_script_w_ASE(
         },
         value=filename,
         description="Path of the saved Quantum Espresso input script.",
+        context=context,
         reasons=merged_reasons,
         parent_result_ids=parent_result_ids,
         parent_result_ids_w_args=param_sources,
@@ -1596,7 +2112,8 @@ def find_pseudopotential(element: str) -> str:
 #             value=[job, job_list_dict[job]['k'], job_list_dict[job]['ecutwfc']],
 #             listed_value=True,
 #             description=f"Generated convergence test job with its corresponding kspacing and ecutwfc values.",
-#             reasons=merged_reasons,
+#             context=context,
+        reasons=merged_reasons,
 #             parent_result_ids=[input_file_name_ref],
 #             parent_result_ids_w_args={"input_file_name": input_file_name_ref},
 #             metadata={},
@@ -1829,7 +2346,8 @@ def find_pseudopotential(element: str) -> str:
 #                 f"{input_file_name} with {varying_parameter_name}="
 #                 f"{display_value}."
 #             ),
-#             reasons=merged_reasons,
+#             context=context,
+        reasons=merged_reasons,
 #             parent_result_ids=this_parent_ids,
 #             parent_result_ids_w_args=this_param_sources,
 #             metadata={},
@@ -2256,7 +2774,8 @@ def generate_convergence_test(
                 f"{input_file_name} with {stored_param_name}="
                 f"{display_value}."
             ),
-            reasons=merged_reasons,
+            context=context,
+        reasons=merged_reasons,
             parent_result_ids=this_parent_ids,
             parent_result_ids_w_args=this_param_sources,
             metadata={},
@@ -2583,6 +3102,7 @@ def generate_convergence_test(
 #                 f"{input_file_name} with {stored_param_name}="
 #                 f"{display_value}."
 #             ),
+#             context=context,
 #             reasons=merged_reasons,
 #             parent_result_ids=this_parent_ids,
 #             parent_result_ids_w_args=this_param_sources,
@@ -2775,7 +3295,8 @@ def generate_eos_test(
             },
             value=job,
             description=f"Generated EOS test job at scale {scale_for_job[job]}.",
-            reasons=merged_reasons,
+            context=context,
+        reasons=merged_reasons,
             parent_result_ids=parent_result_ids,
             parent_result_ids_w_args=param_sources,
             metadata={},
@@ -3108,6 +3629,7 @@ def find_optimal_parameter(
         },
         value=chosen[1],
         description=f"The most optimal parameter value for production run based on the reference file {reference_file} and the threshold {threshold} ({comparison_mode} comparison). The chosen parameter value is {chosen[1]} with file name {chosen[0]}. The tool automatically append .pwo to the all filenames to read the output files.",
+        context=context,
         reasons=merged_reasons,
         parent_result_ids=parent_result_ids,
         parent_result_ids_w_args=param_sources,
@@ -3514,6 +4036,7 @@ def find_optimal_parameter_from_derived(
         },
         value=chosen_axis_value,
         description=description,
+        context=context,
         reasons=merged_reasons,
         parent_result_ids=parent_result_ids,
         parent_result_ids_w_args=param_sources,
@@ -3644,6 +4167,7 @@ def calculate_formation_E(
             f"using {slabFilePath}, {adsorbateFilePath}, and {systemFilePath}"
             f"The tool automatically append .pwo to the all filenames to read the output files."
         ),
+        context=context,
         reasons=merged_reasons,
         parent_result_ids=parent_result_ids,
         parent_result_ids_w_args=param_sources,
@@ -3750,6 +4274,7 @@ def calculate_lc(
         args={"jobFilenames": bare_filenames},
         value=lc,
         description=f"The lattice constant calculated using the job list {bare_filenames}. The tool automatically append .pwo to the all filenames to read the output files.",
+        context=context,
         reasons=merged_reasons,
         parent_result_ids=list(set(bare_refs)),
         parent_result_ids_w_args=param_sources,
@@ -3926,6 +4451,7 @@ def analyze_BEEF_result(
             f"{adsorbateFilePath}, and {systemFilePath}"
             f"The tool automatically append .pwo to the all filenames to read the output files."
         ),
+        context=context,
         reasons=merged_reasons,
         parent_result_ids=parent_result_ids,
         parent_result_ids_w_args=param_sources,
@@ -3941,6 +4467,7 @@ def analyze_BEEF_result(
             f"{slabFilePath}, {adsorbateFilePath}, and {systemFilePath}"
             f"The tool automatically append .pwo to the all filenames to read the output files."
         ),
+        context=context,
         reasons=merged_reasons,
         parent_result_ids=parent_result_ids,
         parent_result_ids_w_args=param_sources,
@@ -4453,7 +4980,8 @@ def read_energy_from_output(
             args={"jobFilename": job},
             value=atoms.get_potential_energy(),
             description=f"The energy read from {job} is {atoms.get_potential_energy()} eV. The tool automatically append .pwo to the all filenames to read the output files.",
-            reasons=merged_reasons,
+            context=context,
+        reasons=merged_reasons,
             parent_result_ids=[ref],
             parent_result_ids_w_args={"jobFilename": ref},
             metadata={},

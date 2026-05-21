@@ -57,6 +57,7 @@ class NumericArtifact(BaseModel):
     value: float
     args: Dict[str, Any]
     description: str
+    context: str = Field(default_factory=str)
     reasons: Dict[str, str]
     parent_result_ids_w_args: Dict[str, str | List[str]] = Field(default_factory=dict)
     parent_result_ids: List[str] = Field(default_factory=list)
@@ -69,6 +70,7 @@ class OtherArtifact(BaseModel):
     value: Any
     args: Dict[str, Any]
     description: str
+    context: str = Field(default_factory=str)
     reasons: Dict[str, str]
     parent_result_ids_w_args: Dict[str, str | List[str]] = Field(default_factory=dict)
     parent_result_ids: List[str] = Field(default_factory=list)
@@ -81,6 +83,7 @@ class ListedArtifact(BaseModel):
     value: List[Union[NumericArtifact, OtherArtifact]]
     args: Dict[str, Any]
     description: str
+    context: str = Field(default_factory=str)
     reasons: Dict[str, str]
     parent_result_ids_w_args: Dict[str, str | List[str]] = Field(default_factory=dict)
     parent_result_ids: List[str] = Field(default_factory=list)
@@ -205,6 +208,7 @@ class myCANVAS():
         args: Dict[str, Any],
         value: Any,
         description: str,
+        context: str = "",
         listed_value: bool = False,
         reasons: Dict[str, str] = {},
         parent_result_ids: Optional[List[str]] = None,
@@ -226,6 +230,7 @@ class myCANVAS():
                 args=args,
                 value=value,
                 description=description,
+                context=context,
                 reasons=reasons,
                 parent_result_ids=parent_result_ids or [],
                 parent_result_ids_w_args=parent_result_ids_w_args or {},
@@ -247,6 +252,7 @@ class myCANVAS():
                             args=args,
                             value=v,
                             description=description,
+                            context=context,
                             reasons=reasons,
                             parent_result_ids=parent_result_ids or [],
                             parent_result_ids_w_args=parent_result_ids_w_args or {},
@@ -259,6 +265,7 @@ class myCANVAS():
                             args=args,
                             value=v,
                             description=description,
+                            context=context,
                             reasons=reasons,
                             parent_result_ids=parent_result_ids or [],
                             parent_result_ids_w_args=parent_result_ids_w_args or {},
@@ -272,6 +279,7 @@ class myCANVAS():
                     value=artifactList,
                     description=description,
                     reasons=reasons,
+                    context=context,
                     parent_result_ids=parent_result_ids or [],
                     parent_result_ids_w_args=parent_result_ids_w_args or {},
                     metadata=metadata or {},
@@ -286,6 +294,7 @@ class myCANVAS():
                     args=args,
                     value=value,
                     description=description,
+                    context=context,
                     reasons=reasons,
                     parent_result_ids=parent_result_ids or [],
                     parent_result_ids_w_args=parent_result_ids_w_args or {},
