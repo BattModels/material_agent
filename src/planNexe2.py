@@ -1,5 +1,5 @@
 from langchain.agents.structured_output import ToolStrategy
-from langchain.agents.middleware import ToolCallLimitMiddleware, AgentMiddleware, ModelRequest, wrap_tool_call
+from langchain.agents.middleware import ToolCallLimitMiddleware, AgentMiddleware, ModelRequest, wrap_tool_call, before_model
 from langchain.agents import create_agent
 
 from typing import Annotated, Sequence, TypedDict,Literal, List, Dict, Tuple, Union, Any
@@ -26,6 +26,7 @@ from langgraph.graph import END, StateGraph, START
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import ToolNode, create_react_agent
 from pydantic import BaseModel, Field
+from pydantic import model_validator
 
 from src.tools import *
 from src.prompt import dft_agent_prompt,hpc_agent_prompt,supervisor_prompt, oer_agent_prompt, boss_prompt
@@ -86,7 +87,7 @@ class myPastStep(BaseModel):
     timeSpent: str = Field(description="The time spent on this step.")
 class Plan(BaseModel):
     """Need to add/modify current plan, which is going to be followed by your worker agents in future"""
-
+    kind: Literal["plan"] = "plan"
     steps: List[myStep] = Field(
         description=f"""
         Steps to follow in future. Each step is a tuple of (step, agent). agent can only be chosen from {members}.
@@ -98,12 +99,13 @@ class Plan(BaseModel):
     
 class Response(BaseModel):
     """Supervisor's proposed final answer for boss review."""
-
+    kind: Literal["response"] = "response"
     response: str
 
 # the class supervisor will choose if the plan doesn't need to be changed
 class NoChange(BaseModel):
     """No change to the plan, just continue to execute the original plan."""
+    kind: Literal["no_change"] = "no_change"
     comment: str = Field(description="any comment from the supervisor if needed, otherwise just put 'No change to the plan, continue to execute the original plan.'")
 
 
@@ -113,9 +115,37 @@ class Act(BaseModel):
     action: Union[Plan, NoChange, Response] = Field(
         description="""Action to perform. If the team need to further use tools to get the answer, and if you need to add more steps or adjust the steps, use Plan.
         If the team can continue to execute the original plan without any change, use NoChange.
-        Use Response when you believe the task is complete and want to submit a proposed final answer for boss review."""
-        # "DO NOT use response unless absolutly necessary."
+        Use Response when you believe the task is complete and want to submit a proposed final answer for boss review.""",
+        discriminator="kind"
     )
+    
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_action(cls, data):
+        if not isinstance(data, dict):
+            return data
+        action = data.get("action")
+
+        # Case 1: model returned action as a JSON string
+        if isinstance(action, str):
+            try:
+                action = json.loads(action)
+            except json.JSONDecodeError:
+                return data  # let pydantic raise the real error
+
+        # Case 2: model wrapped variant as {"NoChange": {...}}
+        if isinstance(action, dict) and len(action) == 1:
+            key = next(iter(action))
+            if key in {"Plan", "NoChange", "Response"}:
+                inner = dict(action[key])
+                inner.setdefault(
+                    "kind",
+                    {"Plan": "plan", "NoChange": "no_change", "Response": "response"}[key],
+                )
+                action = inner
+
+        return {**data, "action": action}
+    
 class BossReview(BaseModel):
     """Structured response from the boss review gate."""
 
@@ -276,6 +306,21 @@ def handle_tool_errors(request, handler):
             content=f"Tool error: Please check your input and try again. ({str(e)}), the traceback is: {traceback.format_exc()}",
             tool_call_id=request.tool_call["id"]
         )
+
+_act_failures = {"count": 0}
+
+def on_act_parse_error(exc: Exception) -> str:
+    _act_failures["count"] += 1
+    print(f"[Act parse #{_act_failures['count']}] {type(exc).__name__}: {exc}")
+    # whatever string you return is what the model sees as the tool error
+    if _act_failures["count"] > 3:
+        exit()
+    
+    return (
+        "Your previous tool call did not match the Act schema. "
+        "Return exactly one of {Plan, NoChange, Response} as `action`, "
+        "with the inner fields directly — do NOT wrap in {'NoChange': {...}}."
+    )
 
 teamCapability = """
 <DFT Agent>:
@@ -517,16 +562,20 @@ def supervisor_chain_node(state, agent, name):
     sup_good_patient = 3
     while not sup_good and sup_good_patient > 0:
         sup_good_patient -= 1
-        for agent_response in agent.stream(
-            {"messages": [("user", supervisorMessage)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
-        ):
-            # set agent_response to be the value of the first key of the dictionary
-            agent_response = next(iter(agent_response.values()))
-            print_stream(agent_response)
+        try:
+            for agent_response in agent.stream(
+                {"messages": [("user", supervisorMessage)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
+            ):
+                # set agent_response to be the value of the first key of the dictionary
+                agent_response = next(iter(agent_response.values()))
+                # print("agent reposonse:")
+                # print(agent_response)
+                print_stream(agent_response)
+        except Exception as e:
+            # fall back to a default Act, retry with a smaller schema, escalate to a human, etc.
+            print(f"Supervisor halted: structured output failures: {e}")
+            exit()
 
-        # output = agent.invoke(
-        #     {"messages": [("user", supervisorMessage)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
-        #     )
     
         agent_response = agent_response['structured_response']
         sup_good = True
@@ -858,8 +907,8 @@ def create_planning_graph(config: dict) -> StateGraph:
         tools=supervisor_tools, 
         system_prompt=supervisor_prompt,
         # Structured output via ToolStrategy (tool-calling fallback)
-        response_format=ToolStrategy(Act),  # Or ProviderStrategy for native models
-        middleware=[DisableParallelToolCallsMiddleware(), handle_tool_errors]
+        response_format=ToolStrategy(Act, handle_errors=on_act_parse_error),  # Or ProviderStrategy for native models
+        middleware=[DisableParallelToolCallsMiddleware(), handle_tool_errors]  # Middleware to handle tool errors and cap structured output retries
     )
     
     # supervisor_agent = create_react_agent(llm, tools=supervisor_tools,

@@ -332,7 +332,8 @@ You have a maximum of 1 hours to complete the entire study and make your final r
     minimal_test_message_2 = """
     Conduct 1 literature search about best OER catalyst. Then ask your worker to search the that result ID with the
     corresponding tool. Pretend that you forgot the id, ask your worker agent to search for that id using some other information that's associated with that ID.
-    Verify that the search contains the correct ID. Then generate a report about the literature search result.
+    Verify that the search contains the correct ID. Then generate a report about the literature search result. After the literature search, if the next step in the plan
+    is to ask your worker to search the the result ID, do not touch the plan, keep it as is.
     """
 
     revised_message_v6 = """
