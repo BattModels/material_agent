@@ -128,6 +128,17 @@ dataset_description = """
       the maximum Herfindahl-Hirschman Index (HHI) for global reserve concentration across all countries, amongst all elements in the material.
     </description>
   </field>
+
+  <field name="max_dG_U[1.2,2.0]_pH0" type="float">
+    <description>
+      Maximum (worst-case) Pourbaix decomposition energy in eV/atom across
+      pH = 0 and U in [1.2, 2.0] V vs. SHE, using mixed GGA/GGA(+U)/r2SCAN
+      stability data with the solid filter enabled. A value of 0.0 eV/atom means
+      the material is the most stable known phase under these conditions. Larger
+      positive values indicate increasing tendency to decompose. Present in
+      dataframes returned by OER_data_analasis_v2 and get_candidate_data.
+    </description>
+  </field>
 </fields>
 """
 

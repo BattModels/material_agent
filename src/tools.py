@@ -1223,20 +1223,24 @@ def OER_data_analasis_v2(
     ) -> str:
     """
     Get a pandas dataframe of material entries from the AQ-GNoME database that fulfill
-    given Pourbaix stability criteria under specified electrochemical conditions
-    (pH and potential U vs. SHE), and save the resulting filtered dataframe to
-    CANVAS under the key specified by `save_name`.
+    Pourbaix stability criteria within the acidic OER operating window (pH = 0,
+    U = 1.2-2.0 V vs. SHE), and save the resulting filtered dataframe to CANVAS under
+    the key specified by `save_name`. The `decomposition_threshold` controls how
+    strictly stable a material must be: 0.0 eV/atom accepts only the most stable known
+    phase, a positive value allows slightly metastable materials.
 
     The output dataframe contains material entries that are stable under the
     specified conditions, with columns including: MaterialId, Composition,
     Reduced Formula, Elements, Bandgap, HHI indices (availability/cost proxy),
-    and Disorder Probability.
+    Disorder Probability, and max_dG_U[1.2,2.0]_pH0.
 
     The following filters are hardcoded and always applied:
         - Elements P, B, S, C, F are excluded.
         - All radioactive elements are excluded.
         - Only O-containing materials are included.
         - Candidates already present in the experiment log (EXPLOG) are excluded.
+        - Solid filter enabled: metastable solid competing phases excluded from stability comparisons.
+        - Mixed GGA/GGA(+U)/r2SCAN Pourbaix stability data.
 
     The optional `filters` and `sort` parameters can be used to further refine
     or order the results based on the output dataframe columns.

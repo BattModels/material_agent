@@ -347,9 +347,11 @@ You have a maximum of 1 hours to complete the entire study and make your final r
     both the overpotential calculated assuming an idea OOH binding and the one
     calculated via the scaling relation.
 
-    The AQ-GNoME database is available, which enables filtering based on aqueous
-    stability across pH and electrochemical potential (V vs. SHE). You need to make use of
-    literature when choosing filtering criteria and making candidate selections. You
+    The AQ-GNoME database is available for stability-based filtering. The Pourbaix
+    stability screening is fixed at pH = 0 and U = 1.2–2.0 V vs. SHE (acidic OER
+    operating conditions). Many additional filters are available (e.g. decomposition
+    threshold, bandgap, HHI, disorder probability) and literature should inform the
+    selection of these criteria and candidate choices. You
     should also consider catalytic activity, cost/availability, and stability under operating
     conditions when selecting and evaluating candidates. Toxicity of the constituent
     elements should also be considered where possible, though note that no toxicity data
