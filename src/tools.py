@@ -537,127 +537,50 @@ def _build_result_dict(
 def search_artifacts(
     query: Annotated[
         Optional[Union[StrictStr, StrictFloat, List[StrictStr]]],
-        "Broad search query. May be a single string (substring match, "
-        "case-insensitive), a single float (numeric matching: tokens "
-        "are extracted from each category's string content with "
-        "word-boundary guards and compared numerically with tolerance "
-        "1e-6 — so a query of 60.0 matches 60 in 'ecutwfc=60' but does "
-        "NOT match the '60' inside '160'; also matches the artifact's "
-        "value field directly if numeric), or a list of strings (ALL "
-        "listed strings must appear in the SAME category; matches "
-        "across categories do not count). An artifact is a broad-query "
-        "match if AT LEAST ONE of its categories (tool_name, args, "
-        "value, description, context) satisfies the query. Pass "
-        "null/None to disable the broad query (filters must then be "
-        "provided)."
+        "Search query: a string (case-insensitive substring), a float "
+        "(numeric match with 1e-6 tolerance; word-boundary aware — "
+        "60.0 won't match the '60' inside '160'), or a list of "
+        "strings (all terms must appear in the SAME atom). Matches if "
+        "any category of the artifact satisfies it (if a list of string is specified"
+        "that one category must satisfies all element in the list)."
+        "Pass None to use filters only.",
     ],
     filters: Annotated[
-        Optional[Dict[str, Union[str, float, List[str]]]],
-        "Per-category structured filters. Keys may be any of: "
-        "'tool_name', 'args', 'value', 'description', 'context'. Each "
-        "value is matched the SAME way as `query` (string substring, "
-        "float numeric tokens, or list-of-strings all-in-one-category) "
-        "but constrained to its named category. Multiple filters are "
-        "AND-ed: an artifact matches only if every filter's category "
-        "satisfies its filter. Pass null/None to disable structured "
-        "filtering (the broad query must then be provided). May be "
-        "used together with `query`; in that case both the broad "
-        "query and every filter must match."
+        Optional[Dict[str, Union[StrictStr, StrictFloat, List[StrictStr]]]],
+        "Per-category AND filters. Keys: 'tool_name', 'args', 'value', "
+        "'description', 'context'. Each value matched the same way as "
+        "`query`. Pass None to use `query` only. Combinable with "
+        "`query` (both must match).",
     ],
     order: Annotated[
         Literal["ascending", "descending"],
-        "Required: chronological order of results by artifact creation "
-        "timestamp. 'ascending' returns oldest matches first; "
-        "'descending' returns newest matches first. Use 'descending' "
-        "when looking for recently created artifacts (the common case "
-        "during ongoing work); use 'ascending' when reconstructing the "
-        "earliest history of a study."
+        "Result order by creation timestamp. 'descending' = newest "
+        "first (typical); 'ascending' = oldest first.",
     ],
-    max_results: Annotated[
-        int,
-        "Maximum number of result dicts to return. Default 20. If more "
-        "matches exist than `max_results`, the response includes a "
-        "note indicating the truncation so you can refine the query."
-    ] = 20,
 ):
     """
-    Search the registered-artifact registry by content, returning the
-    matching artifacts' result_ids along with semantic context (tool
-    name, args, description, context line, value preview).
+    Find a past artifact's result_id by content. Use when you need a
+    ref but don't remember which call produced it.
 
-    Use this tool whenever you need to find the right result_id for a
-    value but don't remember exactly which past tool call produced it.
-    Typical queries:
-      - `query="ecutwfc 80"` → finds artifacts whose tool/args/
-        description/context mention 'ecutwfc 80' as substring.
-      - `query=80.0` → finds artifacts whose value is 80 (with
-        tolerance 1e-6), or whose args contain 80 as a numeric value
-        (including inside list-valued args like
-        `varying_parameter_values=[40, 60, 80, 100]`), or whose
-        description/context mentions 80 as a delimited number
-        ("ecutwfc=80 calculation"). Word-boundary aware: a query of
-        60.0 does NOT match '60' inside '160' or '600'.
-      - `filters={"tool_name": "calculate_formation_E"}` → finds every
-        adsorption-energy calculation result.
-      - `filters={"context": "convergence test for ecutwfc"}` → finds
-        every artifact registered under that study context.
-      - `query=["ecutwfc", "80"], filters={"tool_name":
-        "generate_convergence_test"}` → finds the specific generate-
-        convergence-test artifact that varied ecutwfc=80. The two
-        terms must appear together in the same atom (e.g. the args
-        atom "varying_parameter_name='ecutwfc'" alone is not enough;
-        an args atom like "ecutwfc=80" or a description containing
-        both is needed).
+    Examples:
+      - query="some_key_word" → substring across any category
+      - query=80.0 → numeric match (value, args including nested
+        lists, or numbers embedded in description/context)
+      - filters={"tool_name": "example_tool_name"} → all results generated with example_tool_name
+      - query=["keyword1", "keyword12"], filters={"tool_name":
+        "example_tool_name"} → all results generated with example_tool_name that have at least one category matches both terms: keyword1, keyword2
+        
 
-    The five searchable categories are:
-      - tool_name: the tool that produced the artifact (one string
-        atom).
-      - args: each `(key, value)` pair contributes a "key=repr(value)"
-        string atom (preserving key-value adjacency for
-        list-of-strings queries), AND each numeric value contributes
-        a direct numeric atom for float queries (no stringification).
-        When an args value is itself a list, each element contributes
-        its own atom of the appropriate kind.
-      - value: if numeric, one numeric atom. If string, one string
-        atom. If list, each element is its own atom (numeric or
-        string). Other types (dict, custom objects) contribute their
-        repr as a string atom. NOTE: this function is NEVER called on
-        a ListedArtifact (see below), so the nested-artifact-list
-        case never enters here.
-      - description: one string atom (the description text). Float
-        queries find embedded numeric tokens via word-boundary regex.
-      - context: one string atom (the context line). Same numeric
-        tokenization behavior as description.
+    Categories: tool_name, args (each key=value pair is one atom;
+    numeric values also matched directly), value (per-element for
+    lists), description, context.
 
-    Note on ListedArtifacts: an artifact whose value is a list of
-    nested NumericArtifact/OtherArtifact components is searched at the
-    COMPONENT level only. Each component is checked independently
-    (using its own tool_name/args/value/description/context), and
-    each matching component contributes a separate result dict
-    surfaced under the PARENT's result_id. The parent's own
-    metadata does NOT independently contribute a top-level match —
-    if no component matches, the ListedArtifact contributes nothing,
-    even when the parent's description or context would have matched.
-    This keeps the granularity of matches aligned with what the agent
-    can act on (the parent ref is what gets used downstream; the
-    components carry their own semantic content for matching).
+    Returns a dict with `results`, each entry having: result_id,
+    tool_name, value_preview, args, description, context.
 
-    Each returned result is a dict with keys:
-      - result_id (for component-level matches, the parent
-        ListedArtifact's id)
-      - tool_name (for component-level matches, the component's
-        tool_name, not the parent's)
-      - value_preview (repr of value, truncated to ~100 chars)
-      - args (the matched artifact's input arguments dict — for
-        component-level matches, the COMPONENT's args, not the
-        parent's)
-      - description
-      - context
-
-    At least one of `query` or `filters` must be supplied; an empty
-    search is rejected (use `inspect_my_canvas` to browse the CANVAS
-    contents directly).
+    At least one of `query` or `filters` must be supplied.
     """
+    max_results = 20
     # Normalize the broad query into a matcher.
     query_matcher = _norm_query_term(query) if query is not None else None
 
