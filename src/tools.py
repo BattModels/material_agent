@@ -428,6 +428,8 @@ def query_explog(
     reason: Annotated[str, "reason behind the query. Why are you using such filters and sort? What are you looking for?"],
     filters: List[Filter] = [],
     sort: List[SortSpec] = [],
+    start_idx: Annotated[int, "Row index to start reading from (inclusive). The tool always returns up to 50 rows from this position. Use 0 for the first page, 50 for the second, etc."] = 0,
+    hide_redundant_oh: Annotated[bool, "When True (default), for each OH adsorption group (same candidate, termination, and site index), only the row with the final G(OH) value is retained. Groups without any G(OH) value are kept in full. Only applies to the processes table."] = True,
 ) -> str:
     """Query the experiment log (EXPLOG) with optional filter and sort criteria. Automatically
     fetches the latest job updates before returning. Returns the filtered table as a string with row index.
@@ -475,9 +477,35 @@ def query_explog(
         return "table_name must be either 'candidates' or 'processes'"
 
     filteredDF = df_query(df, filters, sort)
-    
-    result = filteredDF.to_string(index=True)
-    
+
+    if hide_redundant_oh and table_name == 'processes':
+        oh_mask = filteredDF['job_type'] == 'OH_adsorption'
+        if oh_mask.any():
+            group_keys = ['candidate_id', 'termination_index', 'site_index']
+            # Each OH site submits 3 jobs (varied initial positions) to find the global minimum.
+            # Once a winner exists (G(OH) non-NaN), the other rows for that site carry no
+            # information. Flag groups that contain at least one populated G(OH) value.
+            has_winner = (
+                filteredDF.loc[oh_mask]
+                .groupby(group_keys, dropna=False)['G(OH)']
+                .transform(lambda x: x.notna().any())
+            )
+            # A row is redundant if it is an OH job with no G(OH) value and its group has a winner.
+            # Groups with no winner (all failed/pending) are kept in full.
+            redundant = pd.Series(False, index=filteredDF.index)
+            redundant.loc[oh_mask] = filteredDF.loc[oh_mask, 'G(OH)'].isna() & has_winner
+            filteredDF = filteredDF[~redundant]
+
+    total_rows = len(filteredDF)
+    end_idx = min(start_idx + 50, total_rows)
+    page = filteredDF.iloc[start_idx:end_idx]
+
+    row_footer = f"\nShowing rows {start_idx}–{end_idx - 1} of {total_rows} total."
+    if end_idx < total_rows:
+        row_footer += f" Call again with start_idx={end_idx} to see the next rows."
+
+    result = page.to_string(index=True) + row_footer
+
     id = CANVAS.register_tool_output(
         tool_name="query_explog",
         args={
