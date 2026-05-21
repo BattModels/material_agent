@@ -1410,7 +1410,7 @@ def get_candidate_data(
             decom_G = dh.mixed_results.read_id(mixed_pbx_id)
         else:
             decom_G = dh.gga_results.read_id(row['gga_only_pbx_save_id'])
-        max_decomp_values.append(sc.max_dG_in_region(decom_G))
+        max_decomp_values.append(max(0.0, sc.max_dG_in_region(decom_G)))
 
     df = df.copy()
     df[sc.col_name] = max_decomp_values
