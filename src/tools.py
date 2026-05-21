@@ -51,6 +51,7 @@ from pymatgen.analysis.magnetism.analyzer import DEFAULT_MAGMOMS
 from src import var
 import pickle
 from ursa.agents import ArxivAgent
+import copy
 
 from aq_gnome import Data_Handler, Stable_Entries, Stability_Criteria, get_simplified_df, atoms_from_db
 from gnome_dreams_oer_screening.oer.oer_study import OER_catalyst_study
@@ -1255,6 +1256,7 @@ def OER_data_analasis_v2(
     # ref_Us: Annotated[Union[List[str], str], "List or a single value of reference_ID where you determined the value of potential(s) from"] = "",
     filters: List[Filter] = [],
     sort: List[SortSpec] = [],
+    ref_list: Annotated[List[str], "Please provide the list of all reference IDs that you used to determine the parameters for this tool, and explain in the reason why are those reference IDs are related and used"] = [],
     ) -> str:
     """
     Get a pandas dataframe of material entries from the AQ-GNoME database that fulfill
@@ -1282,13 +1284,11 @@ def OER_data_analasis_v2(
     """
     
     # verify refs
-    # for refs in [ref_pHs, ref_Us]:
-    #     refs = refs if isinstance(refs, list) else [refs]
-    #     for ref in refs:
-    #         if ref:
-    #             art = CANVAS.get_artifact(ref)
-    #             if art is None:
-    #                 return f"Error: Reference ID {ref} not found in CANVAS."
+    for ref in ref_list:
+        if ref:
+            art = CANVAS.get_artifact(ref)
+            if art is None:
+                return f"Error: Reference ID {ref} not found in CANVAS."
     
     # Data handler with all standard filters pre-applied:
     dh = _STABILITY_CACHE.dh  
@@ -1345,7 +1345,7 @@ def OER_data_analasis_v2(
         value=save_name,
         description=f"key name of the saved dataframe",
         reasons=reasons,
-        # parent_result_ids=parent_result_ids,
+        parent_result_ids=ref_list,
         metadata={},
     )
     
@@ -1367,7 +1367,7 @@ def OER_data_analasis_v2(
         value=outStr,
         description=f"Out string of the tool",
         reasons=reasons,
-        # parent_result_ids=parent_result_ids,
+        parent_result_ids=ref_list,
         metadata={},
     )
     
@@ -1375,12 +1375,9 @@ def OER_data_analasis_v2(
     
     return outStr
 
-
-
-
 @tool
 def get_candidate_data(
-    material_ids: Annotated[List[str], "List of MaterialIds to retrieve from the database."],
+    material_ids_w_ref: Annotated[List[Tuple[str, str]], "List of (MaterialId, MaterialId_ref) pairs. Data for each MaterialId will be retrieved and printed, MaterialId_ref is the reference ID of the result where you find the MaterialId of interests."],
     sort: List[SortSpec] = [],
 ) -> str:
     """
@@ -1399,6 +1396,16 @@ def get_candidate_data(
     If a requested MaterialId is not found in the screened database, it is reported
     in the return string.
     """
+    
+    for _, ref in material_ids_w_ref:
+        if ref:
+            art = CANVAS.get_artifact(ref)
+            if art is None:
+                return f"Error: Reference ID {ref} not found in CANVAS."
+    
+    material_ids = [mid[0] for mid in material_ids_w_ref]
+    material_id_refs = [mid[1] for mid in material_ids_w_ref]
+    
     df = _STABILITY_CACHE.df
     df = df[df['MaterialId'].isin(material_ids)]
 
@@ -1433,6 +1440,22 @@ def get_candidate_data(
     out = df.to_string(index=True)
     if not_found:
         out += f"\nNote: the following MaterialIds were not found in the screened database: {not_found}"
+    
+    id = CANVAS.register_tool_output(
+        tool_name="get_candidate_data",
+        args={
+            "material_ids_w_ref": material_ids_w_ref,
+            "sort": sort,
+        },
+        value=out,
+        description=f"Data for requested MaterialIds: {', '.join(material_ids)}",
+        reasons={},
+        parent_result_ids=material_id_refs,
+        metadata={},
+    )
+    
+    out += f"\nReport_ID: {id}. Please refer to this ID if you want to reference this report later or use the information in the report for further analysis or decision making."
+    
     return out
 
 
@@ -2007,8 +2030,15 @@ def write_my_canvas(key: Annotated[str, "key"],
 def write_report(
     report: Annotated[str, "Intermediate/final report content in markdown format."],
     report_name: Annotated[str, "Name of the report."],
+    ref_list: Annotated[List[str], "Please provide the list of all reference IDs that you used when writing this report"], 
     ):
     """Note down your report on CANVAS and let the supervisor know you've generated a report"""
+    
+    for ref in ref_list:
+        art = CANVAS.get_artifact(ref)
+        if art is None:
+            return f"Error: Reference ID {ref} not found in CANVAS. Please check the canvas and try again, or regenerate the reference result with corresponding tool."
+    
     outStr = CANVAS.write(report_name, report, False)
     if outStr == f"Key '{report_name}' already exists. Please choose a different key. If you want to overwrite the value, set the 'overwrite' flag to True.":
         outStr = f"Report '{report_name}' already exists. Please choose a different name for the report. You should never overwirte a report."
@@ -2023,7 +2053,7 @@ def write_report(
         },
         value=report,
         description=f"Writing report to canvas with key '{report_name}'",
-        parent_result_ids=[],
+        parent_result_ids=ref_list,
         metadata={},
     )
     
