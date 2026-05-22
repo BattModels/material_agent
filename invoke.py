@@ -348,7 +348,7 @@ You have a maximum of 1 hours to complete the entire study and make your final r
     calculated via the scaling relation.
 
     The AQ-GNoME database is available for stability-based filtering. The Pourbaix
-    stability screening is fixed at pH = 0 and U = 1.2–2.0 V vs. SHE (acidic OER
+    stability screening is fixed at pH = 0 and U = 1.2-2.0 V vs. SHE (acidic OER
     operating conditions). Many additional filters are available (e.g. decomposition
     threshold, bandgap, HHI, disorder probability) and literature should inform the
     selection of these criteria and candidate choices. You
@@ -390,7 +390,7 @@ You have a maximum of 1 hours to complete the entire study and make your final r
     - Any recommendations for future studies or next steps based on the findings and
     limitations of the current study.
 
-    You have a maximum of 1 hours to complete the entire study and make your final report.
+    You have a maximum of 8 hours to complete the entire study and make your final report.
     """
     # TODO TODO TODO - adjust the time limit
     
@@ -473,7 +473,7 @@ You have a maximum of 1 hours to complete the entire study and make your final r
             initialize_database(db_file)
 
     EXPLOG.init(Path(WORKING_DIRECTORY)/"TEMP_vasp_calcs",
-                "test",
+                "MLIP_test",
                 reject_if_failed_exists = True,
                 require_relaxed_o_for_oh = True
                 )

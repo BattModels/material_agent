@@ -181,7 +181,7 @@ def wait_for_update(
                 status = f.read()
 
 
-        time.sleep(15) # TODO - consider before production run
+        time.sleep(5) # TODO - consider before production run
         tmpUpdate = EXPLOG.update_log()
         # Sort through the updates, remove non-failed/completed jobs (ignore going from pending to running)
         
