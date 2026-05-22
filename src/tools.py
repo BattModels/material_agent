@@ -83,7 +83,7 @@ async def _arXiv_search(arxiv_search_query, context):  # Your async operation
     config = var.OTHER_GLOBAL_VARIABLES
     ursaWorkspace = Path(os.path.join(var.my_WORKING_DIRECTORY, "ursa_workspace"))
     llm = ChatAnthropic(model="claude-haiku-4-5-20251001", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-    agent = ArxivAgent(llm=llm, process_images=False, max_results=3, workspace=ursaWorkspace)
+    agent = ArxivAgent(llm=llm, process_images=False, max_results=5, workspace=ursaWorkspace)
     result = await agent.ainvoke(
         arxiv_search_query=arxiv_search_query, 
         context=context + "When writing chemical formulas, never use Unicode subscripts or superscripts."
@@ -1193,10 +1193,12 @@ class _StabilityCache:
 
     ELEMENTS_TO_EXCLUDE: list[str] = [
         'P', 'B', 'S', 'C', 'F',
-        'Tc', 'Ra', 'Rf', 'Db', 'Sg', 'Bh', 'Hs', 'Mt', 'Ds', 'Rg', 'Cn',
-        'Nh', 'Fl', 'Mc', 'Lv', 'Ts', 'Og', 'Pm', 'Ac', 'Th', 'Pa',
-        'U', 'Np', 'Pu', 'Am', 'Cm', 'Bk', 'Cf', 'Es', 'Fm', 'Md', 'No',
-        'Lr', 'Po', 'At', 'Rn',
+        'Tl', 'Pb', 'As', 'Cd', 'Hg',
+        'Tc',  'Ra', 'Rf', 'Db', 'Sg', 'Bh', 'Hs',
+        'Mt', 'Ds', 'Rg', 'Cn', 'Nh', 'Fl', 'Mc', 'Lv',
+        'Ts', 'Og', 'Pm', 'Ac', 'Th', 'Pa', 'U', 'Np',
+        'Pu', 'Am', 'Cm', 'Bk', 'Cf', 'Es', 'Fm', 'Md',
+        'No', 'Lr', 'Po', 'At', 'Rn'
     ]
     ELEMENTS_TO_INCLUDE: list[str] = ['O']
     MAX_MAGNETIC_SITES: int = 10
@@ -1274,6 +1276,7 @@ def OER_data_analasis_v2(
 
     The following filters are hardcoded and always applied:
         - Elements P, B, S, C, F are excluded.
+        - Elements Tl, Pb, As, Cd, Hg are excluded, due to toxicity.
         - All radioactive elements are excluded.
         - Only O-containing materials are included.
         - Candidates already present in the experiment log (EXPLOG) are excluded.
