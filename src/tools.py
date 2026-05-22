@@ -13,6 +13,7 @@ from src.myCANVAS import CANVAS, ListedArtifact
 from ase import Atoms, Atom
 from langchain.tools import tool
 from langchain_anthropic import ChatAnthropic
+from pydantic import StrictStr, StrictFloat
 # from langchain_openai import AzureChatOpenAI
 import math
 import os 
@@ -51,6 +52,7 @@ from pymatgen.analysis.magnetism.analyzer import DEFAULT_MAGMOMS
 from src import var
 import pickle
 from ursa.agents import ArxivAgent
+import copy
 
 from aq_gnome import Data_Handler, Stable_Entries, Stability_Criteria, get_simplified_df, atoms_from_db
 from gnome_dreams_oer_screening.oer.oer_study import OER_catalyst_study
@@ -84,7 +86,7 @@ async def _arXiv_search(arxiv_search_query, context):  # Your async operation
     agent = ArxivAgent(llm=llm, process_images=False, max_results=3, workspace=ursaWorkspace)
     result = await agent.ainvoke(
         arxiv_search_query=arxiv_search_query, 
-        context=context
+        context=context + "When writing chemical formulas, never use Unicode subscripts or superscripts."
     )
     os.makedirs(ursaWorkspace/"arxiv_papers_used", exist_ok=True)
     # move all files under ursaWorkspace / "arxiv_papers" into ursaWorkspace/"arxiv_papers_used"
@@ -1255,6 +1257,7 @@ def OER_data_analasis_v2(
     # ref_Us: Annotated[Union[List[str], str], "List or a single value of reference_ID where you determined the value of potential(s) from"] = "",
     filters: List[Filter] = [],
     sort: List[SortSpec] = [],
+    ref_list: Annotated[List[str], "Please provide the list of all reference IDs that you used to determine the parameters for this tool, and explain in the reason why are those reference IDs are related and used"] = [],
     ) -> str:
     """
     Get a pandas dataframe of material entries from the AQ-GNoME database that fulfill
@@ -1282,13 +1285,11 @@ def OER_data_analasis_v2(
     """
     
     # verify refs
-    # for refs in [ref_pHs, ref_Us]:
-    #     refs = refs if isinstance(refs, list) else [refs]
-    #     for ref in refs:
-    #         if ref:
-    #             art = CANVAS.get_artifact(ref)
-    #             if art is None:
-    #                 return f"Error: Reference ID {ref} not found in CANVAS."
+    for ref in ref_list:
+        if ref:
+            art = CANVAS.get_artifact(ref)
+            if art is None:
+                return f"Error: Reference ID {ref} not found in CANVAS."
     
     # Data handler with all standard filters pre-applied:
     dh = _STABILITY_CACHE.dh  
@@ -1345,7 +1346,7 @@ def OER_data_analasis_v2(
         value=save_name,
         description=f"key name of the saved dataframe",
         reasons=reasons,
-        # parent_result_ids=parent_result_ids,
+        parent_result_ids=ref_list,
         metadata={},
     )
     
@@ -1367,7 +1368,7 @@ def OER_data_analasis_v2(
         value=outStr,
         description=f"Out string of the tool",
         reasons=reasons,
-        # parent_result_ids=parent_result_ids,
+        parent_result_ids=ref_list,
         metadata={},
     )
     
@@ -1375,12 +1376,9 @@ def OER_data_analasis_v2(
     
     return outStr
 
-
-
-
 @tool
 def get_candidate_data(
-    material_ids: Annotated[List[str], "List of MaterialIds to retrieve from the database."],
+    material_ids_w_ref: Annotated[List[Tuple[str, str]], "List of (MaterialId, MaterialId_ref) pairs. Data for each MaterialId will be retrieved and printed, MaterialId_ref is the reference ID of the result where you find the MaterialId of interests."],
     sort: List[SortSpec] = [],
 ) -> str:
     """
@@ -1399,6 +1397,16 @@ def get_candidate_data(
     If a requested MaterialId is not found in the screened database, it is reported
     in the return string.
     """
+    
+    for _, ref in material_ids_w_ref:
+        if ref:
+            art = CANVAS.get_artifact(ref)
+            if art is None:
+                return f"Error: Reference ID {ref} not found in CANVAS."
+    
+    material_ids = [mid[0] for mid in material_ids_w_ref]
+    material_id_refs = [mid[1] for mid in material_ids_w_ref]
+    
     df = _STABILITY_CACHE.df
     df = df[df['MaterialId'].isin(material_ids)]
 
@@ -1433,6 +1441,22 @@ def get_candidate_data(
     out = df.to_string(index=True)
     if not_found:
         out += f"\nNote: the following MaterialIds were not found in the screened database: {not_found}"
+    
+    id = CANVAS.register_tool_output(
+        tool_name="get_candidate_data",
+        args={
+            "material_ids_w_ref": material_ids_w_ref,
+            "sort": sort,
+        },
+        value=out,
+        description=f"Data for requested MaterialIds: {', '.join(material_ids)}",
+        reasons={},
+        parent_result_ids=material_id_refs,
+        metadata={},
+    )
+    
+    out += f"\nReport_ID: {id}. Please refer to this ID if you want to reference this report later or use the information in the report for further analysis or decision making."
+    
     return out
 
 
@@ -2007,8 +2031,15 @@ def write_my_canvas(key: Annotated[str, "key"],
 def write_report(
     report: Annotated[str, "Intermediate/final report content in markdown format."],
     report_name: Annotated[str, "Name of the report."],
+    ref_list: Annotated[List[str], "Please provide the list of all reference IDs that you used when writing this report"], 
     ):
     """Note down your report on CANVAS and let the supervisor know you've generated a report"""
+    
+    for ref in ref_list:
+        art = CANVAS.get_artifact(ref)
+        if art is None:
+            return f"Error: Reference ID {ref} not found in CANVAS. Please check the canvas and try again, or regenerate the reference result with corresponding tool."
+    
     outStr = CANVAS.write(report_name, report, False)
     if outStr == f"Key '{report_name}' already exists. Please choose a different key. If you want to overwrite the value, set the 'overwrite' flag to True.":
         outStr = f"Report '{report_name}' already exists. Please choose a different name for the report. You should never overwirte a report."
@@ -2023,7 +2054,7 @@ def write_report(
         },
         value=report,
         description=f"Writing report to canvas with key '{report_name}'",
-        parent_result_ids=[],
+        parent_result_ids=ref_list,
         metadata={},
     )
     
@@ -2312,6 +2343,437 @@ def extract_numeric_from_tool_output_NOTDEMO(
     )
 
     return f"value: {value} is now registered with id {result_id} and can be used for further calculations."
+
+# ----------------------------------------------------------------------
+# search_artifacts internals
+# ----------------------------------------------------------------------
+
+def _norm_query_term(term: Any) -> Optional[Dict[str, Any]]:
+    """Normalize a single query term (str, float, or list of str) into a
+    matcher dict. Returns None if the term is empty / not searchable.
+
+    Matcher dict shape:
+      {"kind": "str" | "float" | "list_str",
+       "value": <original term>,
+       "str_form": <lowercase string>,    # for "str" only
+       "float_value": <float>,            # for "float" only
+       "list_forms": [<lowercase str>, ...]}   # for "list_str" only
+
+    For "float" matching against a string-valued category, we DO NOT
+    treat the query as a substring — instead we extract numeric tokens
+    from the category text via the shared util_numeric_matches_in_region
+    helper, parse each, and compare numerically with tolerance. This
+    avoids the classic false positive where '60' matches inside '160'.
+    """
+    if term is None:
+        return None
+    if isinstance(term, bool):
+        # bool is a subclass of int; reject explicitly to avoid surprises
+        print("BOOL!")
+        return None
+    if isinstance(term, (int, float)):
+        return {
+            "kind": "float",
+            "value": term,
+            "float_value": float(term),
+        }
+    if isinstance(term, str):
+        if not term.strip():
+            return None
+        return {
+            "kind": "str",
+            "value": term,
+            "str_form": term.lower(),
+        }
+    if isinstance(term, list):
+        cleaned = [s.lower() for s in term if isinstance(s, str) and s.strip()]
+        if not cleaned:
+            return None
+        return {
+            "kind": "list_str",
+            "value": term,
+            "list_forms": cleaned,
+        }
+    return None
+
+
+def _atoms_from_args(args: Dict[str, Any]) -> Tuple[List[str], List[float]]:
+    """Decompose an args dict into (string_atoms, numeric_atoms).
+
+    - For each `(key, value)` pair we always include `"<key>=<value_repr>"`
+      as a string atom so list-of-strings queries (which need all terms
+      in one atom) can match key+value pairs naturally (e.g. searching
+      `["ecutwfc", "80"]` against `args["ecutwfc"]=80` finds the atom
+      "ecutwfc=80").
+    - Numeric values (int / float, excluding bool) ALSO contribute
+      directly to numeric_atoms so float queries match by numeric
+      equality without going through stringification or regex
+      tokenization (avoids edge cases like numpy scalars whose repr
+      differs from the standard form).
+    - When a value is itself a list/tuple, we descend ONE level and
+      apply the same rule per element (string element → its own
+      string atom; numeric element → numeric atom; otherwise → repr
+      as string atom).
+    """
+    string_atoms: List[str] = []
+    numeric_atoms: List[float] = []
+    if not args:
+        return string_atoms, numeric_atoms
+
+    def _ingest_value(value: Any) -> None:
+        if isinstance(value, bool):
+            string_atoms.append(repr(value))
+            return
+        if isinstance(value, (int, float)):
+            numeric_atoms.append(float(value))
+            return
+        if isinstance(value, str):
+            string_atoms.append(value)
+            return
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                if isinstance(item, bool):
+                    string_atoms.append(repr(item))
+                elif isinstance(item, (int, float)):
+                    numeric_atoms.append(float(item))
+                elif isinstance(item, str):
+                    string_atoms.append(item)
+                else:
+                    string_atoms.append(repr(item))
+            return
+        string_atoms.append(repr(value))
+
+    for k, v in args.items():
+        # Pair-atom keeps key and value together for list-of-strings
+        # queries that need both terms in one atom.
+        string_atoms.append(f"{k}={v!r}")
+        # And the value (or its elements) contribute independently for
+        # numeric matching and for individual-element string matching.
+        _ingest_value(v)
+    return string_atoms, numeric_atoms
+
+
+def _category_atoms(
+    artifact: Any, category: str
+) -> Tuple[List[str], List[float]]:
+    """Return (string_atoms, numeric_atoms) for the requested category
+    on `artifact`. String matching iterates string_atoms; numeric
+    matching checks numeric_atoms directly and (for text categories)
+    also tokenizes inside each string atom via the regex helper.
+
+    Behaviors per category:
+      - tool_name / description / context: one string atom (the field
+        itself). Numeric matching also tokenizes inside the text.
+      - args: see `_atoms_from_args` — key=value pair atoms plus
+        per-value atoms (numeric values go to numeric_atoms;
+        list-valued args expand one level).
+      - value: if numeric, one numeric atom. If string, one string
+        atom. If list/tuple, each element is an atom of the
+        appropriate kind. If anything else (dict, custom object),
+        one string atom (its repr).
+      - Note: this function is NEVER called on a ListedArtifact, so
+        `value` will never be the nested-artifact-list case.
+
+    Missing or empty categories yield ([], []).
+    """
+    if category == "tool_name":
+        s = str(getattr(artifact, "tool_name", "") or "")
+        return ([s] if s else [], [])
+    if category == "description":
+        s = str(getattr(artifact, "description", "") or "")
+        return ([s] if s else [], [])
+    if category == "context":
+        s = str(getattr(artifact, "context", "") or "")
+        return ([s] if s else [], [])
+    if category == "args":
+        return _atoms_from_args(getattr(artifact, "args", {}) or {})
+    if category == "value":
+        v = getattr(artifact, "value", None)
+        if v is None:
+            return ([], [])
+        if isinstance(v, bool):
+            return ([repr(v)], [])
+        if isinstance(v, (int, float)):
+            return ([], [float(v)])
+        if isinstance(v, str):
+            return ([v], [])
+        if isinstance(v, (list, tuple)):
+            string_atoms: List[str] = []
+            numeric_atoms: List[float] = []
+            for item in v:
+                if isinstance(item, bool):
+                    string_atoms.append(repr(item))
+                elif isinstance(item, (int, float)):
+                    numeric_atoms.append(float(item))
+                elif isinstance(item, str):
+                    string_atoms.append(item)
+                else:
+                    string_atoms.append(repr(item))
+            return (string_atoms, numeric_atoms)
+        return ([repr(v)], [])
+    return ([], [])
+
+
+def _matches_category(
+    matcher: Dict[str, Any],
+    string_atoms: List[str],
+    numeric_atoms: List[float],
+) -> bool:
+    """Apply a normalized matcher to one category's atom view.
+
+    String matching: at least one string_atom (lowercased) contains
+    the query.
+
+    List-of-strings matching: at least one string_atom (lowercased)
+    contains EVERY listed term. The terms must all be in the same
+    atom — not split across atoms — so searching `['ecutwfc', '80']`
+    requires a single atom like "ecutwfc=80" containing both terms.
+
+    Float matching: numeric_atoms checked first by equality with
+    tolerance 1e-6. If no numeric match, each string_atom is also
+    tokenized via the regex helper so numbers embedded in narrative
+    text ("Energy from ecutwfc=80 calculation") are still found,
+    while substrings like '60' inside '160' are correctly rejected
+    by the regex lookarounds.
+    """
+    lowered: List[str] = [s.lower() for s in string_atoms]
+    if matcher["kind"] == "str":
+        target = matcher["str_form"]
+        return any(target in a for a in lowered)
+    if matcher["kind"] == "list_str":
+        terms = matcher["list_forms"]
+        return any(all(t in a for t in terms) for a in lowered)
+    if matcher["kind"] == "float":
+        target = matcher["float_value"]
+        tol = 1e-6
+        # Direct numeric equality on the category's numeric atoms.
+        for n in numeric_atoms:
+            if abs(n - target) <= tol:
+                return True
+        # Regex-tokenized numeric matching inside string atoms (for
+        # numbers embedded in description / context / etc).
+        for atom in string_atoms:
+            if not atom:
+                continue
+            try:
+                hits = util_numeric_matches_in_region(
+                    atom, 0, len(atom), target, tol
+                )
+                if hits:
+                    return True
+            except Exception:                                   # noqa: BLE001
+                # Defensive: if the helper raises for any reason, skip
+                # this atom and move on.
+                continue
+        return False
+    return False
+
+
+_SEARCHABLE_CATEGORIES = ("tool_name", "args", "value", "description", "context")
+
+
+def _build_result_dict(
+    artifact: Any,
+    parent_result_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build the per-result dict surfaced to the agent.
+
+    When the match is on a component of a ListedArtifact, pass
+    `parent_result_id` so the surfaced result_id is the parent's
+    (the agent uses the parent's id downstream and does not care
+    which specific component matched).
+    """
+    v_preview = repr(getattr(artifact, "value", None))
+    if len(v_preview) > 100:
+        v_preview = v_preview[:97] + "..."
+    rid = parent_result_id if parent_result_id is not None else getattr(
+        artifact, "result_id", ""
+    )
+    return {
+        "result_id": rid,
+        "tool_name": getattr(artifact, "tool_name", ""),
+        "value_preview": v_preview,
+        "args": getattr(artifact, "args", {}) or {},
+        "description": getattr(artifact, "description", ""),
+        "context": getattr(artifact, "context", ""),
+    }
+
+
+@tool
+def search_artifacts(
+    query: Annotated[
+        Optional[Union[StrictStr, StrictFloat, List[StrictStr]]],
+        "Search query: a string (case-insensitive substring), a float "
+        "(numeric match with 1e-6 tolerance; word-boundary aware — "
+        "60.0 won't match the '60' inside '160'), or a list of "
+        "strings (all terms must appear in the SAME atom). Matches if "
+        "any category of the artifact satisfies it (if a list of string is specified"
+        "that one category must satisfies all element in the list)."
+        "Pass None to use filters only.",
+    ],
+    filters: Annotated[
+        Optional[Dict[str, Union[StrictStr, StrictFloat, List[StrictStr]]]],
+        "Per-category AND filters. Keys: 'tool_name', 'args', 'value', "
+        "'description', 'context'. Each value matched the same way as "
+        "`query`. Pass None to use `query` only. Combinable with "
+        "`query` (both must match).",
+    ],
+    order: Annotated[
+        Literal["ascending", "descending"],
+        "Result order by creation timestamp. 'descending' = newest "
+        "first (typical); 'ascending' = oldest first.",
+    ],
+):
+    """
+    Find a past artifact's result_id by content. 
+    
+    Examples:
+      - query="some_key_word" → substring across any category
+      - query=80.0 → numeric match (value, args including nested
+        lists, or numbers embedded in description/context)
+      - filters={"tool_name": "example_tool_name"} → all results generated with example_tool_name
+      - query=["keyword1", "keyword12"], filters={"tool_name":
+        "example_tool_name"} → all results generated with example_tool_name that have at least one category matches both terms: keyword1, keyword2
+        
+
+    Categories: tool_name, args (each key=value pair is one atom;
+    numeric values also matched directly), value (per-element for
+    lists), description, context.
+
+    Returns a dict with `results`, each entry having: result_id,
+    tool_name, value_preview, args, description, context.
+
+    At least one of `query` or `filters` must be supplied.
+    """
+    max_results = 20
+    # Normalize the broad query into a matcher.
+    query_matcher = _norm_query_term(query) if query is not None else None
+
+    # Normalize filters into per-category matchers.
+    filter_matchers: Dict[str, Dict[str, Any]] = {}
+    if filters:
+        for cat, term in filters.items():
+            if cat not in _SEARCHABLE_CATEGORIES:
+                return (
+                    f"Unknown filter category {cat!r}. Allowed categories: "
+                    f"{list(_SEARCHABLE_CATEGORIES)}."
+                )
+            m = _norm_query_term(term)
+            if m is None:
+                return (
+                    f"Filter for category {cat!r} is empty or has an "
+                    f"unsupported type (got {term!r}). Supply a non-empty "
+                    f"string, a float, or a non-empty list of strings."
+                )
+            filter_matchers[cat] = m
+            
+    
+    print(f"query is {query!r} → matcher {query_matcher}")
+    print(f"filters are {filters!r} → matchers {filter_matchers}")
+    if query_matcher is None and not filter_matchers:
+        return (
+            "Empty search rejected. Supply at least one of `query` "
+            "(broad search) or `filters` (per-category structured "
+            "search). Use `inspect_my_canvas` to browse CANVAS keys, "
+            "or `list_referenceable_inputs` to enumerate a specific "
+            "artifact's input parameters."
+        )
+
+    if max_results <= 0:
+        return f"max_results must be positive; got {max_results}."
+
+    # Build sorted iteration order.
+    registry = getattr(CANVAS, "result_registry", {}) or {}
+    if not registry:
+        return "Artifact registry is empty — no artifacts have been registered yet."
+
+    items = list(registry.items())
+    items.sort(
+        key=lambda kv: getattr(kv[1], "timeStamp", 0.0),
+        reverse=(order == "descending"),
+    )
+
+    results: List[Dict[str, Any]] = []
+    total_matched_before_cap = 0
+
+    def _check_artifact_level(art: Any) -> bool:
+        """Apply query + filters to an artifact (or a list-component)
+        and return True if it matches. Per-category atom views are
+        computed once per artifact."""
+        # Precompute category atom views once.
+        cat_views: Dict[str, Tuple[List[str], List[float]]] = {
+            c: _category_atoms(art, c) for c in _SEARCHABLE_CATEGORIES
+        }
+        # Broad query: at least one category must match.
+        if query_matcher is not None:
+            broad_hit = False
+            for c in _SEARCHABLE_CATEGORIES:
+                str_atoms, num_atoms = cat_views[c]
+                if _matches_category(query_matcher, str_atoms, num_atoms):
+                    broad_hit = True
+                    break
+            if not broad_hit:
+                return False
+        # Filters: every named category must match its filter.
+        for c, m in filter_matchers.items():
+            str_atoms, num_atoms = cat_views[c]
+            if not _matches_category(m, str_atoms, num_atoms):
+                return False
+        return True
+
+    for rid, artifact in items:
+        if artifact is None:
+            continue
+        if isinstance(artifact, ListedArtifact):
+            # ListedArtifact contributes ONLY through its components.
+            # _category_atoms is never invoked on a ListedArtifact, so
+            # the components' own fields (their own tool_name, args,
+            # value, description, context) are what get matched. If no
+            # component matches, this ListedArtifact contributes
+            # nothing — even if the parent's own description/context
+            # would have matched. This is by design: matches surface
+            # at the granularity the agent can act on.
+            for i, comp in enumerate(artifact.value or []):
+                if not _check_artifact_level(comp):
+                    continue
+                total_matched_before_cap += 1
+                if len(results) < max_results:
+                    # Surface under the PARENT's result_id — the agent
+                    # always references the parent ref when using this
+                    # artifact downstream.
+                    results.append(
+                        _build_result_dict(
+                            comp,
+                            parent_result_id=artifact.result_id,
+                        )
+                    )
+        else:
+            # Non-ListedArtifact: standard parent-level match.
+            if _check_artifact_level(artifact):
+                total_matched_before_cap += 1
+                if len(results) < max_results:
+                    results.append(_build_result_dict(artifact))
+
+    truncated = total_matched_before_cap > max_results
+
+    out: Dict[str, Any] = {
+        "n_matches": total_matched_before_cap,
+        "n_returned": len(results),
+        "order": order,
+        "results": results,
+    }
+    if truncated:
+        out["note"] = (
+            f"More than max_results ({max_results}) matched; "
+            f"{total_matched_before_cap - max_results} additional matches "
+            f"are not shown. Refine `query` or `filters` to narrow the "
+            f"search."
+        )
+    
+    json.dump(out, sys.stdout, indent=2)    
+    
+    return out
+
 ##################################################################################################
 ##                                          DFT tools                                           ##
 ##################################################################################################

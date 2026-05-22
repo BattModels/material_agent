@@ -328,6 +328,13 @@ You have a maximum of 1 hours to complete the entire study and make your final r
     what issues you encountered. Try to make use of each tool, once for testing purposes. Report your findings.
     """
     #    You have a maximum of 25 minutes to complete your entire run and report your findings.
+    
+    minimal_test_message_2 = """
+    Conduct 1 literature search about best OER catalyst. Then ask your worker to search the that result ID with the
+    corresponding tool. Pretend that you forgot the id, ask your worker agent to search for that id using some other information that's associated with that ID.
+    Verify that the search contains the correct ID. Then generate a report about the literature search result. After the literature search, if the next step in the plan
+    is to ask your worker to search the the result ID, do not touch the plan, keep it as is.
+    """
 
     revised_message_v6 = """
     Please conduct an acidic OER screening study to identify the best catalytic candidate
@@ -516,7 +523,7 @@ You have a maximum of 1 hours to complete the entire study and make your final r
 
         if overwrite:
             inputs = {
-                "inputs": f"{minimal_test_message}",
+                "inputs": f"{minimal_test_message_2}",
                 "plan": [],
                 "past_steps": [],
                 # NOTE: init boss answers state explicitly...
@@ -572,11 +579,11 @@ You have a maximum of 1 hours to complete the entire study and make your final r
             durability="sync",
             ):
             if "__end__" not in s:
-                print(s)
+                # print(s)
                 print("----")
                 if eval(config["SAVE_DIALOGUE"]):
                     with open(f"{WORKING_DIRECTORY}/his.txt", "a") as f:
-                        f.write(repr(s) + "\n")
+                        # f.write(repr(s) + "\n")
                         f.write("----\n")
                 
                 # time.sleep(5)
