@@ -398,7 +398,7 @@ You have a maximum of 1 hours to complete the entire study and make your final r
     limitations of the current study.
 
     You have a maximum of 30 days to complete the entire study and make your final report.
-    Try to make use of almost all the available time.
+    Try to make use of the available time.
     """
     # TODO TODO TODO - adjust the time limit
     
