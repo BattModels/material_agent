@@ -83,7 +83,7 @@ async def _arXiv_search(arxiv_search_query, context):  # Your async operation
     config = var.OTHER_GLOBAL_VARIABLES
     ursaWorkspace = Path(os.path.join(var.my_WORKING_DIRECTORY, "ursa_workspace"))
     llm = ChatAnthropic(model="claude-haiku-4-5-20251001", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-    agent = ArxivAgent(llm=llm, process_images=False, max_results=5, workspace=ursaWorkspace)
+    agent = ArxivAgent(llm=llm, process_images=False, max_results=10, workspace=ursaWorkspace)
     result = await agent.ainvoke(
         arxiv_search_query=arxiv_search_query, 
         context=context + "When writing chemical formulas, never use Unicode subscripts or superscripts."
@@ -113,10 +113,10 @@ def arXiv_search(
     ) -> str:
     """
     Perform an arXiv search for papers with a given arxiv_search_query and context and provide a summary.
-    Only 5 papers will be considered in the search. If you want to consider more papers, you will need 
+    Only 10 papers will be considered in the search. If you want to consider more papers, you will need 
     to refine your search arguments.
     """
-    # Only 5 papers will be considered in the search. If you want to consider more papers, you will need to refine
+    # Only 10 papers will be considered in the search. If you want to consider more papers, you will need to refine
     # your search arguments.
 
     result = asyncio.run(_arXiv_search(arxiv_search_query, context))
