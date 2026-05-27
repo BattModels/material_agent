@@ -320,7 +320,7 @@ You have a maximum of 1 hours to complete the entire study and make your final r
 
     minimal_test_message = """
     Please conduct a minimal OER screening study for testing purposes, considering only a limited number of candidates.
-    Select 1 candiate which only contains atoms which are genneraly non-magnetic. Also, select 1 candidate which 
+    Select 5 candiates which only contains atoms which are genneraly non-magnetic. Also, select 5 candidates which 
     contains elements which are genneraly magnetic, such as Gd, Eu, Fe, Mn or Co. You need to select a candidate with 
     at least 2 diffrent magnetic elements in the same candidate structure. Try to keep the computational cost low.
     Filter the database, enter candidates into the experiment log, run bulk relaxation, surface relaxation,
@@ -373,7 +373,7 @@ You have a maximum of 1 hours to complete the entire study and make your final r
     relevant jobs. If many jobs are pending (more than 50), hold off on submitting more to
     allow for flexibility later when you want to prioritize specific jobs. Consider that,
     when you are nearing the end of the study, you may not have time to wait for all jobs
-    to finish. We recommend starting by submitting about 5 diverse candidates and then
+    to finish. We recommend starting by submitting about 40 diverse candidates and then
     adjusting the number of jobs based on how many jobs are pending vs running. Note
     that surface and adsorption jobs will take much longer than bulk jobs.
 
@@ -397,7 +397,8 @@ You have a maximum of 1 hours to complete the entire study and make your final r
     - Any recommendations for future studies or next steps based on the findings and
     limitations of the current study.
 
-    You have a maximum of 8 hours to complete the entire study and make your final report.
+    You have a maximum of 30 days to complete the entire study and make your final report.
+    Try to make use of the available time.
     """
     # TODO TODO TODO - adjust the time limit
     
@@ -479,8 +480,8 @@ You have a maximum of 1 hours to complete the entire study and make your final r
         if not os.path.exists(db_file):
             initialize_database(db_file)
 
-    EXPLOG.init(Path(WORKING_DIRECTORY)/"TEMP_vasp_calcs",
-                "MLIP_test",
+    EXPLOG.init(Path(WORKING_DIRECTORY)/"vasp_calcs",
+                "production",
                 reject_if_failed_exists = True,
                 require_relaxed_o_for_oh = True
                 )
@@ -523,10 +524,9 @@ You have a maximum of 1 hours to complete the entire study and make your final r
 
         if overwrite:
             inputs = {
-                "inputs": f"{minimal_test_message_2}",
+                "inputs": f"{revised_message_v6}",
                 "plan": [],
                 "past_steps": [],
-                # NOTE: init boss answers state explicitly...
                 "draft_response": "",
                 "boss_feedback": "",
                 "response": "",

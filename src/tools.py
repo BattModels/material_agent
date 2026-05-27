@@ -178,12 +178,12 @@ def wait_for_update(
         while status == "stop":
             # print(f"Calculation pause, Agent is waiting. cwd: {var.my_WORKING_DIRECTORY}")
             # # wait for 5 second
-            time.sleep(60)
+            time.sleep(200)
             with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
                 status = f.read()
 
 
-        time.sleep(5) # TODO - consider before production run
+        time.sleep(200) # TODO - consider before production run
         tmpUpdate = EXPLOG.update_log()
         # Sort through the updates, remove non-failed/completed jobs (ignore going from pending to running)
         
@@ -654,7 +654,6 @@ def enter_candidate_in_log(
     reason_or_hypothesis: Annotated[str, "Detailed Reason and hypothesis for selecting this candidate. To be used later for analysis and summarization."],
     MaterialId: Annotated[str, "MaterialId of the candidate."],
     MaterialId_ref: Annotated[str, "Reference ID of the result where you find the MaterialId of interests."],
-    # TODO: make required — remove = "" and add: if not df_name_ref: return "Error: df_name_ref must be provided."
     df_name_ref: Annotated[str, "Reference ID of the dataframe result (e.g. from OER_data_analasis_v2 or browse_df) used to select this candidate. Used for DAG provenance only."] = "",
     note: Annotated[str | None, "Any notes you want to add."] = None,
     ) -> str:
