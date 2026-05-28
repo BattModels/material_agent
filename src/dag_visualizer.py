@@ -42,8 +42,10 @@ class DAGNode:
     raw: Any = field(default=None, repr=False)
 
     # populated by build_dag()
-    children_ids: list[str] = field(default_factory=list, repr=False)
+    children_ids: list[str]  = field(default_factory=list, repr=False)
     depth: int = 0
+    # base parent IDs whose original ref was dotted (<id>.<param>) → dashed edge
+    dashed_parent_ids: set[str] = field(default_factory=set, repr=False)
 
 
 @dataclass
@@ -201,14 +203,27 @@ def build_dag(raw_nodes: list[Any]) -> DAG:
     #     nodes[nid] = DAGNode(id=nid, parent_ids=parent_ids, raw=raw)
         
     for raw in raw_nodes:
-      nid = raw.result_id
-      if nid == "PLACEHOLDER":          # ← skip placeholder nodes entirely
-          continue
-      parent_ids = [
-          pid for pid in (raw.parent_result_ids or [])
-          if pid != "PLACEHOLDER"       # ← also strip placeholder parent refs
-      ]
-      nodes[nid] = DAGNode(id=nid, parent_ids=parent_ids, raw=raw)
+        nid = raw.result_id
+        if nid == "PLACEHOLDER":          # skip placeholder nodes entirely
+            continue
+
+        dashed: set[str]    = set()
+        parent_ids: list[str] = []
+        seen_pids: set[str]  = set()
+
+        for ref in (raw.parent_result_ids or []):
+            if ref == "PLACEHOLDER":
+                continue
+            # normalise dotted ref  "<id>.<param>"  →  base id "<id>"
+            base = ref.split(".", 1)[0] if "." in ref else ref
+            if base not in seen_pids:        # deduplicate (solid wins over dashed)
+                seen_pids.add(base)
+                parent_ids.append(base)
+            if "." in ref:
+                dashed.add(base)             # remember this edge should be dashed
+
+        nodes[nid] = DAGNode(id=nid, parent_ids=parent_ids,
+                             dashed_parent_ids=dashed, raw=raw)
 
     # build child pointers
     for nid, node in nodes.items():
@@ -363,7 +378,9 @@ def _build_graph_data(dag: DAG) -> tuple[list[dict], list[dict], dict, list[str]
             key = (pid, nid)
             if key not in seen:
                 seen.add(key)
-                vis_edges.append({"from": pid, "to": nid, "arrows": "to"})
+                is_dashed = pid in node.dashed_parent_ids
+                vis_edges.append({"from": pid, "to": nid, "arrows": "to",
+                                  "dashes": is_dashed})
 
     return vis_nodes, vis_edges, node_data, chrono_order
 
@@ -667,9 +684,13 @@ const visNodes = RAW_NODES.map(n => ({{
 
 const visEdges = RAW_EDGES.map(e => ({{
   ...e,
-  color:{{color:"#4f8ef780",highlight:"#4f8ef7",hover:"#7eb5fc"}},
+  color: e.dashes
+    ? {{color:"#7f5af080", highlight:"#7f5af0", hover:"#a78bfa"}}   // purple tint for dashed
+    : {{color:"#4f8ef780", highlight:"#4f8ef7", hover:"#7eb5fc"}},
   smooth:{{type:"cubicBezier",forceDirection:"vertical",roundness:0.5}},
-  width:1.5, selectionWidth:2.5,
+  dashes: e.dashes ? [6, 4] : false,
+  width: e.dashes ? 1.2 : 1.5,
+  selectionWidth:2.5,
 }}));
 
 let isHierarchical = true;
@@ -1183,7 +1204,7 @@ def _demo():
                   description="Runs sentiment classification on raw input.",
                   metadata={"confidence": 0.91},
                   timestamp=t0 + 3.0),
-        _MockNode("rid-E", ["rid-B", "rid-C"], "merge_results",
+        _MockNode("rid-E", ["rid-B", "rid-C.embedding"], "merge_results",  # dotted ref on rid-C
                   value={"merged": True},
                   reasons={"input_a": "needed for join", "input_b": "provides context"},
                   description="Merges outputs from B and C into a unified result.",

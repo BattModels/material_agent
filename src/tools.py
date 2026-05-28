@@ -127,6 +127,18 @@ def _safe_eval(expr: str, variables: dict[str, float]) -> float:
 
 @tool
 def math_expression_tool(
+    reasons: Annotated[
+        str,
+        "Per-parameter rationale. Write 2-3 sentences covering: "
+        "(a) THE ROLE this calculation plays in the study described in "
+        "`context` (e.g. 'computing an intermediate value used downstream', "
+        "'final reported quantity', 'sanity check'); "
+        "(b) WHY THIS SPECIFIC EXPRESSION AND VALUES: how the inputs were "
+        "chosen, what evidence supports them, and the expected meaning of "
+        "the output. Since this tool has only one logical parameter (the "
+        "expression+values pair), provide one combined rationale rather "
+        "than per-key entries.",
+    ],
     values_w_ref: Annotated[
         List[Tuple[float, str]],
         "List of (value, ref_result_id) pairs. They will be mapped in order to "
@@ -146,18 +158,6 @@ def math_expression_tool(
         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
         "'one-off check'), and the reason why you call this tool."
-    ],
-    reasons: Annotated[
-        str,
-        "Per-parameter rationale. Write 2-3 sentences covering: "
-        "(a) THE ROLE this calculation plays in the study described in "
-        "`context` (e.g. 'computing an intermediate value used downstream', "
-        "'final reported quantity', 'sanity check'); "
-        "(b) WHY THIS SPECIFIC EXPRESSION AND VALUES: how the inputs were "
-        "chosen, what evidence supports them, and the expected meaning of "
-        "the output. Since this tool has only one logical parameter (the "
-        "expression+values pair), provide one combined rationale rather "
-        "than per-key entries.",
     ],
 ) -> str:
     """
@@ -232,7 +232,13 @@ def list_referenceable_inputs(
     ],
 ):
     """List the input parameter names and corresponding value of a past tool call so you can
-    cross-reference them in a downstream tool call. 
+    cross-reference them in a downstream tool call with dotted refs format. 
+    
+    Only use dotted refs when the value you are passing is semantically the same as that earlier input
+    — meaning both calls are deliberately receiving the same upstream-decided value. 
+    Dotted refs are NOT a way to fish a value out of an artifact when you can't find its output ref. 
+    If you need to reference a value that was an OUTPUT of an earlier tool, 
+    find that earlier tool's output ref with search_artifacts tool instead, not its input ref.
 
     Returns a multi-line string. Only top-level args keys are
     referenceable; nested dict/list fields are not addressable via
@@ -275,6 +281,11 @@ def list_referenceable_inputs(
         "To use one of these as a source for a downstream tool's "
         "`*_ref` parameter, copy the dotted reference string above "
         "into that `*_ref` argument."
+        "Only use dotted refs when the value you are passing is semantically the same as that earlier input"
+        "— meaning both calls are deliberately receiving the same upstream-decided value. "
+        "Dotted refs are NOT a way to fish a value out of an artifact when you can't find its output ref."
+        "If you need to reference a value that was an OUTPUT of an earlier tool, "
+        "find that earlier tool's output ref with search_artifacts tool instead, not its input ref."
     )
     return "\n".join(lines)
 
@@ -559,8 +570,7 @@ def search_artifacts(
     ],
 ):
     """
-    Find a past artifact's result_id by content. Use when you need a
-    ref but don't remember which call produced it.
+    Find a past artifact's result_id by content.
 
     Examples:
       - query="some_key_word" → substring across any category
@@ -708,6 +718,19 @@ def search_artifacts(
 
 @tool
 def extract_numeric_from_tool_output(
+    reasons: Annotated[
+        str,
+        "Per-parameter rationale. Write 2-3 sentences covering: "
+        "(a) THE ROLE this extracted number plays in the study described in "
+        "`context` (e.g. 'final reported quantity', 'intermediate input to "
+        "a downstream tool', 'used as the new ecutwfc for the next "
+        "convergence step'); "
+        "(b) WHY THIS SPECIFIC SOURCE AND SNIPPET: how the source tool "
+        "output was chosen, why the snippet is the right region of the "
+        "output, and what the expected interpretation of the value is. "
+        "For an extraction step, treat the extraction itself as the "
+        "'parameter': one combined rationale, not per-key entries.",
+    ],
     source_tool_call_id: Annotated[
         str,
         "The result_id of the text result from a prior tool call that you "
@@ -734,19 +757,6 @@ def extract_numeric_from_tool_output(
         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
         "'one-off check'), and the reason why you call this tool."
-    ],
-    reasons: Annotated[
-        str,
-        "Per-parameter rationale. Write 2-3 sentences covering: "
-        "(a) THE ROLE this extracted number plays in the study described in "
-        "`context` (e.g. 'final reported quantity', 'intermediate input to "
-        "a downstream tool', 'used as the new ecutwfc for the next "
-        "convergence step'); "
-        "(b) WHY THIS SPECIFIC SOURCE AND SNIPPET: how the source tool "
-        "output was chosen, why the snippet is the right region of the "
-        "output, and what the expected interpretation of the value is. "
-        "For an extraction step, treat the extraction itself as the "
-        "'parameter': one combined rationale, not per-key entries.",
     ],
 ):
     """
@@ -838,6 +848,19 @@ def extract_numeric_from_tool_output(
 
 @tool
 def extract_text_from_tool_output(
+    reasons: Annotated[
+        str,
+        "Per-parameter rationale. Write 2-3 sentences covering: "
+        "(a) THE ROLE this extracted text plays in the study described in "
+        "`context` (e.g. 'used as input filename for a downstream tool', "
+        "'recorded as the calculation status note', 'identifies the "
+        "converged structure for the next stage'); "
+        "(b) WHY THIS SPECIFIC SOURCE AND SNIPPET: how the source tool "
+        "output was chosen, why the snippet is the right region of the "
+        "output, and what the expected interpretation of the text is. "
+        "For an extraction step, treat the extraction itself as the "
+        "'parameter': one combined rationale, not per-key entries.",
+    ],
     source_tool_call_id: Annotated[
         str,
         "The result_id of the text result from a prior tool call that you "
@@ -867,19 +890,6 @@ def extract_text_from_tool_output(
         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
         "'one-off check'), and the reason why you call this tool."
-    ],
-    reasons: Annotated[
-        str,
-        "Per-parameter rationale. Write 2-3 sentences covering: "
-        "(a) THE ROLE this extracted text plays in the study described in "
-        "`context` (e.g. 'used as input filename for a downstream tool', "
-        "'recorded as the calculation status note', 'identifies the "
-        "converged structure for the next stage'); "
-        "(b) WHY THIS SPECIFIC SOURCE AND SNIPPET: how the source tool "
-        "output was chosen, why the snippet is the right region of the "
-        "output, and what the expected interpretation of the text is. "
-        "For an extraction step, treat the extraction itself as the "
-        "'parameter': one combined rationale, not per-key entries.",
     ],
 ):
     """
@@ -1038,6 +1048,18 @@ def _safe_call(fn, default_name: str) -> Any:
 
 @tool
 def inspect_ase_atoms(
+    reasons: Annotated[
+        str,
+        "Per-parameter rationale. Write 2-3 sentences covering: "
+        "(a) THE ROLE this inspection plays in the study described in "
+        "`context` (e.g. 'sanity check on the relaxed slab geometry', "
+        "'reading cell parameters to feed the next tool', 'verifying the "
+        "file produced by an upstream tool is well-formed'); "
+        "(b) WHY THIS SPECIFIC FILE: how the file was chosen, what you "
+        "expect to find in it, and what downstream decision will use the "
+        "result. Since this tool has only one logical input, provide one "
+        "combined rationale rather than per-key entries.",
+    ],
     atomsFilename: Annotated[
         str,
         "Path to the ASE Atoms object file (e.g. .traj, .xyz) or the name of "
@@ -1057,18 +1079,6 @@ def inspect_ase_atoms(
         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
         "'one-off check'), and the reason why you call this tool."
-    ],
-    reasons: Annotated[
-        str,
-        "Per-parameter rationale. Write 2-3 sentences covering: "
-        "(a) THE ROLE this inspection plays in the study described in "
-        "`context` (e.g. 'sanity check on the relaxed slab geometry', "
-        "'reading cell parameters to feed the next tool', 'verifying the "
-        "file produced by an upstream tool is well-formed'); "
-        "(b) WHY THIS SPECIFIC FILE: how the file was chosen, what you "
-        "expect to find in it, and what downstream decision will use the "
-        "result. Since this tool has only one logical input, provide one "
-        "combined rationale rather than per-key entries.",
     ],
 ) -> str:
     """
@@ -1159,6 +1169,19 @@ def inspect_ase_atoms(
 
 @tool
 def get_ase_atoms_property(
+    reasons: Annotated[
+        str,
+        "Per-parameter rationale. Write 2-3 sentences covering: "
+        "(a) THE ROLE this extracted property plays in the study described "
+        "in `context` (e.g. 'cell volume feeding an EOS fit', 'positions "
+        "used to build a slab with adsorbate', 'potential energy used as "
+        "the converged reference for an optimization sweep'); "
+        "(b) WHY THIS SPECIFIC FILE AND PROPERTY: how the file was chosen, "
+        "why this property in particular, and what downstream decision will "
+        "use the result. Since this tool has only one logical input "
+        "(file + property), provide one combined rationale rather than "
+        "per-key entries.",
+    ],
     atomsFilename: Annotated[
         str,
         "Path to the ASE Atoms object file (e.g. .traj, .xyz) or the name of "
@@ -1183,19 +1206,6 @@ def get_ase_atoms_property(
         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
         "'one-off check'), and the reason why you call this tool."
-    ],
-    reasons: Annotated[
-        str,
-        "Per-parameter rationale. Write 2-3 sentences covering: "
-        "(a) THE ROLE this extracted property plays in the study described "
-        "in `context` (e.g. 'cell volume feeding an EOS fit', 'positions "
-        "used to build a slab with adsorbate', 'potential energy used as "
-        "the converged reference for an optimization sweep'); "
-        "(b) WHY THIS SPECIFIC FILE AND PROPERTY: how the file was chosen, "
-        "why this property in particular, and what downstream decision will "
-        "use the result. Since this tool has only one logical input "
-        "(file + property), provide one combined rationale rather than "
-        "per-key entries.",
     ],
 ) -> str:
     """
@@ -1293,16 +1303,6 @@ def get_ase_atoms_property(
 
 @tool
 def init_structure_data(
-    element: Annotated[str, "Element symbol"],
-    lattice: Annotated[str, "Lattice type. Must be one of sc, fcc, bcc, tetragonal, bct, hcp, rhombohedral, orthorhombic, mcl, diamond, zincblende, rocksalt, cesiumchloride, fluorite or wurtzite."],
-    a: Annotated[float, "Lattice constant"],
-    context: Annotated[
-        str,
-        "1-2 sentence describing which study or exploration this tool call "
-        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
-        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'), and the reason why you call this tool."
-    ],
     reasons: Annotated[
         Dict[str, str],
         "Per-parameter rationale. For each parameter, write 2-3 sentences "
@@ -1315,10 +1315,22 @@ def init_structure_data(
         "supports it, and the expected effect on the output. "
         "The keys must include: 'element', 'lattice', 'a', 'b', 'c'.",
     ],
+    element: Annotated[str, "Element symbol"],
+    lattice: Annotated[str, "Lattice type. Must be one of sc, fcc, bcc, tetragonal, bct, hcp, rhombohedral, orthorhombic, mcl, diamond, zincblende, rocksalt, cesiumchloride, fluorite or wurtzite."],
+    a: Annotated[float, "Lattice constant"],
+    context: Annotated[
+        str,
+        "1-2 sentence describing which study or exploration this tool call "
+        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
+        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+        "'one-off check'), and the reason why you call this tool."
+    ],
     b: Annotated[float, "Lattice constant. If only a and b is given, b will be interpreted as c instead."] = None,
     c: Annotated[float, "Lattice constant"] = None,
 ) -> Annotated[str, "Path of the saved initial structure data file."]:
     """Create single element bulk initial structure based on composite, crystal lattice, lattice info, save to the working dir, and return filename.
+    NEVER EVER use this tool when doing adsorption analysis since this tool will not provide adsorption site information, and will not create vaccum needed for adsorption related analysis. 
+    Use generateSurface_and_getPossibleSite instead for adsorption related analysis, which generates the clean slab structure and also provides possible adsorption site information.
     reference_id in the output ties with: saved initial structure filepath, str"""
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     os.makedirs(WORKING_DIRECTORY, exist_ok=True)
@@ -1349,6 +1361,20 @@ def init_structure_data(
 
 @tool
 def generateSurface_and_getPossibleSite(
+    reasons: Annotated[
+        Dict[str, str],
+        "Per-parameter rationale. For each parameter, write 2-3 sentences "
+        "covering: "
+        "(a) THE ROLE THIS PARAMETER plays in the study described in "
+        "`context` (e.g. 'being varied now', 'fixed at converged value from "
+        "prior convergence test', 'inherited from upstream tool', "
+        "'held fixed by design while a sub-study is in progress'); "
+        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
+        "supports it, and the expected effect on the output. "
+        "The keys must include: 'species', 'crystal_structures', 'facets',"
+        "'supercell_dim_xy', 'supercell_dim_z', 'n_fixed_layers', 'vacuum',"
+        "and 'surfaceFilename'.",
+    ],
     species: Annotated[str, "Element symbol"],
     crystal_structures: Annotated[str, "Crystal structure. Must be one of sc, fcc, bcc, tetragonal, bct, hcp, rhombohedral, orthorhombic, mcl, diamond, zincblende, rocksalt, cesiumchloride, fluorite or wurtzite."],
     facets: Annotated[str, "Facet of the surface. Must be one of 100, 110, 111, 210, 211, 310, 311, 320, 321, 410, 411, 420, 421, 510, 511, 520, 521, 530, 531, 540, 541, 610, 611, 620, 621, 630, 631, 640, 641, 650, 651, 660, 661"],
@@ -1367,22 +1393,8 @@ def generateSurface_and_getPossibleSite(
         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
         "'one-off check'), and the reason why you call this tool."
     ],
-    reasons: Annotated[
-        Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-3 sentences "
-        "covering: "
-        "(a) THE ROLE THIS PARAMETER plays in the study described in "
-        "`context` (e.g. 'being varied now', 'fixed at converged value from "
-        "prior convergence test', 'inherited from upstream tool', "
-        "'held fixed by design while a sub-study is in progress'); "
-        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
-        "supports it, and the expected effect on the output. "
-        "The keys must include: 'species', 'crystal_structures', 'facets',"
-        "'supercell_dim_xy', 'supercell_dim_z', 'n_fixed_layers', 'vacuum',"
-        "and 'surfaceFilename'.",
-    ],
 ):
-    """Generate the bulk surface structure and get the available adsorption sites. 
+    """Generate the clean slab structure and get the available adsorption sites. 
     You can try out different supercell_dim_z, n_fixed_layers and vacuum size to see the effect.
     However, only when you specify the source_result_id reference for these parameters, the result will be registered in the canvas and you can use them in the production run.
     Otherwise, the tool will still execute and return the generated surface structure and available adsorption sites, but you can't use them in the production run to obtain the final result
@@ -1463,7 +1475,7 @@ def generateSurface_and_getPossibleSite(
         ids[k] = CANVAS.register_tool_output(
             tool_name="generateSurface_and_getPossibleSite",
             args=common_args,
-            value=v,
+            value=list(v),
             description=f"Adsorption {k} site",
             context=context,
         reasons=merged_reasons,
@@ -1471,7 +1483,7 @@ def generateSurface_and_getPossibleSite(
             parent_result_ids_w_args=param_sources,
             metadata={},
         )
-        mySites[k] = [v, f"ID={ids[k]}"]
+        mySites[k] = [list(v), f"ID={ids[k]}"]
 
     CANVAS.write('Possible_CO_site_on_Pt_surface', mySites)
 
@@ -1483,7 +1495,7 @@ def generateSurface_and_getPossibleSite(
     path_id = CANVAS.register_tool_output(
         tool_name="generateSurface_and_getPossibleSite",
         args=common_args,
-        value=f"surface{surfaceFilename}",
+        value=f"surface/{surfaceFilename}",
         description="Path of the saved surface structure file in traj format.",
         context=context,
         reasons=merged_reasons,
@@ -1497,17 +1509,6 @@ def generateSurface_and_getPossibleSite(
 
 @tool
 def generate_myAdsorbate(
-    symbols: Annotated[str, "Element symbols of the adsorbate (Do not use any delimiters)"],
-    positions: Annotated[List[List[float]], "Positions of the atoms in the adsorbate, e.g. [[x1, y1, z1], [x2, y2, z2], ...], following the same order as the symbols."],
-    AdsorbateFileName: Annotated[str, "Name (not a path) of the adsorbate file to be saved in traj format"],
-    vaccum: Annotated[float, "Vacuum size in Angstrom around the adsorbate structure. Typically 10.0 Angstrom should be sufficient"],
-    context: Annotated[
-        str,
-        "1-2 sentence describing which study or exploration this tool call "
-        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
-        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'), and the reason why you call this tool."
-    ],
     reasons: Annotated[
         Dict[str, str],
         "Per-parameter rationale. For each parameter, write 2-3 sentences "
@@ -1519,6 +1520,17 @@ def generate_myAdsorbate(
         "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
         "supports it, and the expected effect on the output. "
         "The keys must include: 'symbols', 'positions', 'vaccum', 'AdsorbateFileName'.",
+    ],
+    symbols: Annotated[str, "Element symbols of the adsorbate (Do not use any delimiters)"],
+    positions: Annotated[List[List[float]], "Positions of the atoms in the adsorbate, e.g. [[x1, y1, z1], [x2, y2, z2], ...], following the same order as the symbols."],
+    AdsorbateFileName: Annotated[str, "Name (not a path) of the adsorbate file to be saved in traj format"],
+    vaccum: Annotated[float, "Vacuum size in Angstrom around the adsorbate structure. Typically 10.0 Angstrom should be sufficient"],
+    context: Annotated[
+        str,
+        "1-2 sentence describing which study or exploration this tool call "
+        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
+        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+        "'one-off check'), and the reason why you call this tool."
     ],
 ):
     """Generate an adsorbate structure and save it.
@@ -1553,19 +1565,6 @@ def generate_myAdsorbate(
 
 @tool
 def add_myAdsorbate(
-    mySurfacePath: Annotated[str, "Path to the surface structure"],
-    adsorbatePath: Annotated[str, "Path to the adsorbate structure"],
-    mySites: Annotated[List[float], "Adsorption sites you want to put adsorbates on, e.g. [x1, y1]]"],
-    rotations: Annotated[Tuple[float, str], "Rotations for the adsorbate, e.g. [90.0, 'x'] or [180.0, 'y'] or ..."],
-    surfaceWithAdsorbateFileName: Annotated[str, "filename (not a path) of the surface adsorbated with adsorbate to be saved as surface/<filename>.traj format"],
-    context: Annotated[
-        str,
-        "1-2 sentence describing which study or exploration this tool call "
-        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
-        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'), and the reason why you call this tool."
-    ],
-    mySites_ref: Annotated[str, "source_result_id for mySites. Accepts an 8-char id to reference the output, or `<8-char-id>.<param_name>` to reference an input parameter of a past tool call (see `list_referenceable_inputs`)."],
     reasons: Annotated[
         Dict[str, str],
         "Per-parameter rationale. For each parameter, write 2-3 sentences "
@@ -1579,6 +1578,19 @@ def add_myAdsorbate(
         "The keys must include: 'mySurfacePath', 'adsorbatePath', 'mySites', "
         "'rotations', 'surfaceWithAdsorbateFileName'.",
     ],
+    mySurfacePath: Annotated[str, "Path to the surface structure"],
+    adsorbatePath: Annotated[str, "Path to the adsorbate structure"],
+    mySites: Annotated[List[float], "Adsorption sites you want to put adsorbates on, e.g. [x1, y1]]"],
+    rotations: Annotated[Tuple[float, str], "Rotations for the adsorbate, e.g. [90.0, 'x'] or [180.0, 'y'] or ..."],
+    surfaceWithAdsorbateFileName: Annotated[str, "filename (not a path) of the surface adsorbated with adsorbate to be saved as surface/<filename>.traj format"],
+    context: Annotated[
+        str,
+        "1-2 sentence describing which study or exploration this tool call "
+        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
+        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+        "'one-off check'), and the reason why you call this tool."
+    ],
+    mySites_ref: Annotated[str, "source_result_id for mySites. Accepts an 8-char id to reference the output, or `<8-char-id>.<param_name>` to reference an input parameter of a past tool call (see `list_referenceable_inputs`)."],
 ):
     """
     Add adsorbate to the surface structure and save it.
@@ -1665,6 +1677,23 @@ def add_myAdsorbate(
 
 @tool
 def write_QE_script_w_ASE(
+    reasons: Annotated[
+        Dict[str, str],
+        "Per-parameter rationale. For each parameter, write 2-3 sentences "
+        "covering: "
+        "(a) THE ROLE THIS PARAMETER plays in the study described in "
+        "`context` (e.g. 'being varied now', 'fixed at converged value from "
+        "prior convergence test', 'inherited from upstream tool', "
+        "'held fixed by design while a sub-study is in progress'); "
+        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
+        "supports it, and the expected effect on the output. "
+        "The keys must include: 'listofElements', 'ppfiles', 'filename',"
+        "'inputAtomsDir', 'ensembleCalculation', 'calculation', 'restart_mode', 'prefix', "
+        "'disk_io', 'ibrav', 'ecutwfc', 'ecutrho', "
+        "'occupations', 'smearing', 'degauss', 'conv_thr', "
+        "'electron_maxstep', 'kspacing', 'input_dft', 'ready_to_run_job', "
+        "'additional_input'.",
+    ],
     listofElements: Annotated[List[str], "List of distinct element symbols in the unit cell"],
     ppfiles_w_ref: Annotated[List[Tuple[str, str]], "List of (pseudopotential filename, source_result_id) pairs in the order of the elements. Each source_result_id accepts an 8-char id to reference the output, or `<8-char-id>.<param_name>` to reference an input parameter of a past tool call (see `list_referenceable_inputs`)."],
     filename: Annotated[str, "Name of the Quantum Espresso input file, end with .pwi"],
@@ -1675,8 +1704,6 @@ def write_QE_script_w_ASE(
     prefix: Annotated[str, "Prefix for the output files"],
     disk_io: Annotated[Literal['none'], "Disk I/O level"],
     ibrav: Annotated[int, "Bravais-lattice index."],
-    nat: Annotated[int, "Number of atoms in the unit cell"],
-    ntyp: Annotated[int, "Number of atom types in the unit cell"],
     ecutwfc: Annotated[float, "kinetic energy cutoff (Ry) for wavefunctions, typically between 30-100 Ry. Higher value means better accuracy."],
     ecutrho: Annotated[float, "Kinetic energy cutoff (Ry) for charge density and potential. typically ecutwfc*4"],
     occupations: Annotated[Literal['smearing', 'tetrahedra', 'tetrahedra_lin', 'tetrahedra_opt', 'fixed', 'from_input'], "Occupation type"],
@@ -1695,28 +1722,11 @@ def write_QE_script_w_ASE(
         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
         "'one-off check'), and the reason why you call this tool."
     ],
-    reasons: Annotated[
-        Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-3 sentences "
-        "covering: "
-        "(a) THE ROLE THIS PARAMETER plays in the study described in "
-        "`context` (e.g. 'being varied now', 'fixed at converged value from "
-        "prior convergence test', 'inherited from upstream tool', "
-        "'held fixed by design while a sub-study is in progress'); "
-        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
-        "supports it, and the expected effect on the output. "
-        "The keys must include: 'listofElements', 'ppfiles', 'filename',"
-        "'inputAtomsDir', 'ensembleCalculation', 'calculation', 'restart_mode', 'prefix', "
-        "'disk_io', 'ibrav', 'nat', 'ntyp', 'ecutwfc', 'ecutrho', "
-        "'occupations', 'smearing', 'degauss', 'conv_thr', "
-        "'electron_maxstep', 'kspacing', 'input_dft', 'ready_to_run_job', "
-        "'additional_input'.",
-    ],
     ready_to_run_job: Annotated[bool, "True if the job is intended to be run directly without further modification, False if this file is intended to be used to generate other files"] = False,
     additional_input: Annotated[Dict[str, Any], "Additional input parameters to be added to the input script. Should be in the format of a flat dict, {'input_parameter_1': parameter_1, 'input_parameter_2': parameter_2, ...}, parameter_x remain in their native type, str, float, bool, etc. Do not use unless you know what you are doing."] = {},
 ):
-    """Write a Quantum Espresso input script using ASE. Bool value have no quote around them. For smearing start with methfessel-paxton. For ecutwfc choose between 30-100 Ry. When asked to run ensemble calculation, set calculation to 'ensemble'. When generating template for convergence test, use scf calculation and set ready_to_run_job to False.
-    Convergence test template must be 1 to 1 to it's intended varying parametr, i.e. ecutw_template.pwi or kspacing_template.pwi. Leave the ref of the only varying parameter empty (''), and for any other sensitive parameter for which you don't yet have an upstream characterization, set its value deliberately (a tight default for the sub-study being run) and explain in the per-parameter rationale why this value was chosen as a fixed-by-design hold for this sub-study.
+    """Write a Quantum Espresso input script using ASE. Bool value have no quote around them. For smearing start with methfessel-paxton. For ecutwfc choose between 30-100 Ry. When asked to run ensemble calculation, set calculation to 'ensemble'. set calculations to 'scf' when generating template for DFT parameter convergence test and set ready_to_run_job to False,  set calculations to 'relax' when generating template for structural convergence test and set ready_to_run_job to False.
+    Convergence test template must have settings at their most accurate values deliberately (a tight default for the sub-study being run) and explain in the per-parameter rationale why this value was chosen.
     For production runs, or other test runs that is not varying input parameters, you must specify the correct refs that can be traced back to where you determind the value for each parameter.
     reference_id in the output ties with: saved QE input script filepath/name, str"""
 
@@ -1797,8 +1807,6 @@ def write_QE_script_w_ASE(
               'outdir': './out',
               'disk_io': disk_io,
               'ibrav': ibrav,
-              'nat': nat,
-              'ntyp': ntyp,
               'ecutwfc': ecutwfc,
               'ecutrho': ecutrho,
               'occupations': occupations,
@@ -1843,8 +1851,6 @@ def write_QE_script_w_ASE(
             "prefix": prefix,
             "disk_io": disk_io,
             "ibrav": ibrav,
-            "nat": nat,
-            "ntyp": ntyp,
             "ecutwfc": ecutwfc,
             "ecutrho": ecutrho,
             "kspacing": kspacing,
@@ -2296,6 +2302,18 @@ def find_pseudopotential(element: str) -> str:
 
 @tool
 def generate_convergence_test(
+    reasons: Annotated[
+        Dict[str, str],
+        "Per-parameter rationale. For each parameter, write 2-3 sentences "
+        "covering: "
+        "(a) THE ROLE THIS PARAMETER plays in the study described in "
+        "`context` (e.g. 'being varied now', 'fixed at converged value from "
+        "prior convergence test', 'inherited from upstream tool', "
+        "'held fixed by design while a sub-study is in progress'); "
+        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
+        "supports it, and the expected effect on the output. "
+        "The keys must include: 'input_file_name', 'varying_parameter_name', 'varying_parameter_values'.",
+    ],
     input_file_name: Annotated[str, "Name of the template quantum espresso input file. The template's QE parameters (ecutwfc, kspacing, smearing, etc.) are inherited by every generated job; only the parameter named in `varying_parameter_name` is replaced per job."],
     varying_parameter_name: Annotated[
         Literal["ecutwfc", "degauss", "kspacing", "inputAtomsDir"],
@@ -2339,18 +2357,6 @@ def generate_convergence_test(
         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
         "'one-off check'), and the reason why you call this tool."
-    ],
-    reasons: Annotated[
-        Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-3 sentences "
-        "covering: "
-        "(a) THE ROLE THIS PARAMETER plays in the study described in "
-        "`context` (e.g. 'being varied now', 'fixed at converged value from "
-        "prior convergence test', 'inherited from upstream tool', "
-        "'held fixed by design while a sub-study is in progress'); "
-        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
-        "supports it, and the expected effect on the output. "
-        "The keys must include: 'input_file_name', 'varying_parameter_name', 'varying_parameter_values'.",
     ],
 ):
     '''
@@ -2401,6 +2407,7 @@ def generate_convergence_test(
     # name + numeric value. `resolved_entries` holds, per job:
     # (path, ref, axis_name, axis_value).
     resolved_entries: List[Tuple[str, str, str, Any]] = []
+    striped_varying_parameter_values = []
 
     if is_structural:
         # Two accepted shapes in structural mode:
@@ -2472,6 +2479,7 @@ def generate_convergence_test(
                 axis_value = upstream_args[axis_field]
                 seen_axis_names.add(axis_field)
                 resolved_entries.append((path, ref, axis_field, axis_value))
+                striped_varying_parameter_values.append(path)
 
             elif len(entry) == 3:
                 path, ref, axis_value = entry[0], entry[1], entry[2]
@@ -2503,6 +2511,7 @@ def generate_convergence_test(
                 resolved_entries.append(
                     (path, ref, None, axis_value)
                 )
+                striped_varying_parameter_values.append(path)
 
             else:
                 return (
@@ -2535,6 +2544,7 @@ def generate_convergence_test(
             (path, ref, (axis or inferred_axis_name), axis_value)
             for (path, ref, axis, axis_value) in resolved_entries
         ]
+        striped_varying_parameter_values = [path for (path, _, _, _) in resolved_entries]
 
         # Each path must be readable as a structure. Verify all up
         # front; on the first failure abort before generating any
@@ -2565,6 +2575,7 @@ def generate_convergence_test(
                 f"When varying_parameter_name={varying_parameter_name!r}, "
                 "varying_parameter_values must be a list of floats."
             )
+        striped_varying_parameter_values = varying_parameter_values
 
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     input_file = os.path.join(WORKING_DIRECTORY, input_file_name)
@@ -2667,8 +2678,6 @@ def generate_convergence_test(
               'outdir': './out',
               'disk_io': args['disk_io'],
               'ibrav': args['ibrav'],
-              'nat': args['nat'],
-              'ntyp': args['ntyp'],
               'ecutwfc': args['ecutwfc'],
               'ecutrho': args['ecutrho'],
               'occupations': args['occupations'],
@@ -2688,14 +2697,14 @@ def generate_convergence_test(
             args={
                 "input_file_name": input_file_name,
                 "varying_parameter_name": varying_parameter_name,
-                "varying_parameter_values": display_value,
+                "varying_parameter_values": striped_varying_parameter_values,
             },
             value=[new_file_name, stored_param_name, display_value],
             listed_value=True,
             description=(
                 f"Generated convergence test job using template "
                 f"{input_file_name} with {stored_param_name}="
-                f"{display_value}."
+                f"{display_value} out of the list: {striped_varying_parameter_values}"
             ),
             context=context,
         reasons=merged_reasons,
@@ -3052,17 +3061,6 @@ def generate_convergence_test(
 
 @tool
 def generate_eos_test(
-    input_file_name: Annotated[str, "Name of the template quantum espresso input file with production run settings"],
-    # kspacing: Annotated[float, "K-point spacing (in Angstrom^-1) for the equation of state test."],
-    # ecutwfc: Annotated[int, "Kinetic energy cutoff (Ry) for wavefunctions for the equation of state test."],
-    stepSize: Annotated[float, "Step size for scaling the cell size. The cell will be scaled from (1-2*stepSize) to (1+2*stepSize). Typically 0.025 should be good."],
-    context: Annotated[
-        str,
-        "1-2 sentence describing which study or exploration this tool call "
-        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
-        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'), and the reason why you call this tool."
-    ],
     reasons: Annotated[
         Dict[str, str],
         "Per-parameter rationale. For each parameter, write 2-3 sentences "
@@ -3076,6 +3074,17 @@ def generate_eos_test(
         "The keys must include: 'input_file_name', "
         # "'kspacing', 'ecutwfc', "
         "'stepSize'.",
+    ],
+    input_file_name: Annotated[str, "Name of the template quantum espresso input file with production run settings"],
+    # kspacing: Annotated[float, "K-point spacing (in Angstrom^-1) for the equation of state test."],
+    # ecutwfc: Annotated[int, "Kinetic energy cutoff (Ry) for wavefunctions for the equation of state test."],
+    stepSize: Annotated[float, "Step size for scaling the cell size. The cell will be scaled from (1-2*stepSize) to (1+2*stepSize). Typically 0.025 should be good."],
+    context: Annotated[
+        str,
+        "1-2 sentence describing which study or exploration this tool call "
+        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
+        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+        "'one-off check'), and the reason why you call this tool."
     ],
     input_file_name_ref: Annotated[str, "The source_result_id of the previous tool output where the name of the template quantum espresso input file was generated. Accepts an 8-char id to reference the output, or `<8-char-id>.<param_name>` to reference an input parameter of a past tool call (see `list_referenceable_inputs`)."],
     # kspacing_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of kspacing value was generated. If not provided, you can only play around and see the effect of input parameter settings to output result of this tool, but you cannot use the output directly to calculate the final result"] = "",
@@ -3151,8 +3160,6 @@ def generate_eos_test(
               'outdir': './out',
               'disk_io': args['disk_io'],
               'ibrav': args['ibrav'],
-              'nat': args['nat'],
-              'ntyp': args['ntyp'],
               'ecutwfc': args['ecutwfc'],
               'ecutrho': args['ecutrho'],
               'occupations': args['occupations'],
@@ -3385,10 +3392,23 @@ def get_convergence_suggestions(
 
 @tool
 def find_optimal_parameter(
+    reasons: Annotated[
+        Dict[str, str],
+        "Per-parameter rationale. For each parameter, write 2-3 sentences "
+        "covering: "
+        "(a) THE ROLE THIS PARAMETER plays in the study described in "
+        "`context` (e.g. 'being varied now', 'fixed at converged value from "
+        "prior convergence test', 'inherited from upstream tool', "
+        "'held fixed by design while a sub-study is in progress'); "
+        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
+        "supports it, and the expected effect on the output. "
+        "The keys must include: 'sweeping_parameter', 'filename', 'parameters',"
+        "'reference_file', 'threshold', 'comparison_mode'.",
+    ],
     sweeping_parameter: Annotated[str, "Name of the sweeping parameter, e.g. 'ecutwfc', 'kspacing', and etc."],
     filename_w_ref: Annotated[
         List[Tuple[str, str]],
-        "List of (filename, source_result_id) pairs. Each filename is the output file corresponding to one swept setting; the ref is the source_result_id of the previous tool output where that specific filename was generated. Aligned by index with `parameters_w_ref`. Each source_result_id accepts an 8-char id to reference the output, or `<8-char-id>.<param_name>` to reference an input parameter of a past tool call (see `list_referenceable_inputs`).",
+        "List of (filename, source_result_id) pairs. Each filename is the output file corresponding to one swept setting; the ref is the source_result_id of the previous tool output where that specific filename was generated. Aligned by index with `parameters_w_ref`. Each source_result_id accepts an 8-char id to reference the output, or `<8-char-id>.<param_name>` to reference an input parameter of a past tool call (see `list_referenceable_inputs`). If you use .pwi files, in reasons clearly state that the tool will automatically read the corresponding .pwo output files",
     ],
     parameters_w_ref: Annotated[
         List[Tuple[float, str]],
@@ -3409,19 +3429,6 @@ def find_optimal_parameter(
         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
         "'one-off check'), and the reason why you call this tool."
-    ],
-    reasons: Annotated[
-        Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-3 sentences "
-        "covering: "
-        "(a) THE ROLE THIS PARAMETER plays in the study described in "
-        "`context` (e.g. 'being varied now', 'fixed at converged value from "
-        "prior convergence test', 'inherited from upstream tool', "
-        "'held fixed by design while a sub-study is in progress'); "
-        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
-        "supports it, and the expected effect on the output. "
-        "The keys must include: 'sweeping_parameter', 'filename', 'parameters',"
-        "'reference_file', 'threshold', 'comparison_mode'.",
     ],
 ) -> Dict[str, Any]:
     """
@@ -3528,7 +3535,12 @@ def find_optimal_parameter(
     You MUST treat the current sweep as insufficient. Leave a note on the CANVAS and Return Immediately with success=False, 
     then reqest more runs with higher-accuracy settings beyond the current reference value, rerun the convergence tests, 
     and then repeat the optimal-setting selection. However, if the parameter value is already quite extreme, 
-    then this may be caused by some other reason, you may suggest the supervisor to try out something else."""
+    then this may be caused by some other reason, you may suggest the supervisor to try out something else.
+    1) If you think a higher-accuracy setting is valid, ask the supervisor to run it and then rerun the convergence test with the new reference.
+    2) If you think the current reference is already at the extreme end of the parameter range and it's unlikely that a higher-accuracy setting will be valid, suggest the supervisor to try out something else.
+    3) If you think the threshold is set too tight, retry with another threshold and justify your choice.
+    NEVER EVER determine the optimal parameter yourself! 
+    """
 
     chosen = max(acceptable, key=lambda x: abs(x[1] - reference_param))
 
@@ -3551,7 +3563,7 @@ def find_optimal_parameter(
             "comparison_mode": comparison_mode,
         },
         value=chosen[1],
-        description=f"The most optimal parameter value for production run based on the reference file {reference_file} and the threshold {threshold} ({comparison_mode} comparison). The chosen parameter value is {chosen[1]} with file name {chosen[0]}. The tool automatically append .pwo to the all filenames to read the output files.",
+        description=f"The most optimal parameter value for production run based on the reference file {reference_file} and the threshold {threshold} ({comparison_mode} comparison). The chosen parameter value is {chosen[1]} with file name {chosen[0]}. It is totally okay for agent to use filenames ending with .pwi since, in that case, the tool automatically append .pwo to the all filenames to read the output files.",
         context=context,
         reasons=merged_reasons,
         parent_result_ids=parent_result_ids,
@@ -3633,6 +3645,19 @@ def _walk_to_axis_source(
 
 @tool
 def find_optimal_parameter_from_derived(
+    reasons: Annotated[
+        Dict[str, str],
+        "Per-parameter rationale. For each parameter, write 2-3 sentences "
+        "covering: "
+        "(a) THE ROLE THIS PARAMETER plays in the study described in "
+        "`context` (e.g. 'being varied now', 'fixed at converged value from "
+        "prior convergence test', 'inherited from upstream tool', "
+        "'held fixed by design while a sub-study is in progress'); "
+        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
+        "supports it, and the expected effect on the output. "
+        "The keys must include: 'sweeping_parameter', 'data_points', "
+        "'axis_values', 'reference_ref', 'threshold'.",
+    ],
     sweeping_parameter: Annotated[
         str,
         "Name of the parameter being characterized (e.g. 'n_fixed_layers', "
@@ -3689,19 +3714,6 @@ def find_optimal_parameter_from_derived(
         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
         "'one-off check'), and the reason why you call this tool."
-    ],
-    reasons: Annotated[
-        Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-3 sentences "
-        "covering: "
-        "(a) THE ROLE THIS PARAMETER plays in the study described in "
-        "`context` (e.g. 'being varied now', 'fixed at converged value from "
-        "prior convergence test', 'inherited from upstream tool', "
-        "'held fixed by design while a sub-study is in progress'); "
-        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
-        "supports it, and the expected effect on the output. "
-        "The keys must include: 'sweeping_parameter', 'data_points', "
-        "'axis_values', 'reference_ref', 'threshold'.",
     ],
 ):
     """
@@ -3879,19 +3891,15 @@ def find_optimal_parameter_from_derived(
         plt.close()
 
     if len(acceptable) == 1:
-        return (
-            "Only the reference data point is within threshold. No "
-            "acceptable cheaper setting found. You MUST treat the "
-            "current sweep as insufficient. Leave a note on the "
-            "CANVAS and return immediately with success=False, then "
-            "request more runs with higher-accuracy settings beyond "
-            "the current reference value (rerun the convergence "
-            "tests on a more demanding axis range), and then repeat "
-            "the optimal-setting selection. However, if the "
-            "parameter value is already quite extreme, then this "
-            "may be caused by some other reason — you may suggest "
-            "the supervisor try out something else."
-        )
+        return """Only the reference file is within threshold. No acceptable cheaper setting found. 
+    You MUST treat the current sweep as insufficient. Leave a note on the CANVAS and Return Immediately with success=False, 
+    then reqest more runs with higher-accuracy settings beyond the current reference value, rerun the convergence tests, 
+    and then repeat the optimal-setting selection. However, if the parameter value is already quite extreme, 
+    then this may be caused by some other reason, you may suggest the supervisor to try out something else.
+    1) If you think a higher-accuracy setting is valid, ask the supervisor to run it and then rerun the convergence test with the new reference.
+    2) If you think the current reference is already at the extreme end of the parameter range and it's unlikely that a higher-accuracy setting will be valid, suggest the supervisor to try out something else.
+    3) If you think the threshold is set too tight, retry with another threshold and justify your choice.
+    NEVER EVER determine the optimal parameter yourself! """
 
     # Pick the acceptable point whose axis value is FARTHEST from the
     # reference axis value — i.e. the "cheapest" point that still
@@ -3974,6 +3982,19 @@ def find_optimal_parameter_from_derived(
 
 @tool
 def calculate_formation_E(
+    reasons: Annotated[
+        Dict[str, str],
+        "Per-parameter rationale. For each parameter, write 2-3 sentences "
+        "covering: "
+        "(a) THE ROLE THIS PARAMETER plays in the study described in "
+        "`context` (e.g. 'being varied now', 'fixed at converged value from "
+        "prior convergence test', 'inherited from upstream tool', "
+        "'held fixed by design while a sub-study is in progress'); "
+        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
+        "supports it, and the expected effect on the output. "
+        "The keys must include: 'slabFilePath', 'adsorbateFilePath', "
+        "'systemFilePath'.",
+    ],
     slabFilePath_w_ref: Annotated[
         Tuple[str, str],
         "(slab calculation file name, source_result_id) pair. "
@@ -4002,19 +4023,6 @@ def calculate_formation_E(
         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
         "'one-off check'), and the reason why you call this tool."
-    ],
-    reasons: Annotated[
-        Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-3 sentences "
-        "covering: "
-        "(a) THE ROLE THIS PARAMETER plays in the study described in "
-        "`context` (e.g. 'being varied now', 'fixed at converged value from "
-        "prior convergence test', 'inherited from upstream tool', "
-        "'held fixed by design while a sub-study is in progress'); "
-        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
-        "supports it, and the expected effect on the output. "
-        "The keys must include: 'slabFilePath', 'adsorbateFilePath', "
-        "'systemFilePath'.",
     ],
 ):
     """Using the energies of the slab, adsorbate, and slab-with-adsorbate,
@@ -4102,17 +4110,6 @@ def calculate_formation_E(
 
 @tool
 def calculate_lc(
-    jobFilenames_w_ref: Annotated[
-        List[Tuple[str, str]],
-        "List of (filename, source_result_id) pairs. Each filename is the output file used to calculate the lattice constant; the ref is the source_result_id of the previous tool output where that specific filename was generated. Each source_result_id accepts an 8-char id to reference the output, or `<8-char-id>.<param_name>` to reference an input parameter of a past tool call (see `list_referenceable_inputs`).",
-    ],
-    context: Annotated[
-        str,
-        "1-2 sentence describing which study or exploration this tool call "
-        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
-        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'), and the reason why you call this tool."
-    ],
     reasons: Annotated[
         Dict[str, str],
         "Per-parameter rationale. For each parameter, write 2-3 sentences "
@@ -4124,6 +4121,17 @@ def calculate_lc(
         "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
         "supports it, and the expected effect on the output. "
         "The keys must include: 'jobFilenames'.",
+    ],
+    jobFilenames_w_ref: Annotated[
+        List[Tuple[str, str]],
+        "List of (filename, source_result_id) pairs. Each filename is the output file used to calculate the lattice constant; the ref is the source_result_id of the previous tool output where that specific filename was generated. Each source_result_id accepts an 8-char id to reference the output, or `<8-char-id>.<param_name>` to reference an input parameter of a past tool call (see `list_referenceable_inputs`).",
+    ],
+    context: Annotated[
+        str,
+        "1-2 sentence describing which study or exploration this tool call "
+        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
+        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+        "'one-off check'), and the reason why you call this tool."
     ],
 ) -> str:
     """Read the output file and calculate the lattice constant
@@ -4209,6 +4217,19 @@ def calculate_lc(
 
 @tool
 def analyze_BEEF_result(
+    reasons: Annotated[
+        Dict[str, str],
+        "Per-parameter rationale. For each parameter, write 2-3 sentences "
+        "covering: "
+        "(a) THE ROLE THIS PARAMETER plays in the study described in "
+        "`context` (e.g. 'being varied now', 'fixed at converged value from "
+        "prior convergence test', 'inherited from upstream tool', "
+        "'held fixed by design while a sub-study is in progress'); "
+        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
+        "supports it, and the expected effect on the output. "
+        "The keys must include: 'slabFilePath', 'adsorbateFilePath', "
+        "'systemFilePath'.",
+    ],
     slabFilePath_w_ref: Annotated[
         Tuple[str, str],
         "(slab calculation file, source_result_id) pair. value at index 0 is "
@@ -4237,19 +4258,6 @@ def analyze_BEEF_result(
         "is part of (e.g. 'convergence test for ecutwfc', 'production run "
         "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
         "'one-off check'), and the reason why you call this tool."
-    ],
-    reasons: Annotated[
-        Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-3 sentences "
-        "covering: "
-        "(a) THE ROLE THIS PARAMETER plays in the study described in "
-        "`context` (e.g. 'being varied now', 'fixed at converged value from "
-        "prior convergence test', 'inherited from upstream tool', "
-        "'held fixed by design while a sub-study is in progress'); "
-        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
-        "supports it, and the expected effect on the output. "
-        "The keys must include: 'slabFilePath', 'adsorbateFilePath', "
-        "'systemFilePath'.",
     ],
 ) -> str:
     '''Read, extract, and analyze BEEF calculation results for slab,
@@ -4452,8 +4460,8 @@ echo "Job Ended at `date`"\n \
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     parent_ID = CANVAS.canvas.get("ready_to_run_job_list", {})[qeInputFileName]
 
-    new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 48, "runtime": 2800, "submissionScript": submissionScript, "outputFilename": outputFilename, "ID": parent_ID}}
-    # new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 4, "runtime": 30, "submissionScript": submissionScript, "outputFilename": outputFilename, "ID": parent_ID}}
+    # new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 48, "runtime": 2800, "submissionScript": submissionScript, "outputFilename": outputFilename, "ID": parent_ID}}
+    new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 4, "runtime": 30, "submissionScript": submissionScript, "outputFilename": outputFilename, "ID": parent_ID}}
 
     # check if resource_suggestions.db exist in the working directory
     db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')
@@ -4824,17 +4832,6 @@ def submit_and_monitor_job(
 
 @tool
 def read_energy_from_output(
-    jobFilenames_w_ref: Annotated[
-        List[Tuple[str, str]],
-        "List of (filename, filename_ref_id) pairs. Energy of <filename> will be read and printed, filename_ref_id is the source_result_id of the previous tool output where that specific filename was generated. Each filename_ref_id accepts an 8-char id to reference the output, or `<8-char-id>.<param_name>` to reference an input parameter of a past tool call (see `list_referenceable_inputs`)."
-    ],
-    context: Annotated[
-        str,
-        "1-2 sentence describing which study or exploration this tool call "
-        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
-        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'), and the reason why you call this tool."
-    ],
     reasons: Annotated[
         Dict[str, str],
         "Per-parameter rationale. For each parameter, write 2-3 sentences "
@@ -4846,6 +4843,17 @@ def read_energy_from_output(
         "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
         "supports it, and the expected effect on the output. "
         "The keys must include: 'jobFilenames'.",
+    ],
+    jobFilenames_w_ref: Annotated[
+        List[Tuple[str, str]],
+        "List of (filename, filename_ref_id) pairs. Energy of <filename> will be read and printed, filename_ref_id is the source_result_id of the previous tool output where that specific filename was generated. Each filename_ref_id accepts an 8-char id to reference the output, or `<8-char-id>.<param_name>` to reference an input parameter of a past tool call (see `list_referenceable_inputs`)."
+    ],
+    context: Annotated[
+        str,
+        "1-2 sentence describing which study or exploration this tool call "
+        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
+        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
+        "'one-off check'), and the reason why you call this tool."
     ],
 ) -> str:
     '''Read the total energy from the output file in job list and return it in a string

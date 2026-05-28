@@ -168,7 +168,7 @@ class myCANVAS():
         if key not in self.canvas.keys():
             self.canvas[key] = value
             with open(writeDir, 'wb') as f:
-                pickle.dump(self.canvas, f)
+                pickle.dump((self.canvas, self.result_registry), f)
             print("##################### CANVAS #######################")
             myDictPP(self.canvas, toDisk=True, filename=writeDir+'.txt')
             print("################### CANVAS END #####################")    
@@ -176,7 +176,7 @@ class myCANVAS():
         elif overwrite:
             self.canvas[key] = value
             with open(writeDir, 'wb') as f:
-                pickle.dump(self.canvas, f)    
+                pickle.dump((self.canvas, self.result_registry), f)
             print("##################### CANVAS #######################")
             myDictPP(self.canvas, toDisk=True, filename=writeDir+'.txt')
             print("################### CANVAS END #####################")   
@@ -221,7 +221,7 @@ class myCANVAS():
         """
         
         result_id = _new_id("")
-        
+        writeDir = os.path.join(self.working_directory, 'canvas.pickle')
         try:
             value = float(value)
             artifact = NumericArtifact(
@@ -239,6 +239,9 @@ class myCANVAS():
             # add duplication check
             self.result_registry[result_id] = artifact
             self.curr_round_result_ids.append(result_id)
+            
+            with open(writeDir, 'wb') as f:
+                pickle.dump((self.canvas, self.result_registry), f)
             return result_id
         except:
             if listed_value:
@@ -286,6 +289,8 @@ class myCANVAS():
                 )
                 self.result_registry[result_id] = artifact
                 self.curr_round_result_ids.append(result_id)
+                with open(writeDir, 'wb') as f:
+                    pickle.dump((self.canvas, self.result_registry), f)
                 return result_id
             else:
                 artifact = OtherArtifact(
@@ -302,6 +307,8 @@ class myCANVAS():
                 )
                 self.result_registry[result_id] = artifact
                 self.curr_round_result_ids.append(result_id)
+                with open(writeDir, 'wb') as f:
+                    pickle.dump((self.canvas, self.result_registry), f)
                 return result_id
         
     def get_artifact(self, result_id: str):

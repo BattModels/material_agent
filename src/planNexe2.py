@@ -23,7 +23,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.graph import END, StateGraph, START
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import ToolNode, create_react_agent
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from src.tools import *
 from src.safety_guard import generate_structured_report
@@ -81,10 +81,19 @@ class myStep(BaseModel):
                     ""
                 ] = Field(description=f"The one final tool your worker agent must use to obtain the desired output of a certain step. Please read the CANVAS with key Worker_available_tools to see more details about each tools.")
     # what would be that final one tool must use to obtain the desired output of a certain step
+    required_quantities: List[str] = Field(
+        default_factory=list,
+        description=(
+            "ONLY meaningful when required_tools == 'generate_structured_report'. "
+            "Leave empty ([]) for every non-report step. For a report step, this "
+            "is the deterministic list of the EXACT named quantities the report"
+            "MUST contain, and therefore verified by the judge."
+        ),
+    )
 
 class Plan(BaseModel):
     """Need to add/modify current plan, which is going to be followed by your worker agents in future"""
-
+    kind: Literal["plan"] = "plan"
     steps: List[myStep] = Field(
         description=f"""
         Steps to follow in future. Each step is a tuple of (step, agent). agent can only be chosen from {members}.
@@ -97,12 +106,13 @@ class Plan(BaseModel):
 
 class Response(BaseModel):
     """End everything and response to the user."""
-
+    kind: Literal["response"] = "response"
     response: str
 
 # the class supervisor will choose if the plan doesn't need to be changed
 class NoChange(BaseModel):
     """No change to the plan, just continue to execute the original plan."""
+    kind: Literal["no_change"] = "no_change"
     comment: str = Field(description="any comment from the supervisor if needed, otherwise just put 'No change to the plan, continue to execute the original plan.'")
 
 
@@ -112,9 +122,36 @@ class Act(BaseModel):
     action: Union[Plan, NoChange, Response] = Field(
         description="""Action to perform. If the team need to further use tools to get the answer, and if you need to add more steps or adjust the steps, use Plan.
         If the team can continue to execute the original plan without any change, use NoChange.
-        If you want to end the conversation, use Response."""
-        # "DO NOT use response unless absolutly necessary."
+        If you want to end the conversation, use Response.""",
+        discriminator="kind"
     )
+    
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_action(cls, data):
+        if not isinstance(data, dict):
+            return data
+        action = data.get("action")
+
+        # Case 1: model returned action as a JSON string
+        if isinstance(action, str):
+            try:
+                action = json.loads(action)
+            except json.JSONDecodeError:
+                return data  # let pydantic raise the real error
+
+        # Case 2: model wrapped variant as {"NoChange": {...}}
+        if isinstance(action, dict) and len(action) == 1:
+            key = next(iter(action))
+            if key in {"Plan", "NoChange", "Response"}:
+                inner = dict(action[key])
+                inner.setdefault(
+                    "kind",
+                    {"Plan": "plan", "NoChange": "no_change", "Response": "response"}[key],
+                )
+                action = inner
+
+        return {**data, "action": action}
 
 class wokerResponse(BaseModel):
     """Response from the worker agent."""
@@ -184,6 +221,21 @@ def handle_tool_errors(request, handler):
             content=outStr,
             tool_call_id=request.tool_call["id"]
         )
+        
+_act_failures = {"count": 0}
+
+def on_act_parse_error(exc: Exception) -> str:
+    _act_failures["count"] += 1
+    print(f"[Act parse #{_act_failures['count']}] {type(exc).__name__}: {exc}")
+    # whatever string you return is what the model sees as the tool error
+    if _act_failures["count"] > 3:
+        exit()
+    
+    return (
+        "Your previous tool call did not match the Act schema. "
+        "Return exactly one of {Plan, NoChange, Response} as `action`, "
+        "with the inner fields directly — do NOT wrap in {'NoChange': {...}}."
+    )
 
 
 def print_stream(s):
@@ -268,10 +320,8 @@ execution steps to the plan (input file generation, job submission,
 calculations), consult with the DFT agent: what are the major calculations
 this objective requires? What known caveats apply to this system class?
 
-A mid-project report before production run and a final report at the
-very end are needed. Feel free to ask the worker agent to generate
-other intermediate reports if you think it is necessary to let the
-judge evaluate what has been done.
+Intermediate reports containing one numerical claim must be generated immediately after that numerical claim was made (result claim or determination of some settings or etc)
+so the judge evaluate the validity of the result.
 """
     else:
         supervisorMessage =  f"""
@@ -288,6 +338,7 @@ the current plan is:
 
 Please inspect and extract related information from CANVAS, then only update the plan accordingly if needed.
 If you need to discuss with the worker agent insert extra step(s) at the beginning of the plan, and assign those step(s) to the worker agent you want to talk to.
+Intermediate reports containing one numerical claim must be generated immediately after that numerical claim was made (result claim or determination of some settings or etc).
         """
     old_supervisorMessage = supervisorMessage
     sup_good = False
@@ -343,8 +394,29 @@ If you need to discuss with the worker agent insert extra step(s) at the beginni
                     supervisorMessage = old_supervisorMessage + f"\n\nWARNING: In step '{step.step}', you required the following tool that are not in the tool list: {step.required_tools}. Please check the CANVAS and try again!"
                     sup_good = False
                     break
-            
-            
+                # A report step MUST carry a deterministic, non-empty list of
+                # required_quantities — the exact named quantities the report
+                # must certify. Catch the case where the supervisor scheduled
+                # a report step but forgot to specify them.
+                if step.required_tools == "generate_structured_report":
+                    _rq = list(getattr(step, "required_quantities", []) or [])
+                    if len(_rq) == 0:
+                        print(
+                            f"missing required_quantities for report step: "
+                            f"{step.step}"
+                        )
+                        supervisorMessage = old_supervisorMessage + (
+                            f"\n\nWARNING: Step '{step.step}' is a report step "
+                            f"(required_tools='generate_structured_report') "
+                            f"but you did not specify `required_quantities`. "
+                            f"Every report step MUST have a non-empty "
+                            f"`required_quantities` list naming the EXACT "
+                            f"quantities the report must certify."
+                            f"Add the required_quantities for this step and try again!"
+                        )
+                        sup_good = False
+                        break
+                    
         else:
             sup_good = True
     
@@ -358,7 +430,7 @@ If you need to discuss with the worker agent insert extra step(s) at the beginni
     # elif isinstance(output.action, Response):
     #     return {"response": "Plan is not finished! Do not use response!", "next": "Supervisor"}
     elif isinstance(agent_response.action, NoChange):
-        plan_str = "\n".join(f"{i+1}. {step.step}, agent={step.agent}, required_tools: {step.required_tools}" for i, step in enumerate(plan[1:]))
+        plan_str = "\n".join(f"{i+1}. {step.step}, agent={step.agent}, required_tools: {step.required_tools}, required_quantities: {step.required_quantities}" for i, step in enumerate(plan[1:]))
         print("No change to the plan, continue to execute the original plan.")
         print(plan_str)
         if var.my_SAVE_DIALOGUE:
@@ -372,7 +444,7 @@ If you need to discuss with the worker agent insert extra step(s) at the beginni
             "canvas":CANVAS.canvas
             }
     else:
-        plan_str = "\n".join(f"{i+1}. {step.step}, agent={step.agent}, required_tools: {step.required_tools}" for i, step in enumerate(agent_response.action.steps))
+        plan_str = "\n".join(f"{i+1}. {step.step}, agent={step.agent}, required_tools: {step.required_tools}, required_quantities: {step.required_quantities}" for i, step in enumerate(agent_response.action.steps))
         print(plan_str)
         if var.my_SAVE_DIALOGUE:
             with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
@@ -386,13 +458,13 @@ class judge():
         self.llm = ChatAnthropic(model="claude-sonnet-4-5-20250929", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0).with_structured_output(judgeResponse, include_raw=True)
     
     def invoke(self, input):
-        with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
+        with open(f"{var.my_WORKING_DIRECTORY}/judge_status.txt", "r") as f:
             status = f.read()
         while status == "stop":
             print(f"Calculation pause, judge is waiting. cwd: {var.my_WORKING_DIRECTORY}")
             # wait for 5 second
             time.sleep(5)
-            with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
+            with open(f"{var.my_WORKING_DIRECTORY}/judge_status.txt", "r") as f:
                 status = f.read()
         
         print(f"Judge Agent is processing!!!!!")
@@ -459,6 +531,30 @@ Here is the overall objective:
 
 Now, you are tasked with: {task}. Please only do this task! Do not do anything else! Please note down important information on CANVAS together with their reference id before you end.
 """
+
+    # For report steps, the supervisor has specified the exact set of
+    # quantities the report MUST contain. Surface that list to the worker
+    # so it knows which named claims are mandatory.
+    is_report_step = (task.required_tools == "generate_structured_report")
+    required_quantities = list(getattr(task, "required_quantities", []) or [])
+    if is_report_step and required_quantities:
+        _rq_list = ", ".join(f"'{q}'" for q in required_quantities)
+        task_formatted += f"""
+
+IMPORTANT — REQUIRED REPORT QUANTITIES:
+This is a report step. Your structured report MUST include a numerical claim
+for EACH of the following quantities, using the quantity_name EXACTLY as
+written here (character-for-character): {_rq_list}.
+Each of these MUST be backed by a registered result_id from a real tool
+output. You may include additional supporting claims, but none of the
+required quantities above may be omitted. If you do not have a registered
+result for one of them — for example because you determined the value by
+your own analysis or arithmetic — that is strictly prohibited: 
+Report back to the supervisor which required quantity you need to obtain first
+to be able to generate the report, leave a note on the CANVAS and return immediately.
+Do NOT attempt to generate the report. Do NOT omit any required quantity,
+and do NOT substitute your own judgement for a tool's output.
+"""
     
     print(task_formatted)
     if var.my_SAVE_DIALOGUE:
@@ -502,12 +598,118 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
                 # LLM sanity check
                 # if LLM_check_passed:
                 #     workerGood = True
-                DAG_title = f"step_{len(state['past_steps'])+1}_DAG"
-                CANVAS.gen_DAG(
-                    filename=f"{var.my_WORKING_DIRECTORY}/{DAG_title}.html",
-                    title=DAG_title,
-                )
-                workerGood = True
+
+                # ---- Required-quantities check (report steps only) -------
+                # The supervisor specified, deterministically, the exact
+                # named quantities this report must certify. Verify the
+                # generated report (a) contains every required quantity and
+                # (b) each required quantity's claimed value matches its
+                # cited result_id. The value<->ref match is also done by the
+                # judge, but checking it here is cheap and catches the
+                # problem one stage earlier.
+                rq_passed = True
+                rq_msg = ""
+                if is_report_step and required_quantities:
+                    if not var.reportName or var.reportName not in CANVAS.canvas:
+                        rq_passed = False
+                        rq_msg = (
+                            "No structured report was found on the CANVAS. A "
+                            "report step MUST produce a report via "
+                            "generate_structured_report containing every "
+                            "required quantity."
+                        )
+                    else:
+                        _report = CANVAS.canvas[var.reportName]
+                        _claims = _report.get("numerical_results", []) or []
+                        # quantity_name -> claim
+                        _claim_by_name = {}
+                        for _c in _claims:
+                            if isinstance(_c, dict):
+                                _claim_by_name[_c.get("quantity_name")] = _c
+                            else:
+                                _claim_by_name[getattr(_c, "quantity_name", None)] = _c
+                        _missing = [q for q in required_quantities
+                                    if q not in _claim_by_name]
+                        # value<->ref check for the required quantities that
+                        # are present.
+                        _mismatched = []
+                        for q in required_quantities:
+                            if q not in _claim_by_name:
+                                continue
+                            _c = _claim_by_name[q]
+                            if isinstance(_c, dict):
+                                _val = _c.get("value")
+                                _rid = _c.get("result_id")
+                            else:
+                                _val = getattr(_c, "value", None)
+                                _rid = getattr(_c, "result_id", None)
+                            try:
+                                _ok, _vmsg = CANVAS.verify_artifact(_val, _rid)
+                            except Exception as _e:  # noqa: BLE001
+                                _ok, _vmsg = False, f"verification raised: {_e}"
+                            if not _ok:
+                                _mismatched.append(
+                                    f"'{q}' (claimed value {_val} vs "
+                                    f"result_id '{_rid}': {_vmsg})"
+                                )
+                        if _missing or _mismatched:
+                            rq_passed = False
+                            _parts = []
+                            if _missing:
+                                _parts.append(
+                                    "MISSING required quantities (the report "
+                                    "does not contain a claim for these exact "
+                                    f"quantity_name values): {_missing}."
+                                )
+                            if _mismatched:
+                                _parts.append(
+                                    "Required quantities whose claimed value "
+                                    "does NOT match the cited result_id: "
+                                    f"{_mismatched}."
+                                )
+                            rq_msg = " ".join(_parts)
+
+                if not rq_passed:
+                    # The report is not trustworthy / not complete. Delete it
+                    # so the worker cannot treat a stale incomplete report as
+                    # done, record why it was removed, and admonish.
+                    _removed_name = var.reportName
+                    if _removed_name and _removed_name in CANVAS.canvas:
+                        del CANVAS.canvas[_removed_name]
+                        
+                    if _removed_name:
+                        CANVAS.canvas[f"report_{_removed_name}_removal_cause"] = (
+                            f"Report '{_removed_name}' was removed because it "
+                            f"did not satisfy the required-quantities check: "
+                            f"{rq_msg}"
+                        )
+
+                    var.reportName = ""
+                    task_formatted = old_task_formatted
+                    task_formatted += (
+                        f"\n\nWARNING: Your previous report did not pass"
+                        f"the required-quantities check and was REMOVED."
+                        f"{rq_msg}\n"
+                        f"Your report MUST include a numerical claim for "
+                        f"EVERY required quantity, using the EXACT "
+                        f"quantity_name, each backed by a registered "
+                        f"result_id whose value matches the claim. "
+                        f"If you decided any of these values yourself "
+                        f"(by your own analysis, estimation, or arithmetic) "
+                        f"that is STRICTLY PROHIBITED — you must obtain the "
+                        f"value from the proper tool, register it, and cite "
+                        f"that result_id. If you are not sure which ID to use,"
+                        f"You can use the search tool to look it up."
+                        f"Do not omit any required quantity."
+                    )
+                    workerGood = False
+                else:
+                    DAG_title = f"step_{len(state['past_steps'])+1}_DAG"
+                    CANVAS.gen_DAG(
+                        filename=f"{var.my_WORKING_DIRECTORY}/{DAG_title}.html",
+                        title=DAG_title,
+                    )
+                    workerGood = True
             else:
                 # if tool use fail, report is not trustworthy
                 if var.reportName:
@@ -527,17 +729,101 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
         print("#######################")
         myJudge = judge()
         rawReport = verify_structured_report(var.reportName, sensitive_parameters=config["sensitive_para"], judge=myJudge)
-        if rawReport["overall_verdict"] == "pass":
-            reportReviewResult = f"\nA reprot was generated, and the judge's review on the report: PASS."
-        elif rawReport["overall_verdict"] == "warning":
-            reportReviewResult = f"\nA reprot was generated, and the judge's review on the report: WARNING."
+        def _format_verification_issue(issue: dict) -> str:
+            """Render one verifier issue into supervisor-facing text.
+
+            The safety guard's verifier (see
+            safety_guard.summarize_verification_for_supervisor /
+            ReportVerificationIssue) now emits a richer, structured issue
+            schema. The old flat fields (`level`, `location`, `verdict`,
+            `message`) no longer exist; each issue now carries:
+              - issue_number:        1-indexed position in the issue list
+              - category:            IssueCategory.* string (the error type)
+              - severity:            "fail" | "warning"
+              - where:               structured location dict (claim_name /
+                                     result_id / tool_name / parameter / etc.)
+              - context_at_site:     the merged `Context:` line at the
+                                     offending site, if extractable
+              - problem:             one-sentence plain-prose statement of
+                                     what is wrong
+              - judge_reasoning:     the LLM judge's verdict text, when the
+                                     issue originated from a judge call
+              - remediation_options: the verifier's proposed, general
+                                     fix-paths for this error category
+
+            `remediation_options` is the safety guard's whole purpose here:
+            it tells the supervisor, in general, how each type of error can
+            be resolved. It is surfaced verbatim so the supervisor can pick
+            the applicable fix-path.
+            """
+            num = issue.get("issue_number", "?")
+            category = issue.get("category", "uncategorized")
+            severity = issue.get("severity", "fail")
+            lines = [
+                f"\n--- Issue #{num} "
+                f"[category={category}, severity={severity}] ---"
+            ]
+
+            where = issue.get("where") or {}
+            if where:
+                where_str = ", ".join(f"{k}={v!r}" for k, v in where.items())
+                lines.append(f"Location: {where_str}")
+
+            context_at_site = issue.get("context_at_site")
+            if context_at_site:
+                lines.append(f"Context at site: {context_at_site}")
+
+            problem = issue.get("problem")
+            if problem:
+                lines.append(f"Problem: {problem}")
+
+            judge_reasoning = issue.get("judge_reasoning")
+            if judge_reasoning:
+                lines.append(f"Judge reasoning: {judge_reasoning}")
+
+            remediation_options = issue.get("remediation_options") or []
+            if remediation_options:
+                lines.append("Please follow the instruction below to fix the issue:")
+                lines.append("".join(remediation_options))
+
+            return "\n".join(lines)
+
+        verdict = rawReport["overall_verdict"]
+        summary_line = rawReport.get("summary", "")
+        n_fails = rawReport.get("n_fails", 0)
+        n_warnings = rawReport.get("n_warnings", 0)
+        if verdict == "pass":
+            reportReviewResult = (
+                "\nA report was generated, and the verifier's review on the "
+                "report: PASS."
+            )
+        elif verdict == "warning":
+            reportReviewResult = (
+                f"\nA report was generated, and the verifier's review on the "
+                f"report: WARNING ({n_fails} fail(s), {n_warnings} "
+                f"warning(s))."
+                f"\nSummary: {summary_line}"
+            )
             for issue in rawReport["issues"]:
-                reportReviewResult += f"\nIssue level: {issue['level']}, location: {issue['location']}, verdict: {issue['verdict']}, message: {issue['message']}."
+                reportReviewResult += _format_verification_issue(issue)
+                reportReviewResult += "\n-----------------------------"
         else:
-            reportReviewResult = f"\nA reprot was generated, but the judge's review on the report: FAIL."
+            reportReviewResult = (
+                f"\nA report was generated, but the verifier's review on the "
+                f"report: FAIL ({n_fails} fail(s), {n_warnings} warning(s))."
+                f"\nSummary: {summary_line}"
+            )
             for issue in rawReport["issues"]:
-                reportReviewResult += f"\nIssue level: {issue['level']}, location: {issue['location']}, verdict: {issue['verdict']}, message: {issue['message']}."
-            reportReviewResult += "\nPlease fix the issue and try again! Note that the report should be truthful and accurate based on the information you have, and should not contain any fabricated information that is not supported by data!"
+                reportReviewResult += _format_verification_issue(issue)
+                reportReviewResult += "\n-----------------------------"
+            reportReviewResult += (
+                "\nPlease fix the issue(s) and try again! For each issue "
+                "above, pick whichever of the listed remediation options "
+                "fits the situation. Note that the report should be truthful "
+                "and accurate based on the information you have, and should "
+                "not contain any fabricated information that is not supported "
+                "by data!"
+            )
         var.All_Report_Names.append(copy.deepcopy(var.reportName))
         var.reportName = ""
         
@@ -569,10 +855,12 @@ def create_planning_graph(config: dict) -> StateGraph:
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     with open(f"{WORKING_DIRECTORY}/status.txt", "w") as f:
         f.write("run")
+    with open(f"{WORKING_DIRECTORY}/judge_status.txt", "w") as f:
+        f.write("run")
     
     # Define the model
-    # llm = ChatAnthropic(model="claude-haiku-4-5-20251001", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-    # workerllm = ChatAnthropic(model="claude-haiku-4-5-20251001", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0, tool_choice="auto")
+    # llm = ChatAnthropic(model="claude-opus-4-7", api_key=config['ANTHROPIC_API_KEY'])
+    # workerllm = ChatAnthropic(model="claude-opus-4-7", api_key=config['ANTHROPIC_API_KEY'], tool_choice="auto")
     llm = ChatAnthropic(model="claude-sonnet-4-5-20250929", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     workerllm = ChatAnthropic(model="claude-sonnet-4-5-20250929", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0, tool_choice="auto")
     # workerllm = ChatAnthropic(model="claude-3-5-sonnet-20241022", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
@@ -601,7 +889,7 @@ def create_planning_graph(config: dict) -> StateGraph:
         tools=supervisor_tools, 
         system_prompt=supervisor_prompt,
         # Structured output via ToolStrategy (tool-calling fallback)
-        response_format=ToolStrategy(Act),  # Or ProviderStrategy for native models
+        response_format=ToolStrategy(Act, handle_errors=on_act_parse_error),  # Or ProviderStrategy for native models
         middleware=[DisableParallelToolCallsMiddleware(), handle_tool_errors]
     )
     
@@ -633,7 +921,8 @@ def create_planning_graph(config: dict) -> StateGraph:
         extract_text_from_tool_output,
         math_expression_tool,
         generate_structured_report,
-        list_referenceable_inputs
+        list_referenceable_inputs,
+        search_artifacts
         # get_ase_atoms_property,
         # inspect_ase_atoms,
         ]
@@ -705,5 +994,3 @@ def create_planning_graph(config: dict) -> StateGraph:
     # return graph.compile(checkpointer=checkpointer)
     # return graph.compile()
     return graph
-
-

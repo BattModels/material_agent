@@ -51,8 +51,10 @@ import json
 import math
 import re
 import time
+import pickle
 from typing import Any, Dict, List, Optional, Literal, Set, Annotated, Tuple
 import os
+import numpy as np
 
 from pydantic import BaseModel, Field
 from langchain.tools import tool
@@ -74,8 +76,131 @@ _DBG_SLEEP = 2  # seconds to sleep after each debug print
 def _dbg(msg: str) -> None:
     """Print a debug message and sleep so logs are easy to follow live."""
     sleep_time = int(len(f"[DBG] {msg}") * 0.01 * _DBG_SLEEP)
-    print(f"[DBG][{sleep_time}] {msg}", flush=True)
+    outStr = f"[DBG][{sleep_time}] {msg}"
+    print(outStr, flush=True)
+    if var.my_SAVE_DIALOGUE:
+            with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+                f.write(outStr)
+                f.write("\n")
     # time.sleep(sleep_time)  # longer sleep for longer messages
+
+
+# =========================================================
+# Cross-report subtree verification cache
+# =========================================================
+#
+# When the same artifact appears under (or as) more than one numerical
+# claim's chain — within a single `verify_structured_report` call OR
+# across multiple report verifications in the same run — we want to
+# skip re-walking that artifact's subtree and re-calling the judge on
+# its already-vetted inputs. The CANVAS registry is append-only, so an
+# artifact's inputs and chain are invariant once registered; an earlier
+# verdict on its subtree is still sound on a later visit.
+#
+# Cache shape:
+#   _CROSS_REPORT_SUBTREE_CACHE: Dict[result_id, _CachedSubtree]
+# where _CachedSubtree carries the subtree's ArtifactVerificationResult
+# entries, its ReportVerificationIssue entries, and the bare ids it
+# touched. Entries are stored as model_dump dicts (not model instances)
+# so the cache pickles cleanly across schema changes.
+#
+# Cache key is `result_id` only — NOT (result_id, varied_parameters).
+# This is the intended behavior: if A was determined under a
+# convergence test where A was varied, and B later uses A in a
+# production run where A is no longer varied, the recursive walk at B
+# should still treat A as a leaf and judge "is A the right value to
+# use for B" at B's level (B's own R1 / R1_DOTTED on its parameter
+# sourced from A). It should NOT walk INTO A's chain and re-judge A's
+# own inputs against a different varied set. The varied-set is a
+# property of how A was characterized, not of how A is used downstream.
+
+_CROSS_REPORT_SUBTREE_CACHE: Dict[str, Dict[str, Any]] = {}
+_CACHE_LOADED: bool = False
+_CACHE_FILENAME = "cross_report_subtree_cache.pkl"
+
+
+def _cache_file_path() -> str:
+    return os.path.join(var.my_WORKING_DIRECTORY, _CACHE_FILENAME)
+
+
+def _load_cross_report_cache() -> None:
+    """Lazy-load the cross-report cache from disk on first need.
+
+    Called at the start of every `verify_structured_report`. Idempotent
+    after the first call (guarded by `_CACHE_LOADED`).
+    """
+    global _CACHE_LOADED
+    if _CACHE_LOADED:
+        return
+    _CACHE_LOADED = True
+    path = _cache_file_path()
+    if not os.path.exists(path):
+        _dbg(f"_load_cross_report_cache: no cache file at {path}; starting empty")
+        return
+    try:
+        with open(path, "rb") as f:
+            loaded = pickle.load(f)
+        if isinstance(loaded, dict):
+            _CROSS_REPORT_SUBTREE_CACHE.update(loaded)
+            _dbg(
+                f"_load_cross_report_cache: loaded {len(loaded)} cached "
+                f"subtrees from {path}"
+            )
+        else:
+            _dbg(
+                f"_load_cross_report_cache: cache file {path} did not "
+                f"contain a dict (got {type(loaded).__name__}); ignoring"
+            )
+    except Exception as e:                                  # noqa: BLE001
+        _dbg(
+            f"_load_cross_report_cache: failed to load {path}: "
+            f"{type(e).__name__}: {e}. Starting with empty cache."
+        )
+
+
+def _save_cross_report_cache() -> None:
+    """Persist the cache dict to disk via pickle.
+
+    Called after each numerical claim's verification finishes (i.e.
+    once per claim, not once per recursive node). Failure is logged
+    but never raised — a flaky write must not abort verification.
+    """
+    path = _cache_file_path()
+    try:
+        with open(path, "wb") as f:
+            pickle.dump(_CROSS_REPORT_SUBTREE_CACHE, f)
+        _dbg(
+            f"_save_cross_report_cache: wrote {len(_CROSS_REPORT_SUBTREE_CACHE)} "
+            f"entries to {path}"
+        )
+    except Exception as e:                                  # noqa: BLE001
+        _dbg(
+            f"_save_cross_report_cache: failed to write {path}: "
+            f"{type(e).__name__}: {e}"
+        )
+
+
+def clear_verification_cache() -> None:
+    """Drop the in-memory cache AND delete the on-disk pickle.
+
+    Use at the start of a clean run, in tests, or whenever the
+    registry semantics have changed in a way that could invalidate
+    previously-cached verdicts.
+    """
+    global _CACHE_LOADED
+    _CROSS_REPORT_SUBTREE_CACHE.clear()
+    _CACHE_LOADED = False
+    path = _cache_file_path()
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+            _dbg(f"clear_verification_cache: removed {path}")
+    except Exception as e:                                  # noqa: BLE001
+        _dbg(
+            f"clear_verification_cache: failed to remove {path}: "
+            f"{type(e).__name__}: {e}"
+        )
+
 
 # =========================================================
 # Module constants
@@ -656,6 +781,14 @@ class ArtifactVerificationResult(BaseModel):
     checks: List[ParamCheckResult] = Field(default_factory=list)
     recursive_children_checked: List[str] = Field(default_factory=list)
     verified_for_quantity: str = ""
+    cached: bool = False
+    # True when this entry was REPLAYED from the cross-report subtree
+    # cache rather than freshly verified. A cached entry's checks and
+    # verdict come from an earlier `verify_structured_report` call (in
+    # the same run, or restored from disk at run start). The subtree is
+    # known to be unchanged because the registry is append-only and the
+    # artifact is keyed by `result_id`. Auditors can use this flag to
+    # distinguish first-time judgments from replays.
 
 
 class ReportVerificationIssue(BaseModel):
@@ -938,34 +1071,71 @@ def _normalize_to_list_pair(
     param_name: str,
 ) -> Tuple[bool, List[Any], List[str], Optional[str]]:
     """Decide list-vs-scalar shape and validate consistency.
-
+ 
+    Three legitimate shapes are recognized:
+ 
+      (1) Scalar value, scalar source — an ordinary single-valued
+          parameter. Verified as one (value, ref) pair.
+ 
+      (2) List value, list source — a `*_w_refs`-style multi-element
+          parameter: a list of values paired element-wise with a list
+          of refs. Verified as N independent (value, ref) pairs;
+          `is_list` is True so the caller emits per-element labels and
+          a list-shaped source summary.
+ 
+      (3) List value, scalar source — a single parameter whose VALUE
+          is itself a list (e.g. `mySites=[[x,y],...]`), sourced from
+          ONE upstream artifact whose registered output is that whole
+          list. This is NOT a shape mismatch: it is verified as one
+          (value, ref) pair where the single "value" happens to be a
+          list object, and `CANVAS.verify_artifact` compares the whole
+          list against the artifact's list-valued output. `is_list` is
+          False because, like the scalar case, this is conceptually
+          one value with one source and one judge call.
+ 
+    The only genuine mismatch is a scalar value with a list source —
+    there is no coherent reading of one scalar against many refs.
+ 
     Returns
     -------
     (is_list, values, sources, error_message)
-        * is_list   — True iff both sides are lists.
-        * values    — list of bare values (singleton when scalar).
-        * sources   — list of source result_ids (singleton when scalar).
+        * is_list   — True iff this is shape (2): a `*_w_refs`-style
+          element-paired list. False for shapes (1) and (3).
+        * values    — list of bare values (singleton for shapes 1 & 3).
+        * sources   — list of source result_ids (singleton for 1 & 3).
         * error_message — non-None iff there's a structural mismatch the
           caller should fail on.
     """
-    val_is_list = isinstance(param_value, list)
-    src_is_list = isinstance(source, list)
+    # test if list or nparray
+    val_is_list = isinstance(param_value, (list, np.ndarray))
+    src_is_list = isinstance(source, (list, np.ndarray))
     _dbg(
         f"_normalize_to_list_pair: param={param_name!r} "
         f"val_is_list={val_is_list} src_is_list={src_is_list}"
     )
-
-    if val_is_list != src_is_list:
+ 
+    # Shape (3): the value is itself a list but there is a single
+    # source ref. The whole list is verified against that one artifact.
+    # Treated as a scalar-style single (value, ref) pair.
+    if val_is_list and not src_is_list:
+        _dbg(
+            f"_normalize_to_list_pair: list-valued single parameter "
+            f"param={param_name!r} — verifying whole list against one source"
+        )
+        return False, [param_value], [source], None
+ 
+    # The only genuine mismatch: a scalar value with a list source.
+    if src_is_list and not val_is_list:
         _dbg(f"_normalize_to_list_pair: SHAPE MISMATCH for param={param_name!r}")
         return False, [], [], (
-            f"Parameter '{param_name}': value is "
-            f"{'a list' if val_is_list else 'a scalar'} but source is "
-            f"{'a list' if src_is_list else 'a scalar'}. List-shape "
-            "mismatch — the producing tool registered inconsistent "
-            "provenance."
+            f"Parameter '{param_name}': value is not a list but source is "
+            "a list. List-shape mismatch — a single scalar value cannot be "
+            "sourced from multiple refs. The producing tool registered "
+            "inconsistent provenance."
         )
-
+ 
     if val_is_list:
+        # Both are lists -> shape (2), element-paired *_w_refs parameter.
         if len(param_value) != len(source):
             _dbg(
                 f"_normalize_to_list_pair: LENGTH MISMATCH param={param_name!r} "
@@ -982,7 +1152,7 @@ def _normalize_to_list_pair(
             f"len={len(param_value)}"
         )
         return True, list(param_value), list(source), None
-
+ 
     _dbg(f"_normalize_to_list_pair: scalar-shape OK param={param_name!r}")
     return False, [param_value], [source], None
 
@@ -2124,6 +2294,35 @@ def _verify_one_artifact_recursive(
         f"{indent}_verify_one_artifact_recursive: ENTER depth={depth} "
         f"result_id={result_id!r} target_quantity={target_quantity!r}"
     )
+    # Cross-report cache check. Keyed by `result_id` only (NOT by
+    # varied_parameters): the subtree under an artifact is invariant
+    # once the artifact is registered, and any "is this the right value
+    # to use here?" question is answered at the CALLER's level, not by
+    # re-walking the cached subtree.
+    cached_entry = _CROSS_REPORT_SUBTREE_CACHE.get(result_id)
+    if cached_entry is not None:
+        _dbg(
+            f"{indent}_verify_one_artifact_recursive: CROSS-REPORT cache HIT "
+            f"for {result_id!r} — replaying "
+            f"{len(cached_entry.get('artifact_results', []))} artifact "
+            f"results and {len(cached_entry.get('issues', []))} issues"
+        )
+        # Replay artifact_results, marking them as cached.
+        for ar_dict in cached_entry.get("artifact_results", []):
+            ar = ArtifactVerificationResult.model_validate(ar_dict)
+            ar.cached = True
+            artifact_results.append(ar)
+        # Replay issues verbatim.
+        for iss_dict in cached_entry.get("issues", []):
+            issues.append(
+                ReportVerificationIssue.model_validate(iss_dict)
+            )
+        # Mark all bare ids in the cached subtree as visited under the
+        # current varied set, so the in-report dedup machinery still
+        # works on subsequent claims that traverse overlapping subtrees.
+        for vid in cached_entry.get("visited_ids", []):
+            visited.add((vid, frozenset(varied_parameters)))
+        return
     # Cache key: (result_id, frozenset of varied parameters). Two claims
     # with the SAME varied_parameters share cache entries — the second
     # claim's walk skips artifacts the first already verified. Two
@@ -3101,6 +3300,11 @@ def verify_structured_report(
     
     viz = VerifyVisualizer(html_path=os.path.join(var.my_WORKING_DIRECTORY, f"verify_{reportName}.html"))
 
+    # Lazy-load the cross-report subtree cache from disk (idempotent
+    # after first call). Each claim's verification may add an entry and
+    # we save back to disk after each claim.
+    _load_cross_report_cache()
+
     _dbg(
         f"verify_structured_report: ENTER reportName={reportName!r} "
         f"sensitive_parameters={sensitive_parameters}"
@@ -3247,6 +3451,14 @@ def verify_structured_report(
         # sets cache separately and re-judge that artifact.
         cache_size_before = len(visited_cache)
         ids_before = {k[0] for k in visited_cache}
+        # Snapshot lengths so we can slice out THIS claim's contribution
+        # to the shared `artifact_results` and `issues` lists. The slice
+        # becomes this claim's entry in the cross-report subtree cache
+        # (keyed by claim.result_id; subsequent claims pointing at the
+        # same artifact will replay this).
+        ar_len_before = len(artifact_results)
+        iss_len_before = len(issues)
+        was_cache_hit = claim.result_id in _CROSS_REPORT_SUBTREE_CACHE
         _dbg(
             f"verify_structured_report: claim {claim.quantity_name!r} — "
             f"starting recursive descent (cache size before="
@@ -3273,6 +3485,32 @@ def verify_structured_report(
             f"{len(visited_cache)}, "
             f"new artifacts touched this claim={len(new_ids_for_this_claim)})"
         )
+
+        # Cross-report cache write — only when this claim's descent
+        # actually did work (i.e. wasn't itself a replay). Slice the
+        # contributions to `artifact_results` and `issues` and store
+        # them under claim.result_id. Subsequent reports that reference
+        # this same result_id will hit the cache and replay these
+        # entries (with `cached=True`) instead of re-walking.
+        # `was_cache_hit` is True when the very first thing the walk
+        # did was replay — re-storing would be redundant.
+        if not was_cache_hit:
+            this_claim_ar = artifact_results[ar_len_before:]
+            this_claim_iss = issues[iss_len_before:]
+            _CROSS_REPORT_SUBTREE_CACHE[claim.result_id] = {
+                "artifact_results": [ar.model_dump() for ar in this_claim_ar],
+                "issues": [iss.model_dump() for iss in this_claim_iss],
+                "visited_ids": sorted(new_ids_for_this_claim),
+            }
+            _dbg(
+                f"verify_structured_report: claim {claim.quantity_name!r} — "
+                f"wrote cross-report cache entry "
+                f"(n_artifact_results={len(this_claim_ar)}, "
+                f"n_issues={len(this_claim_iss)}, "
+                f"n_visited_ids={len(new_ids_for_this_claim)})"
+            )
+            _save_cross_report_cache()
+
         if any(i.severity == "fail" for i in issues):
             overall = "fail"
         elif any(i.severity == "warning" for i in issues):
