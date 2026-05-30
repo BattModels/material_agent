@@ -423,8 +423,6 @@ def boss_node(state, agent, name):
             
     old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step} [total time elapsed since project start: {str(step.timeStamp).split('.')[0]}, time spent on step {i+1}: {step.timeSpent}]" for i, step in enumerate(state["past_steps"]))
     bossMessage = f"""
-    Current time: {timeElapsed}.
-
     The overall goal is:
     {state['inputs']}
 
@@ -433,6 +431,8 @@ def boss_node(state, agent, name):
     
     The supervisor's draft final answer is:
     {state['draft_response']}
+    
+    Current time: {timeElapsed}.
 
     Please review the supervisor's draft final answer and decide whether to approve it or send it back for revision.
     """
@@ -609,8 +609,10 @@ def supervisor_chain_node(state, agent, name):
                     supervisorMessage = old_supervisorMessage + f"\n\nWARNING: In step '{step.step}', you required the following tools that are not in the tool list: {', '.join(wrongTools)}. Please check the CANVAS and try again!"
                     sup_good = False
                     break
-            
-            
+        
+        if isinstance(agent_response.action, NoChange) and len(state["plan"]) == 0:
+            sup_good = False
+            supervisorMessage = old_supervisorMessage + f"\n\nWARNING: there is no more step in the plan. You cannot choose 'NoChange' as the action. Please first carefully review what has been done, then either 'Response' with a message, or 'Plan' more steps!"
         else:
             sup_good = True
             
