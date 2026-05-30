@@ -105,7 +105,7 @@ if __name__ == "__main__":
     userMessage_12 = """please find the adsorption energy difference between the most favorable configurations (different adsorbate orientations 0, 90, 180) at fcc site and most favorable configuration (different adsorbate orientations 0, 90, 180) at ontop site for CO on Pt(111) surface with p(2x2) adsorbate overlayer (1/4 coverage), and analyze the uncertainty.
     Please use PBE pseudopotential and Bayesian Error Estimation Functional (BEEF) exchange correlation function."""
     
-    userMessage_13 = """please find the adsorption energy difference between the most favorable configurations (different adsorbate orientations 0, 90, 180) at fcc site and most favorable configuration (different adsorbate orientations 0, 90, 180) at ontop site for CO on Pt(111) surface with p(2x2) adsorbate overlayer (1/4 coverage).
+    userMessage_13 = """please find the accurate adsorption energy difference between the most favorable configurations (different adsorbate orientations 0, 90, 180) at fcc site and most favorable configuration (different adsorbate orientations 0, 90, 180) at ontop site for CO on Pt(111) surface with p(2x2) adsorbate overlayer (1/4 coverage).
     Please use PBE pseudopotential."""
     
     testMessage = '''
@@ -208,8 +208,8 @@ if __name__ == "__main__":
         
         if overwrite:
             inputs = {
-                # "inputs": f"{userMessage_13}",
-                "inputs": f"{userMessage_6}",
+                "inputs": f"{userMessage_13}",
+                # "inputs": f"{userMessage_6}",
                 "plan": [],
                 "past_steps": [],
                 "canvas": CANVAS.canvas
@@ -239,7 +239,10 @@ if __name__ == "__main__":
             CANVAS.result_registry = snap.values["artifacts"]
             CANVAS.print()
             print(CANVAS)
-            
+            # read in previous All_Report_Names.txt, each line is a report name, create a list and var.All_Report_Names = that list
+            if os.path.exists(f"{WORKING_DIRECTORY}/All_Report_Names.txt"):
+                with open(f"{WORKING_DIRECTORY}/All_Report_Names.txt", "r") as f:
+                    var.All_Report_Names = [line.strip() for line in f.readlines()]
 
             
         

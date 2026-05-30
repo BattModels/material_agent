@@ -1831,10 +1831,12 @@ def write_QE_script_w_ASE(
     if kspacing_ref:
         param_sources["kspacing"] = kspacing_ref
 
-    if ecutwfc_ref != "" and kspacing_ref != "":
-        parent_result_ids = [inputAtomsDir_ref, ecutwfc_ref, kspacing_ref, *ppfilesID]
-    else:
-        parent_result_ids = [inputAtomsDir_ref, *ppfilesID]
+
+    parent_result_ids = [inputAtomsDir_ref, *ppfilesID]
+    if ecutwfc_ref:
+        parent_result_ids.append(ecutwfc_ref)
+    if kspacing_ref:
+        parent_result_ids.append(kspacing_ref)
 
     merged_reasons = _merge_context(context, reasons)
 
@@ -3415,7 +3417,7 @@ def find_optimal_parameter(
         "List of (parameter_value, source_result_id) pairs. Each parameter_value is the swept value used in the corresponding filename. Aligned by index with `filename_w_ref`. Each source_result_id accepts an 8-char id to reference the output, or `<8-char-id>.<param_name>` to reference an input parameter of a past tool call (see `list_referenceable_inputs`).",
     ],
     reference_file: Annotated[str, "Among the list of files, the reference_file filename corresponding to the most expensive / most accurate reference calculation."],
-    threshold: Annotated[float, "Maximum allowed absolute energy difference in eV from the reference energy (interpreted per the `comparison_mode` you choose: absolute total-energy diff in eV, or per-atom energy diff in eV/atom)."],
+    threshold: Annotated[float, "Maximum allowed absolute energy difference in eV from the reference energy (interpreted per the `comparison_mode` you choose: absolute total-energy diff in eV, or per-atom energy diff in eV/atom). typically 1e-3 or 0.001 eV or 0.001 eV/atom"],
     comparison_mode: Annotated[
         Literal["absolute", "per_atom"],
         "How to measure each file's energy difference from the reference. "
@@ -3707,6 +3709,7 @@ def find_optimal_parameter_from_derived(
         "tool always compares in absolute terms — if you want a "
         "per-atom or otherwise normalized comparison, compute the "
         "normalized quantity upstream before feeding it in here.",
+        "typically threshold = 0.001 or 1e-3 eV."
     ],
     context: Annotated[
         str,
@@ -4460,8 +4463,8 @@ echo "Job Ended at `date`"\n \
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     parent_ID = CANVAS.canvas.get("ready_to_run_job_list", {})[qeInputFileName]
 
-    # new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 48, "runtime": 2800, "submissionScript": submissionScript, "outputFilename": outputFilename, "ID": parent_ID}}
-    new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 4, "runtime": 30, "submissionScript": submissionScript, "outputFilename": outputFilename, "ID": parent_ID}}
+    new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 48, "runtime": 2800, "submissionScript": submissionScript, "outputFilename": outputFilename, "ID": parent_ID}}
+    # new_resource_dict = {qeInputFileName: {"partition": "venkvis-cpu", "nnodes": 1, "ntasks": 4, "runtime": 30, "submissionScript": submissionScript, "outputFilename": outputFilename, "ID": parent_ID}}
 
     # check if resource_suggestions.db exist in the working directory
     db_file = os.path.join(WORKING_DIRECTORY, 'resource_suggestions.db')

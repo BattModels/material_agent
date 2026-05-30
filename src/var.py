@@ -12,3 +12,4 @@ GPU_AVAILABLE = False
 path_to_data_directory = None
 reportName = ""
 All_Report_Names = []
+tmp_report_names = []

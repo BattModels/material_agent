@@ -8,6 +8,7 @@ import string
 import random
 import copy
 from src.dag_visualizer import build_dag, generate_html, save_html
+from src import var
 import numpy as np
 
 from pydantic import BaseModel, Field
@@ -173,6 +174,8 @@ class myCANVAS():
             myDictPP(self.canvas, toDisk=True, filename=writeDir+'.txt')
             print("################### CANVAS END #####################")    
             return f"Key '{key}' successfully added."
+        elif key in var.tmp_report_names:
+            return f"Key '{key}' already exists and is one of the structured report names. You may never overwirte a report. Please choose a different key."
         elif overwrite:
             self.canvas[key] = value
             with open(writeDir, 'wb') as f:

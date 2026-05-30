@@ -21,7 +21,8 @@ This revision aligns the safety guard with the migrated tools:
   prompts — the `Context:` prefix already encodes the local purpose, and
   the judge does not need the report's top-level claim to evaluate a
   specific upstream parameter. The judge call accepts only what's locally
-  necessary: tool name and description for grounding, parameter name and
+  necessary: tool name and the result description (i.e. what THIS
+  artifact represents) for grounding, parameter name and
   value, the rationale (with merged context), the source artifact summary
   if any, and the rule string for the current branch.
 
@@ -918,7 +919,16 @@ def _collect_recursive_source_ids(artifact: Any) -> List[str]:
 
 
 def _summarize_artifact(artifact: Any) -> Dict[str, Any]:
-    """Compact, JSON-serializable view used inside LLM judge prompts."""
+    """Compact, JSON-serializable view used inside LLM judge prompts.
+
+    Note on the `result_description` key: this is the description of
+    THE RESULT this artifact represents (e.g. "Optimal ecutwfc = 60
+    selected from a convergence test"), set by the producing tool when
+    it called `register_tool_output`. It is NOT a description of the
+    tool itself. The key is named `result_description` rather than the
+    bare `description` so the judge LLM does not misread it as
+    documentation of the tool that produced the artifact.
+    """
     value_repr = repr(_flatten_listed_value(artifact))
     _dbg(
         f"_summarize_artifact: result_id={artifact.result_id!r} "
@@ -927,7 +937,7 @@ def _summarize_artifact(artifact: Any) -> Dict[str, Any]:
     return {
         "result_id": artifact.result_id,
         "tool_name": artifact.tool_name,
-        "description": artifact.description,
+        "result_description": artifact.description,
         "args": artifact.args,
         "reasons": artifact.reasons,
         "parent_result_ids": artifact.parent_result_ids,
@@ -971,8 +981,9 @@ def _summarize_artifact_dotted(ref: str) -> Dict[str, Any]:
     """Source summary for a dotted ref. The agent is referencing a
     specific INPUT PARAMETER of a past tool call, not the call's
     output. The summary surfaces:
-      - the source artifact's tool name and description (so the judge
-        knows what kind of call this input belonged to);
+      - the source artifact's tool name and the description OF THE
+        SOURCE ARTIFACT'S RESULT (so the judge knows what kind of call
+        this input belonged to);
       - the specific input parameter name being referenced;
       - the value of that input as recorded in args;
       - the RATIONALE the agent gave for that input at registration time
@@ -980,6 +991,11 @@ def _summarize_artifact_dotted(ref: str) -> Dict[str, Any]:
         the source call was production or sub-study work).
     The `kind` field flags the dotted case so the judge does not
     confuse this with an output-shaped source.
+
+    Note on `source_result_description`: this is the description of
+    the result the source artifact represents, NOT a description of
+    the source tool itself. Field name chosen to prevent the judge
+    LLM from misreading it as tool documentation.
     """
     bare_id, field = ref.split(".", 1)
     artifact = _get_artifact(bare_id)
@@ -991,7 +1007,7 @@ def _summarize_artifact_dotted(ref: str) -> Dict[str, Any]:
         "kind": "input_parameter_reference",
         "source_artifact_id": bare_id,
         "source_tool_name": artifact.tool_name,
-        "source_tool_description": artifact.description or "",
+        "source_result_description": artifact.description or "",
         "input_parameter_name": field,
         "input_parameter_value": field_value,
         "input_parameter_rationale": field_rationale,
@@ -1164,7 +1180,7 @@ def _normalize_to_list_pair(
 def _call_param_judge_llm(
     *,
     tool_name: str,
-    tool_description: str,
+    result_description: str,
     parameter_name: str,
     parameter_value: Any,
     reason: str,
@@ -1175,9 +1191,9 @@ def _call_param_judge_llm(
     """Slim per-parameter judge call.
 
     Inputs intentionally minimal:
-      - `tool_name` and `tool_description` ground the judge in what kind
-        of artifact we're judging (e.g. "this is a `find_optimal_parameter`
-        artifact, which selects the best parameter from a sweep").
+      - `tool_name` and `result_description` ground the judge in what
+        the artifact represents. `tool_name` names the tool that produced
+        the result; `result_description` is the description of this artifact's result.
       - `parameter_name` / `parameter_value`: the parameter under review.
       - `reason`: includes the merged "Context: <study description>"
         prefix from the agent's tool call. The judge reads this to
@@ -1194,7 +1210,7 @@ def _call_param_judge_llm(
     top-level claim to judge a specific parameter — the parameter's own
     Context line tells it what study this call is part of), varied/
     sensitive parameters (already factored into rule selection upstream),
-    artifact_summary (the bits the judge needs are tool_name/description).
+    artifact_summary (the bits the judge needs are tool_name/result_description).
     """
     if source_artifact_summary is None:
         source_block = "None"
@@ -1205,9 +1221,9 @@ def _call_param_judge_llm(
 You are verifying whether one tool parameter was set correctly in a scientific
 agent workflow.
 
-Tool that produced this artifact:
-  name:        {tool_name}
-  description: {tool_description}
+Artifact overview:
+  produced by tool:                 {tool_name}
+  artifact result description:      {result_description}
 
 Parameter under review:
   name:  {parameter_name}
@@ -1263,9 +1279,9 @@ Overall study goal:
 {overall_goal_text}
 
 Source artifact (where the extraction came from):
-  producing tool: {source_tool}
-  description:    {source_description}
-  args:           {source_args_json}
+  producing tool:     {source_tool}
+  result description: {source_description}
+  args:               {source_args_json}
 
 Source content:
 \"\"\"
@@ -1372,6 +1388,8 @@ def generate_structured_report(
         raise ValueError(f"Report name '{report_name}' already exists. "
                          "Choose a unique name for each report.")
 
+    var.tmp_report_names.append(report_name)
+    
     if not overall_goal or not overall_goal.strip():
         _dbg("generate_structured_report: overall_goal empty — about to raise")
         raise ValueError(
@@ -1718,7 +1736,7 @@ def verify_artifact_parameterization(
             )
             judgement = _call_param_judge_llm(
                 tool_name=artifact.tool_name,
-                tool_description=artifact.description or "",
+                result_description=artifact.description or "",
                 parameter_name=param_name,
                 parameter_value=param_value,
                 reason=reason,
@@ -1771,7 +1789,7 @@ def verify_artifact_parameterization(
                 param_name=param_name, param_value=param_value,
                 source=source, rule=rule_for_r1,
                 tool_name=artifact.tool_name,
-                tool_description=artifact.description or "",
+                result_description=artifact.description or "",
                 reason=reason, judge=judge,
                 fail_category=fail_category_for_r1,
             )
@@ -1845,7 +1863,7 @@ def verify_artifact_parameterization(
         )
         judgement = _call_param_judge_llm(
             tool_name=artifact.tool_name,
-            tool_description=artifact.description or "",
+            result_description=artifact.description or "",
             parameter_name=param_name,
             parameter_value=param_value,
             reason=reason,
@@ -1899,7 +1917,7 @@ def _verify_sourced_param(
     source: Any,
     rule: str,
     tool_name: str,
-    tool_description: str,
+    result_description: str,
     reason: str,
     judge,
     fail_category: str = IssueCategory.CROSS_WIRED_SOURCE,
@@ -1972,7 +1990,7 @@ def _verify_sourced_param(
 
     judgement = _call_param_judge_llm(
         tool_name=tool_name,
-        tool_description=tool_description,
+        result_description=result_description,
         parameter_name=param_name,
         parameter_value=param_value,
         reason=reason,
@@ -2294,8 +2312,30 @@ def _verify_one_artifact_recursive(
         f"{indent}_verify_one_artifact_recursive: ENTER depth={depth} "
         f"result_id={result_id!r} target_quantity={target_quantity!r}"
     )
-    # Cross-report cache check. Keyed by `result_id` only (NOT by
-    # varied_parameters): the subtree under an artifact is invariant
+    
+    # Cache key: (result_id, frozenset of varied parameters). Two claims
+    # with the SAME varied_parameters share cache entries — the second
+    # claim's walk skips artifacts the first already verified. Two
+    # claims with DIFFERENT varied_parameters cache separately, since
+    # R1 vs R2 branch selection (and the resulting verdicts) depend on
+    # the varied set.
+    visit_key = (result_id, frozenset(varied_parameters))
+    if visit_key in visited:
+        _dbg(
+            f"{indent}_verify_one_artifact_recursive: already visited "
+            f"{result_id!r} under varied={sorted(varied_parameters)} — "
+            f"skipping (cache hit)"
+        )
+        return
+    visited.add(visit_key)
+
+    artifact = _get_artifact(result_id)
+    viz.begin_artifact(result_id=result_id, target_quantity=target_quantity,
+                       depth=depth, artifact=artifact)
+    
+    # before actually descending, check if this is a claim that has verified from another report
+    # Keyed by `result_id` only (NOT by varied_parameters):
+    # the subtree under an artifact is invariant
     # once the artifact is registered, and any "is this the right value
     # to use here?" question is answered at the CALLER's level, not by
     # re-walking the cached subtree.
@@ -2317,31 +2357,13 @@ def _verify_one_artifact_recursive(
             issues.append(
                 ReportVerificationIssue.model_validate(iss_dict)
             )
-        # Mark all bare ids in the cached subtree as visited under the
-        # current varied set, so the in-report dedup machinery still
-        # works on subsequent claims that traverse overlapping subtrees.
-        for vid in cached_entry.get("visited_ids", []):
-            visited.add((vid, frozenset(varied_parameters)))
+        # # Mark all bare ids in the cached subtree as visited under the
+        # # current varied set, so the in-report dedup machinery still
+        # # works on subsequent claims that traverse overlapping subtrees.
+        # for vid in cached_entry.get("visited_ids", []):
+        #     visited.add((vid, frozenset(varied_parameters)))
+        viz.end_artifact(result_id=result_id, verification_result=artifact_results[-1])
         return
-    # Cache key: (result_id, frozenset of varied parameters). Two claims
-    # with the SAME varied_parameters share cache entries — the second
-    # claim's walk skips artifacts the first already verified. Two
-    # claims with DIFFERENT varied_parameters cache separately, since
-    # R1 vs R2 branch selection (and the resulting verdicts) depend on
-    # the varied set.
-    visit_key = (result_id, frozenset(varied_parameters))
-    if visit_key in visited:
-        _dbg(
-            f"{indent}_verify_one_artifact_recursive: already visited "
-            f"{result_id!r} under varied={sorted(varied_parameters)} — "
-            f"skipping (cache hit)"
-        )
-        return
-    visited.add(visit_key)
-
-    artifact = _get_artifact(result_id)
-    viz.begin_artifact(result_id=result_id, target_quantity=target_quantity,
-                       depth=depth, artifact=artifact)
 
     # Post-order traversal: verify children first, then the current node.
     # The output `artifact_results` reads bottom-up, so a reader scrolling
@@ -2767,7 +2789,7 @@ DEBUG_REMEDIATION_OPTIONS: Dict[str, List[str]] = {
 def _call_debug_param_judge_llm(
     *,
     tool_name: str,
-    tool_description: str,
+    result_description: str,
     parameter_name: str,
     parameter_value: Any,
     reason: str,
@@ -2798,9 +2820,9 @@ def _call_debug_param_judge_llm(
     prompt = f"""
 {rule_text}
 
-Tool that produced the artifact under review:
-  name:        {tool_name}
-  description: {tool_description}
+Artifact overview:
+  produced by tool:                 {tool_name}
+  artifact result description:      {result_description}
 
 Parameter under review:
   name:  {parameter_name}
@@ -2992,7 +3014,7 @@ def _walk_artifact_for_debug(
 
         judgement = _call_debug_param_judge_llm(
             tool_name=artifact.tool_name,
-            tool_description=artifact.description or "",
+            result_description=artifact.description or "",
             parameter_name=param_name,
             parameter_value=param_value,
             reason=reason_text,

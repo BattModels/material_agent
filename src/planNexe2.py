@@ -825,6 +825,8 @@ and do NOT substitute your own judgement for a tool's output.
                 "by data!"
             )
         var.All_Report_Names.append(copy.deepcopy(var.reportName))
+        with open(f"{var.my_WORKING_DIRECTORY}/All_Report_Names.txt", "a") as f:
+            f.write(f"{var.reportName}\n")
         var.reportName = ""
         
     
