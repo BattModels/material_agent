@@ -882,11 +882,26 @@ def _param_source_ids(artifact: Any) -> Dict[str, Any]:
     return pria
 
 
-def _collect_recursive_source_ids(artifact: Any) -> List[str]:
-    """All upstream BARE result_ids referenced by this artifact, flattened.
+def _collect_recursive_source_ids(
+    artifact: Any,
+) -> List[Tuple[str, List[str]]]:
+    """All upstream BARE result_ids referenced by this artifact, paired
+    with the parameter name(s) of THIS artifact that pointed at each id.
 
-    Empty strings are filtered out — they mark "no source declared", not a
-    real upstream artifact, so the recursive walker must not try to
+    Returns a list of (bare_id, param_names) tuples — one entry per
+    distinct upstream id, with `param_names` listing every parameter of
+    this artifact whose source ref resolved to that id. A given id can
+    be referenced from multiple parameters (rare but legitimate); the
+    list captures all of them in encounter order.
+
+    Ids that appear in `parent_result_ids` but NOT in any
+    `parent_result_ids_w_args` entry — i.e. parents without a named
+    parameter binding — are returned with `param_names == ["<unknown>"]`.
+    The caller (the chain-prefix builder) renders these as "<unknown>"
+    in the descent step; the descent itself still happens.
+
+    Empty strings are filtered out — they mark "no source declared", not
+    a real upstream artifact, so the recursive walker must not try to
     dereference them.
 
     Dotted refs ('<id>.<field>') are EXCLUDED here and are NOT recursed
@@ -898,22 +913,34 @@ def _collect_recursive_source_ids(artifact: Any) -> List[str]:
     claim is about that one value, and the verifier's findings stay
     scoped to that one value.
     """
-    source_ids: Set[str] = set(
-        s for s in (artifact.parent_result_ids or [])
-        if s and not _is_dotted_ref(s)
-    )
-    for v in _param_source_ids(artifact).values():
-        if isinstance(v, list):
-            source_ids.update(
-                s for s in v
-                if isinstance(s, str) and s and not _is_dotted_ref(s)
-            )
-        elif isinstance(v, str) and v and not _is_dotted_ref(v):
-            source_ids.add(v)
-    out = list(source_ids)
+    # Preserve first-encounter order while still de-duplicating.
+    bare_to_params: Dict[str, List[str]] = {}
+
+    # Pass 1: parameter-attributed sources. These come first so the
+    # natural attribution wins for ids that ALSO happen to appear in
+    # the bare `parent_result_ids` list.
+    for _pname, _src in _param_source_ids(artifact).items():
+        _refs = _src if isinstance(_src, list) else [_src]
+        for _r in _refs:
+            if not isinstance(_r, str) or not _r or _is_dotted_ref(_r):
+                continue
+            existing = bare_to_params.setdefault(_r, [])
+            if _pname not in existing:
+                existing.append(_pname)
+
+    # Pass 2: any bare ids in `parent_result_ids` that didn't get
+    # attributed to a parameter above. Mark them <unknown> so the
+    # chain prefix still has SOMETHING to say at that step.
+    for s in (artifact.parent_result_ids or []):
+        if not isinstance(s, str) or not s or _is_dotted_ref(s):
+            continue
+        if s not in bare_to_params:
+            bare_to_params[s] = ["<unknown>"]
+
+    out = list(bare_to_params.items())
     _dbg(
         f"_collect_recursive_source_ids: result_id={artifact.result_id!r} "
-        f"collected n={len(out)} bare ids={out}"
+        f"collected n={len(out)} children with attributions={out}"
     )
     return out
 
@@ -1387,9 +1414,9 @@ def generate_structured_report(
         )
         raise ValueError(f"Report name '{report_name}' already exists. "
                          "Choose a unique name for each report.")
-
+        
     var.tmp_report_names.append(report_name)
-    
+
     if not overall_goal or not overall_goal.strip():
         _dbg("generate_structured_report: overall_goal empty — about to raise")
         raise ValueError(
@@ -2292,6 +2319,53 @@ def _verify_extraction_behavior(
 # =========================================================
 
 
+def _format_chain_prefix(
+    *,
+    claim_name: str,
+    claim_root_id: str,
+    chain_so_far: List[Dict[str, Any]],
+    current_id: str,
+    current_tool_name: str,
+) -> str:
+    """Build a chain-context prefix to prepend to an issue's problem text.
+
+    The prefix tells the supervisor exactly how the verifier reached the
+    problematic artifact: it spells out the claim, then each descent
+    step ("via parameter X of <tool> (<id>)"), and ends with the
+    problematic artifact's identity. The original problem text (which
+    already names the failing parameter on the problematic artifact)
+    follows.
+
+    `chain_so_far` describes the descent from the claim's root artifact
+    down to (but NOT including) the current artifact. Each entry has:
+      - via_parameter: the parameter NAME of the parent at this step
+                       whose source ref pointed to the next deeper node;
+      - parent_tool:   the parent artifact's tool_name;
+      - parent_id:     the parent artifact's result_id.
+
+    When the issue fires at the claim's root artifact itself,
+    `chain_so_far` is empty and the prefix reads "When verifying the
+    claim '<name>' (<id>) directly: ".
+    """
+    if not chain_so_far:
+        return (
+            f"When verifying the claim '{claim_name}' "
+            f"({claim_root_id}) directly: "
+        )
+    lines = [
+        f"When verifying the claim '{claim_name}' ({claim_root_id})'s input"
+    ]
+    for step in chain_so_far:
+        lines.append(
+            f"  <- parameter '{step['via_parameter']}' of "
+            f"{step['parent_tool']} ({step['parent_id']})"
+        )
+    lines.append(
+        f"  <- which leads to the problematic tool: "
+        f"{current_tool_name} ({current_id}): "
+    )
+    return "\n".join(lines)
+
 
 def _verify_one_artifact_recursive(
     *,
@@ -2305,8 +2379,21 @@ def _verify_one_artifact_recursive(
     issues: List[ReportVerificationIssue],
     judge,
     depth: int = 0,
-    viz
+    viz,
+    # Chain context for issue prefixing. `claim_name` and `claim_root_id`
+    # identify the top-level claim that started this recursive walk.
+    # `chain_so_far` lists the descent steps from that claim root down
+    # to (but not including) the artifact under review at this call.
+    # At the top-level call from `verify_structured_report`,
+    # `chain_so_far` is empty. As the walker descends into each child,
+    # it appends one step describing the parent->child link, so by the
+    # time issues are emitted at deeper levels the chain is complete.
+    claim_name: str = "",
+    claim_root_id: str = "",
+    chain_so_far: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
+    if chain_so_far is None:
+        chain_so_far = []
     indent = "  " * depth
     _dbg(
         f"{indent}_verify_one_artifact_recursive: ENTER depth={depth} "
@@ -2345,17 +2432,28 @@ def _verify_one_artifact_recursive(
             f"{indent}_verify_one_artifact_recursive: CROSS-REPORT cache HIT "
             f"for {result_id!r} — replaying "
             f"{len(cached_entry.get('artifact_results', []))} artifact "
-            f"results and {len(cached_entry.get('issues', []))} issues"
+            f"results; re-emitting issues with current chain"
         )
         # Replay artifact_results, marking them as cached.
         for ar_dict in cached_entry.get("artifact_results", []):
             ar = ArtifactVerificationResult.model_validate(ar_dict)
             ar.cached = True
             artifact_results.append(ar)
-        # Replay issues verbatim.
-        for iss_dict in cached_entry.get("issues", []):
-            issues.append(
-                ReportVerificationIssue.model_validate(iss_dict)
+        # Re-emit issues from the cached local_result (the last entry),
+        # using the CURRENT chain so the prefix reflects how THIS
+        # caller reached the artifact — not how a previous claim did.
+        # The cache stores only the local_result (per-artifact checks
+        # and verdict), which are invariant; the chain prefix is
+        # caller-specific and must be rebuilt every time.
+        if artifact_results:
+            _emit_issues_from_local_result(
+                local_result=artifact_results[-1],
+                result_id=result_id,
+                issues=issues,
+                claim_name=claim_name,
+                claim_root_id=claim_root_id,
+                chain_so_far=chain_so_far,
+                indent=indent,
             )
         # # Mark all bare ids in the cached subtree as visited under the
         # # current varied set, so the in-report dedup machinery still
@@ -2377,12 +2475,24 @@ def _verify_one_artifact_recursive(
         f"has {children_total} children: {children}"
     )
     children_checked: List[str] = []
-    for child_id in children:
+    for child_id, via_params in children:
         viz.begin_child_descent(parent_id=result_id, child_id=child_id)
         _dbg(
             f"{indent}_verify_one_artifact_recursive: descending into child "
             f"{child_id!r} (parent={result_id!r})"
         )
+        # Build the chain step describing THIS descent: parent =
+        # current artifact, child = the one we're about to recurse on.
+        # `via_params` is already the list of parameter names of THIS
+        # artifact whose source ref resolved to `child_id` — comes
+        # directly from `_collect_recursive_source_ids`, no inversion
+        # needed here.
+        _step = {
+            "via_parameter": ", ".join(via_params),
+            "parent_tool": getattr(artifact, "tool_name", "?"),
+            "parent_id": result_id,
+        }
+        _child_chain = list(chain_so_far) + [_step]
         try:
             _verify_one_artifact_recursive(
                 result_id=child_id,
@@ -2395,7 +2505,10 @@ def _verify_one_artifact_recursive(
                 issues=issues,
                 judge=judge,
                 depth=depth + 1,
-                viz=viz
+                viz=viz,
+                claim_name=claim_name,
+                claim_root_id=claim_root_id,
+                chain_so_far=_child_chain,
             )
             children_checked.append(child_id)
             viz.end_child_descent(parent_id=result_id, child_id=child_id)
@@ -2455,70 +2568,115 @@ def _verify_one_artifact_recursive(
         f"{result_id!r} verdict={local_result.overall_verdict!r}"
     )
 
-    if local_result.overall_verdict != "pass":
-        _dbg(
-            f"{indent}_verify_one_artifact_recursive: emitting per-check "
-            f"issues for {result_id!r} "
-            f"verdict={local_result.overall_verdict!r}"
-        )
-
-        # Look up the artifact once to extract per-parameter `Context:`
-        # lines from its rationale. The merged context is the segment of
-        # `reasons[param]` (or `reasons["reasons"]` for str-shape tools)
-        # between "Context:" and "\n\nRationale:".
-        try:
-            _artifact_for_ctx = _get_artifact(result_id)
-            _all_reasons: Dict[str, str] = _artifact_for_ctx.reasons or {}
-            _tool_name_for_issue = _artifact_for_ctx.tool_name
-        except Exception:                                # noqa: BLE001
-            _all_reasons = {}
-            _tool_name_for_issue = local_result.tool_name
-
-        for check in local_result.checks:
-            if check.verdict == "pass" or check.verdict == "info":
-                continue
-
-            cat = check.category or IssueCategory.UNCATEGORIZED
-
-            # Extract the Context: line from this parameter's rationale.
-            _reason_text = (
-                _all_reasons.get(check.parameter_name)
-                or _all_reasons.get("reasons")
-                or ""
-            )
-            ctx_at_site: Optional[str] = None
-            if "Context:" in _reason_text:
-                _ctx_after = _reason_text.split("Context:", 1)[1]
-                # Strip at the next "Rationale:" delimiter or newline-newline.
-                for _delim in ("\n\nRationale:", "\nRationale:", "\n\n"):
-                    if _delim in _ctx_after:
-                        _ctx_after = _ctx_after.split(_delim, 1)[0]
-                        break
-                ctx_at_site = _ctx_after.strip() or None
-
-            problem = _problem_text_for_param_check(
-                category=cat,
-                parameter_name=check.parameter_name,
-                parameter_value=check.parameter_value,
-                tool_name=_tool_name_for_issue,
-                verdict=check.verdict,
-            )
-
-            issues.append(ReportVerificationIssue(
-                category=cat,
-                severity=("fail" if check.verdict == "fail" else "warning"),
-                where={
-                    "result_id": result_id,
-                    "tool_name": _tool_name_for_issue,
-                    "parameter": check.parameter_name,
-                    "parameter_value": check.parameter_value,
-                },
-                context_at_site=ctx_at_site,
-                problem=problem,
-                judge_reasoning=check.reasoning,
-            ))
+    _emit_issues_from_local_result(
+        local_result=local_result,
+        result_id=result_id,
+        issues=issues,
+        claim_name=claim_name,
+        claim_root_id=claim_root_id,
+        chain_so_far=chain_so_far,
+        indent=indent,
+    )
 
     viz.end_artifact(result_id=result_id, verification_result=local_result)
+
+
+def _emit_issues_from_local_result(
+    *,
+    local_result: ArtifactVerificationResult,
+    result_id: str,
+    issues: List[ReportVerificationIssue],
+    claim_name: str,
+    claim_root_id: str,
+    chain_so_far: List[Dict[str, Any]],
+    indent: str = "",
+) -> None:
+    """Convert an artifact's local verification result into supervisor-
+    facing issues, with the current descent chain prefixed onto each
+    problem text.
+
+    Shared between the fresh-walk path and the cross-report cache-hit
+    replay path so the issue surface looks identical in both cases —
+    same per-check verdicts/reasonings, but the chain prefix is built
+    from the CURRENT caller's chain (which differs by callsite, even
+    when the underlying artifact's local verdict is cached).
+    """
+    if local_result.overall_verdict == "pass":
+        return
+
+    _dbg(
+        f"{indent}_emit_issues_from_local_result: emitting per-check "
+        f"issues for {result_id!r} "
+        f"verdict={local_result.overall_verdict!r}"
+    )
+
+    # Look up the artifact once to extract per-parameter `Context:`
+    # lines from its rationale. The merged context is the segment of
+    # `reasons[param]` (or `reasons["reasons"]` for str-shape tools)
+    # between "Context:" and "\n\nRationale:".
+    try:
+        _artifact_for_ctx = _get_artifact(result_id)
+        _all_reasons: Dict[str, str] = _artifact_for_ctx.reasons or {}
+        _tool_name_for_issue = _artifact_for_ctx.tool_name
+    except Exception:                                       # noqa: BLE001
+        _all_reasons = {}
+        _tool_name_for_issue = local_result.tool_name
+
+    for check in local_result.checks:
+        if check.verdict == "pass" or check.verdict == "info":
+            continue
+
+        cat = check.category or IssueCategory.UNCATEGORIZED
+
+        # Extract the Context: line from this parameter's rationale.
+        _reason_text = (
+            _all_reasons.get(check.parameter_name)
+            or _all_reasons.get("reasons")
+            or ""
+        )
+        ctx_at_site: Optional[str] = None
+        if "Context:" in _reason_text:
+            _ctx_after = _reason_text.split("Context:", 1)[1]
+            # Strip at the next "Rationale:" delimiter or newline-newline.
+            for _delim in ("\n\nRationale:", "\nRationale:", "\n\n"):
+                if _delim in _ctx_after:
+                    _ctx_after = _ctx_after.split(_delim, 1)[0]
+                    break
+            ctx_at_site = _ctx_after.strip() or None
+
+        problem = _problem_text_for_param_check(
+            category=cat,
+            parameter_name=check.parameter_name,
+            parameter_value=check.parameter_value,
+            tool_name=_tool_name_for_issue,
+            verdict=check.verdict,
+        )
+        # Prefix the problem text with the descent chain from the
+        # current claim's root down to this artifact, so the
+        # supervisor can see HOW we reached the offending site
+        # without having to walk the DAG manually.
+        chain_prefix = _format_chain_prefix(
+            claim_name=claim_name,
+            claim_root_id=claim_root_id,
+            chain_so_far=chain_so_far,
+            current_id=result_id,
+            current_tool_name=_tool_name_for_issue,
+        )
+        problem = chain_prefix + problem
+
+        issues.append(ReportVerificationIssue(
+            category=cat,
+            severity=("fail" if check.verdict == "fail" else "warning"),
+            where={
+                "result_id": result_id,
+                "tool_name": _tool_name_for_issue,
+                "parameter": check.parameter_name,
+                "parameter_value": check.parameter_value,
+            },
+            context_at_site=ctx_at_site,
+            problem=problem,
+            judge_reasoning=check.reasoning,
+        ))
 
 
 def summarize_verification_for_supervisor(
@@ -3479,7 +3637,6 @@ def verify_structured_report(
         # (keyed by claim.result_id; subsequent claims pointing at the
         # same artifact will replay this).
         ar_len_before = len(artifact_results)
-        iss_len_before = len(issues)
         was_cache_hit = claim.result_id in _CROSS_REPORT_SUBTREE_CACHE
         _dbg(
             f"verify_structured_report: claim {claim.quantity_name!r} — "
@@ -3496,7 +3653,10 @@ def verify_structured_report(
             artifact_results=artifact_results,
             issues=issues,
             judge=judge,
-            viz=viz
+            viz=viz,
+            claim_name=claim.quantity_name,
+            claim_root_id=claim.result_id,
+            chain_so_far=[],
         )
         ids_after = {k[0] for k in visited_cache}
         new_ids_for_this_claim = ids_after - ids_before
@@ -3518,17 +3678,22 @@ def verify_structured_report(
         # did was replay — re-storing would be redundant.
         if not was_cache_hit:
             this_claim_ar = artifact_results[ar_len_before:]
-            this_claim_iss = issues[iss_len_before:]
+            # NOTE: we no longer store `issues` in the cache. Issues
+            # carry a chain-prefix that depends on HOW the artifact was
+            # reached by the current claim, so caching them would
+            # produce wrong prefixes for future claims that reach the
+            # same artifact via a different chain. We cache only the
+            # per-artifact `local_result` (checks/verdicts/reasonings)
+            # which is invariant, and re-emit issues at replay time
+            # using the caller's current chain.
             _CROSS_REPORT_SUBTREE_CACHE[claim.result_id] = {
                 "artifact_results": [ar.model_dump() for ar in this_claim_ar],
-                "issues": [iss.model_dump() for iss in this_claim_iss],
                 "visited_ids": sorted(new_ids_for_this_claim),
             }
             _dbg(
                 f"verify_structured_report: claim {claim.quantity_name!r} — "
                 f"wrote cross-report cache entry "
                 f"(n_artifact_results={len(this_claim_ar)}, "
-                f"n_issues={len(this_claim_iss)}, "
                 f"n_visited_ids={len(new_ids_for_this_claim)})"
             )
             _save_cross_report_cache()
