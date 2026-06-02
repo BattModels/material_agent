@@ -104,9 +104,9 @@ class Response(BaseModel):
 
 # the class supervisor will choose if the plan doesn't need to be changed
 class NoChange(BaseModel):
-    """No change to the plan, just continue to execute the original plan."""
+    """The first step of the current plan will be removed, and the second step to be executed next without any change."""
     kind: Literal["no_change"] = "no_change"
-    comment: str = Field(description="any comment from the supervisor if needed, otherwise just put 'No change to the plan, continue to execute the original plan.'")
+    comment: str = Field(description="any comment from the supervisor if needed, otherwise just put 'No change to the plan, continue to execute the second step of the original plan.'")
 
 
 class Act(BaseModel):
@@ -554,7 +554,10 @@ def supervisor_chain_node(state, agent, name):
         
         Current time: {timeElapsed}.
 
-        Please inspect and extract related information from CANVAS and EXPLOG, then update the plan accordingly.
+        Please inspect and extract related information from CANVAS and EXPLOG, then update the plan accordingly. 
+        Only choose <NoChange> if you want the first step of the current plan to be removed, and the second step to be executed next without any change.
+        Otherwise choose <Plan> and rewrite the plan with the steps you want, and the first step of the plan you just wrote will be executed.
+        Or if you think the overall goal is finished, you can choose <Response> and write a draft final answer for the boss review. 
         """
     
     old_supervisorMessage = supervisorMessage
@@ -610,9 +613,12 @@ def supervisor_chain_node(state, agent, name):
                     sup_good = False
                     break
         
-        if isinstance(agent_response.action, NoChange) and len(state["plan"]) == 0:
+        if isinstance(agent_response.action, NoChange) and len(state["plan"]) <= 1:
             sup_good = False
-            supervisorMessage = old_supervisorMessage + f"\n\nWARNING: there is no more step in the plan. You cannot choose 'NoChange' as the action. Please first carefully review what has been done, then either 'Response' with a message, or 'Plan' more steps!"
+            supervisorMessage = old_supervisorMessage + f"\n\nWARNING: there is less than 2 steps left in the current plan, and there's no 'second' step to execute. You cannot choose 'NoChange' as the action. Please first carefully review what has been done, then either 'Response' with a message, or 'Plan' more steps! If you choose 'Plan', the first step of the new plan you just wrote will be executed next."
+        elif isinstance(agent_response.action, Plan) and len(agent_response.action.steps) == 0:
+            sup_good = False
+            supervisorMessage = old_supervisorMessage + f"\n\nWARNING: you chose to rewrite the plan, but the new plan is empty. Please provide a non-empty plan with at least one step, or if you think the overall goal is finished, you can choose 'Response' and write a draft final answer for the boss review."
         else:
             sup_good = True
             
