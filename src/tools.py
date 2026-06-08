@@ -192,7 +192,7 @@ def wait_for_update(
         for_deletion = []
         for key, value in tmpUpdate.items():
 
-            if value not in ["completed", "failed"] or 'unrecoverable' in value:
+            if value not in ("completed", "failed") and not value.startswith("unrecoverable"):
                 for_deletion.append(key)
 
         for key in for_deletion:
