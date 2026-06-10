@@ -340,6 +340,30 @@ _REGEN_CASCADE_WARNING = (
     "verification pass."
 )
 
+_NO_REQUIRED_DROP_WARNING = (
+    "DO NOT respond by removing the failing quantity from "
+    "`required_quantities` — that is a silent regression of the user's "
+    "request. Legitimate responses: (a) re-run the upstream tool with "
+    "adjusted inputs and a stated reason (e.g. relaxed threshold) so a "
+    "real tool produces the value; (b) if the quantity was scheduled "
+    "in error (input decision / agent estimate / math fabrication), "
+    "remove it ONLY with an explicit acknowledgment of which rule it "
+    "violated; (c) if multiple genuine attempts have failed, declare "
+    "it unachievable LOUDLY in the final report's narrative — never "
+    "silently. Substituting another math-tool fabrication is also "
+    "forbidden."
+)
+
+_MATH_FABRICATION_HINT = (
+    "If the judge's reasoning contains 'MATH FABRICATION DETECTED', "
+    "the rationale is not the problem — the value was laundered "
+    "through a trivial or dimensionally-broken math expression. Fix: "
+    "obtain the value from the proper tool (re-call the selection "
+    "tool with a justified relaxed threshold; call the real scientific "
+    "tool). Do NOT instruct the worker to use another math expression, "
+    "and do NOT drop the quantity."
+)
+
 
 REMEDIATION_OPTIONS: Dict[str, List[str]] = {
     IssueCategory.VALUE_MISMATCH_CLAIM: [
@@ -407,6 +431,7 @@ REMEDIATION_OPTIONS: Dict[str, List[str]] = {
         _REGEN_CASCADE_WARNING,
     ],
     IssueCategory.UNDER_JUSTIFIED_SWEEP: [
+        _MATH_FABRICATION_HINT,
         "The judge flagged this swept value as not making sense for the "
         "stated study. Either correct the value to a sensible sweep point "
         "and re-create the artifact, or strengthen the per-parameter "
@@ -415,6 +440,7 @@ REMEDIATION_OPTIONS: Dict[str, List[str]] = {
         _REGEN_CASCADE_WARNING,
     ],
     IssueCategory.UNDER_JUSTIFIED_CHOICE: [
+        _MATH_FABRICATION_HINT,
         "The judge flagged this parameter's rationale as missing workflow "
         "context. Update the per-parameter rationale to explicitly "
         "identify the study and the parameter's role in it; re-create "
@@ -688,6 +714,103 @@ Guidance:
   you whether this artifact is part of the production lineage of the
   claim or part of an earlier sub-study, and you must adjust scrutiny
   accordingly.
+
+- HARD RULE for `math_expression_tool` (applies regardless of which
+  rule branch — R1/R1_DOTTED/R1_NO_SOURCE/R2/R3 — the parameter falls
+  under). Numerical quantities reported in a structured report must come
+  from a real computation performed by an appropriate tool. The math
+  tool exists to combine real quantities into new derived quantities,
+  NOT to launder an agent-decided value into a registered result_id.
+  When the tool under review is `math_expression_tool` (or any tool of
+  similar shape — accepting an expression plus input values and
+  registering the result as an artifact), inspect the expression with
+  these checks. ANY check that flags fabrication is a hard FAIL,
+  regardless of how coherent the surrounding rationale is.
+
+    * IDENTITY OR TRIVIAL OPS (e.g. `x0`, `x0 + 0`, `x0 * 1`, `x0 - 0`,
+      `x0 / 1`, `x0 ** 1`) are fabrication: the math tool is being
+      abused to mint a result_id for a value the agent already had,
+      not to compute anything new. FAIL these unconditionally. In your
+      reasoning say loudly and verbatim:
+        "MATH FABRICATION DETECTED. The expression performs no real
+        computation — it merely echoes an upstream value to mint a
+        new registered result_id. Registered results must come from
+        REAL tool outputs, never from laundering a value through
+        math_expression_tool. Recall the appropriate tool to obtain
+        the value (e.g. find_optimal_parameter with a justified
+        threshold, or the underlying scientific tool that produces
+        this quantity), and do NOT fabricate."
+
+    * SCALAR-BY-UNDOCUMENTED-FACTOR (e.g. `x0 / 100.0`, `x0 * 0.05`,
+      `x0 + 0.5`) where the literal constant has NO declared physical
+      or evidence-based source in the rationale is ALSO fabrication.
+      A legitimate scaling has a documented basis (Avogadro's number,
+      a unit-conversion factor, a sourced literature reference, a
+      previously-registered artifact). An agent-invented "rule of
+      thumb" multiplier IS fabrication. FAIL these and use the same
+      loud reasoning template as above.
+
+    * UNIT / DIMENSIONAL CONSISTENCY: independently of whether scalars
+      are documented, the arithmetic must produce a result with units
+      compatible with the claim being supported. Examine:
+        (a) Units of each input value, read from the rationale and the
+            source artifact's description (e.g. "supercell_dim_z = 9
+            layers" -> layers; "energy = -432.1 eV" -> eV; "lattice
+            constant = 3.94 Angstrom" -> Angstrom). If a unit is not
+            stated, infer from the source tool's domain (e.g. a value
+            from `read_energy_from_output` is in eV).
+        (b) Units of each scalar literal in the expression. A bare
+            number is DIMENSIONLESS unless the rationale explicitly
+            declares units for it AND justifies that declaration with
+            evidence.
+        (c) The claimed unit of the result, taken from the report
+            claim's `unit` field, the artifact's description, or the
+            rationale (e.g. "estimated uncertainty in eV").
+        (d) Whether the unit arithmetic balances. Layers / 1 cannot
+            produce eV. Counts * counts cannot produce an energy.
+            eV - eV gives eV, but eV - Angstrom is nonsense.
+      CONCRETE EXAMPLE OF FABRICATION TO CATCH: expression
+      `x0 / 100.0` where `x0` is a layer count (dimensionless or
+      "layers") and the claimed output is "estimated uncertainty in
+      eV" — this is a hard fabrication because the layer count cannot
+      dimensionally produce an energy regardless of what scalar is
+      applied. The agent is using the math tool to bridge incompatible
+      quantities and dress an expert hunch as a derived number. FAIL
+      with reasoning that names the dimensional break explicitly:
+        "MATH FABRICATION DETECTED — UNIT MISMATCH. The expression
+        consumes a value of unit <input_unit> and is claimed to
+        produce a value of unit <claimed_unit>. These units are
+        dimensionally incompatible; no scalar (documented or not) can
+        reconcile them. The agent is using arithmetic to bridge
+        incompatible physical quantities. Obtain the claimed quantity
+        from the appropriate source — for example, an uncertainty
+        estimate should come from the actual spread of relevant
+        registered energy artifacts (via real arithmetic on energy
+        values), not from a transformation of a layer count. Recall
+        the correct tool; do NOT fabricate."
+      Be honest about ambiguity: if the rationale provides a documented
+      empirical conversion factor WITH appropriate units (e.g. "0.01
+      eV/layer, from [cited evidence]"), the arithmetic CAN be
+      dimensionally valid (layers * eV/layer -> eV). Such a case might
+      still fail under the undocumented-scalar bullet if the factor is
+      unsourced, but the unit check itself does not block it. An
+      agent-asserted unit on a scalar ("the 100 has units of
+      layers/eV") WITHOUT supporting evidence does NOT rescue the
+      expression — units cannot be assigned to a number purely to make
+      dimensions balance after the fact.
+
+    * MULTI-SOURCE ARITHMETIC (e.g. `x0 - x1`, `(x0 - x1) / x2`) where
+      each `xi` comes from a real registered source is LEGITIMATE — the
+      agent is computing a new quantity from real inputs. Pass these
+      if the rationale is otherwise coherent, even if the resulting
+      quantity seems unusual, AS LONG AS the unit check above also
+      passes.
+
+    * CONVERSION BY A DOCUMENTED PHYSICAL CONSTANT or unit factor (e.g.
+      `x0 * 1.602e-19` for eV->Joules, `x0 / 4.184` for cal->J) is
+      LEGITIMATE provided the constant is identified by name in the
+      rationale.
+
 - A rationale that explicitly situates the parameter within a study
   (production run / convergence test / sensitivity sweep / etc.) and
   explains the parameter's role in that study generally deserves PASS,
@@ -961,10 +1084,16 @@ def _summarize_artifact(artifact: Any) -> Dict[str, Any]:
         f"_summarize_artifact: result_id={artifact.result_id!r} "
         f"tool_name={artifact.tool_name!r} value_repr_len={len(value_repr)}"
     )
+    
+    if "The tool automatically append .pwo to the all filenames to read the output files." in artifact.description and " xxx.pwi.pwo is the correct output file naming format." not in artifact.description:
+        actual_description = artifact.description + " xxx.pwi.pwo is the correct output file naming format."
+    else:
+        actual_description = artifact.description
+    
     return {
         "result_id": artifact.result_id,
         "tool_name": artifact.tool_name,
-        "result_description": artifact.description,
+        "result_description": actual_description,
         "args": artifact.args,
         "reasons": artifact.reasons,
         "parent_result_ids": artifact.parent_result_ids,
@@ -1265,6 +1394,8 @@ Rule that must be applied:
 
 {PARAM_JUDGE_GUIDANCE}
 
+Note: Whenever a tool is about to read the Quantum ESPRESSO output file, the agent is suppose to provide the job input name as xxx.pwi, the tool will automatically append .pwo to it, and xxx.pwi.pwo is the correct output file naming format."
+
 Return:
 - pass     : parameter setting is sensible and consistent with the rule
 - fail     : parameter setting is not acceptable
@@ -1277,6 +1408,17 @@ Return:
     )
     t0 = time.time()
     result = judge.invoke(prompt)
+    localPatient = 3
+    while result.get("verdict") is None and localPatient > 0:
+        _dbg(
+            f"_call_param_judge_llm: verdict missing from judge output, "
+            f"retrying... attempts left: {localPatient}"
+        )
+        result = judge.invoke(prompt)
+        localPatient -= 1
+    if result.get("verdict") is None:
+        print(f"_call_param_judge_llm: ERROR — verdict missing from judge output after retries. ")
+        exit(1)
     elapsed = time.time() - t0
     reasoning_preview = str(result.get("reasoning", ""))[:120]
     _dbg(
@@ -2732,6 +2874,13 @@ def summarize_verification_for_supervisor(
         remediation = list(REMEDIATION_OPTIONS.get(
             cat, REMEDIATION_OPTIONS[IssueCategory.UNCATEGORIZED]
         ))
+        # Universal reminder appended to EVERY issue's remediation list.
+        # Every issue surfaced here is on a report step, which means
+        # the supervisor's decision point is always "how do I get the
+        # next report to pass?" — and the wrong answer to that question
+        # (drop the failing quantity) needs to be foreclosed at the
+        # decision-point, not just in the high-level supervisor message.
+        remediation.append(_NO_REQUIRED_DROP_WARNING)
 
         enriched = dict(issue)
         enriched["issue_number"] = i
