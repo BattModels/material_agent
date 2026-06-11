@@ -35,6 +35,84 @@ from pathlib import Path
 from gnome_dreams_oer_screening.explog.explog import EXPLOG
 
 
+# =====================================================================
+# Checkpoint retention
+# =====================================================================
+THREAD_ID = "1"
+MAX_CHECKPOINT_DB_BYTES = 20 * 1024**3   # prune once sqlite (+wal) exceeds 20 GB
+KEEP_ROUNDS = 50                         # newest big-round checkpoints to keep
+
+
+def _checkpoint_db_size(db_path):
+    """Live size of the checkpoint db = main file + WAL + shm."""
+    return sum(
+        os.path.getsize(db_path + suffix)
+        for suffix in ("", "-wal", "-shm")
+        if os.path.exists(db_path + suffix)
+    )
+
+
+def prune_old_rounds(checkpointer, db_path, thread_id=THREAD_ID,
+                     max_bytes=MAX_CHECKPOINT_DB_BYTES, keep_rounds=KEEP_ROUNDS):
+    """If the checkpoint db exceeds `max_bytes`, keep only the newest
+    `keep_rounds` big-round checkpoints and drop everything older.
+
+    How it works:
+    - Round-level checkpoints are the rows with checkpoint_ns = '' (the parent
+      PlanExecute graph). The tool-level checkpoints written by the inner
+      agents live in namespaced rows (e.g. "OER_Agent:<task_id>").
+    - LangGraph checkpoint_ids are UUIDv6 -> lexicographically time-ordered,
+      so one cutoff id cleanly separates old from new ACROSS all namespaces:
+      deleting `checkpoint_id < cutoff` with NO namespace filter removes old
+      rounds and their inner tool-level checkpoints in one sweep, while
+      leaving the kept rounds' inner history (and the latest, resumable
+      checkpoints) untouched.
+    - The oldest surviving checkpoint ends up with a dangling
+      parent_checkpoint_id; LangGraph tolerates this - get_state_history just
+      ends there. Time travel to pruned rounds is gone permanently.
+
+    Safe to call between super-steps (which is where the driver loop calls it).
+    """
+    if _checkpoint_db_size(db_path) < max_bytes:
+        return
+
+    conn = checkpointer.conn
+    deleted = 0
+    cutoff = None
+    with checkpointer.lock:
+        row = conn.execute(
+            "SELECT checkpoint_id FROM checkpoints "
+            "WHERE thread_id = ? AND checkpoint_ns = '' "
+            "ORDER BY checkpoint_id DESC LIMIT 1 OFFSET ?",
+            (thread_id, keep_rounds - 1),
+        ).fetchone()
+        if row is None:          # fewer than keep_rounds rounds exist yet
+            return
+        cutoff = row[0]
+        cur = conn.execute(
+            "DELETE FROM checkpoints WHERE thread_id = ? AND checkpoint_id < ?",
+            (thread_id, cutoff),
+        )
+        deleted += cur.rowcount
+        cur = conn.execute(
+            "DELETE FROM writes WHERE thread_id = ? AND checkpoint_id < ?",
+            (thread_id, cutoff),
+        )
+        deleted += cur.rowcount
+        conn.commit()
+
+    if deleted:
+        # DELETE alone never shrinks the file; VACUUM rewrites it. Needs up to
+        # ~2x the file size in temp space and locks the db while running.
+        try:
+            with checkpointer.lock:
+                conn.execute("VACUUM")
+        except sqlite3.OperationalError as e:
+            print(f"[prune] VACUUM skipped ({e}); space will be reused, file not shrunk")
+        print(f"[prune] removed {deleted} checkpoint/write rows older than round cutoff {cutoff}; "
+              f"db now {_checkpoint_db_size(db_path) / 1024**2:.1f} MB")
+
+
 # --- Ensure the new GNoME_DREAMS_OER_screening package meets the minimum version requirement ------
 # from importlib.metadata import version
 # from packaging.version import Version
@@ -335,6 +413,10 @@ You have a maximum of 1 hours to complete the entire study and make your final r
     Verify that the search contains the correct ID. Then generate a report about the literature search result. After the literature search, if the next step in the plan
     is to ask your worker to search the the result ID, do not touch the plan, keep it as is.
     """
+    
+    minimal_test_message_3 = """
+    do not do any literature search, just filter through the database and, in 3 round, enter 15 candidates into the experiment log, 5 per round.
+    """
 
     revised_message_v6 = """
     Please conduct an acidic OER screening study to identify the best catalytic candidate
@@ -481,7 +563,7 @@ You have a maximum of 1 hours to complete the entire study and make your final r
             initialize_database(db_file)
 
     EXPLOG.init(Path(WORKING_DIRECTORY)/"vasp_calcs",
-                "production",
+                "test",
                 reject_if_failed_exists = True,
                 require_relaxed_o_for_oh = True
                 )
@@ -505,7 +587,7 @@ You have a maximum of 1 hours to complete the entire study and make your final r
     print("Building agent graph...", flush=True)
     rawGraph = create_planning_graph(config)
     # graph = create_graph(config)
-    llm_config = {"thread_id": "1", 'recursion_limit': 2000}
+    llm_config = {"configurable": {"thread_id": THREAD_ID}, "recursion_limit": 2000}
 
     print("Start, check the log file for details", flush=True)
     log_filename = f"./log/agent_stream_{int(time.time())}.log"  # Add timestamp to filename
@@ -517,20 +599,39 @@ You have a maximum of 1 hours to complete the entire study and make your final r
                 f.write(f"=== Session started at {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n\n")
         
               
-        serde = JsonPlusSerializer(pickle_fallback=True)
-        checkpointer = SqliteSaver(sqlite3.connect(f"{WORKING_DIRECTORY}/checkpoints.sqlite", check_same_thread=False), serde=serde)
+        try:
+            # Allow our own classes (artifacts, plan steps, tool arg models)
+            # to round-trip through checkpoint deserialization without the
+            # "unregistered type ... will be blocked" path in newer langgraph.
+            serde = JsonPlusSerializer(
+                pickle_fallback=True,
+                allowed_msgpack_modules=[
+                    ("src.myCANVAS",),
+                    ("src.planNexe2",),
+                    ("src.tools",),
+                ],
+            )
+        except TypeError:
+            # older langgraph-checkpoint without allowed_msgpack_modules
+            serde = JsonPlusSerializer(pickle_fallback=True)
+        db_path = f"{WORKING_DIRECTORY}/checkpoints.sqlite"
+        checkpointer = SqliteSaver(sqlite3.connect(db_path, check_same_thread=False), serde=serde)
+        # WAL: concurrent-friendly journaling; the live db size is then
+        # checkpoints.sqlite + checkpoints.sqlite-wal (handled in _checkpoint_db_size)
+        # checkpointer.conn.execute("PRAGMA journal_mode=WAL")
         # with SqliteSaver.from_conn_string(f"{WORKING_DIRECTORY}/checkpoints.sqlite") as checkpointer:
         graph = rawGraph.compile(checkpointer=checkpointer)
 
         if overwrite:
             inputs = {
-                "inputs": f"{revised_message_v6}",
+                "inputs": f"{minimal_test_message_3}",
                 "plan": [],
                 "past_steps": [],
                 "draft_response": "",
                 "boss_feedback": "",
                 "response": "",
                 "canvas": CANVAS.canvas,
+                "artifacts": CANVAS.result_registry,
                 "explog_candidates": EXPLOG.relational_frame.candidates.df,
                 "explog_processes": EXPLOG.relational_frame.processes.df,
                 "time": 0
@@ -559,13 +660,76 @@ You have a maximum of 1 hours to complete the entire study and make your final r
             inputs = None
             var.startTime = time.time() - snap.values["time"]
             print(f"Time since the start of the session: {time.time() - var.startTime} seconds")
-            llm_config = snap.config
+            # snap.config only carries configurable{thread_id, checkpoint_ns,
+            # checkpoint_id}; merging keeps our recursion_limit (otherwise it
+            # silently falls back to the default of 25 and long runs die).
+            llm_config = {**snap.config, "recursion_limit": 2000}
             CANVAS.canvas = snap.values["canvas"]
-            CANVAS.result_registry = snap.values["artifacts"]
-            CANVAS.print()
-            print(CANVAS)
+            CANVAS.result_registry = snap.values.get("artifacts", {})
             EXPLOG.relational_frame.candidates.df = snap.values["explog_candidates"]
             EXPLOG.relational_frame.processes.df = snap.values["explog_processes"]
+
+            # ----------------------------------------------------------------
+            # Tool-level resume: on a plain resume (frame 0), the interrupted
+            # round may have fresher state in the inner agent's namespaced
+            # checkpoints (StateSyncMiddleware writes canvas/explog/time into
+            # the subgraph state after every tool call). Overlay it so the
+            # globals match the point the subgraph will continue from.
+            #
+            # NOTE: after a hard crash (no interrupt), get_state(subgraphs=True)
+            # does NOT hydrate task.state, and get_state on a namespace fails
+            # for subgraphs invoked inside node functions — so we read the
+            # newest namespaced checkpoint directly from the checkpointer.
+            # checkpoint_ids are UUIDv6 (time-ordered strings): only overlay if
+            # the namespaced checkpoint is NEWER than the parent round
+            # checkpoint (a crash between rounds leaves older inner
+            # checkpoints whose data the round checkpoint already contains).
+            # Old-format checkpoints (pre tool-level era) have no namespaced
+            # rows at all -> the round-level restore above stands.
+            # When time traveling (frame > 0) we deliberately skip this and
+            # fork from the round boundary.
+            # ----------------------------------------------------------------
+            if timeTravelToXFrameBefore == 0:
+                parent_ckpt_id = snap.config["configurable"].get("checkpoint_id", "")
+                row = checkpointer.conn.execute(
+                    "SELECT checkpoint_ns, checkpoint_id FROM checkpoints "
+                    "WHERE thread_id = ? AND checkpoint_ns != '' "
+                    "ORDER BY checkpoint_id DESC LIMIT 1",
+                    (THREAD_ID,),
+                ).fetchone()
+                deepest = None
+                if row is not None and row[1] > parent_ckpt_id:
+                    sub_tuple = checkpointer.get_tuple(
+                        {"configurable": {"thread_id": THREAD_ID, "checkpoint_ns": row[0]}}
+                    )
+                    if sub_tuple is not None:
+                        vals = sub_tuple.checkpoint.get("channel_values", {}) or {}
+                        if vals.get("canvas"):
+                            deepest = vals
+                if deepest is not None:
+                    print()
+                    print("##################################################################")
+                    print("# Found mid-round (tool-level) checkpoint in the interrupted    #")
+                    print(f"# step (ns: {row[0]}).")
+                    print("# Restoring the fresher state from it; the inner agent will     #")
+                    print("# resume after its last completed tool call.                    #")
+                    print("##################################################################")
+                    print()
+                    CANVAS.canvas = deepest["canvas"]
+                    CANVAS.result_registry = deepest.get("artifacts", CANVAS.result_registry)
+                    if deepest.get("explog_candidates") is not None:
+                        EXPLOG.relational_frame.candidates.df = deepest["explog_candidates"]
+                    if deepest.get("explog_processes") is not None:
+                        EXPLOG.relational_frame.processes.df = deepest["explog_processes"]
+                    if deepest.get("time"):
+                        var.startTime = time.time() - deepest["time"]
+                    # one-shot handoff: worker_agent_node consumes this instead
+                    # of resetting curr-round ids, so check_required_tool_use
+                    # still sees the tools that ran before the crash
+                    var.resume_curr_round_result_ids = deepest.get("curr_round_result_ids")
+
+            CANVAS.print()
+            print(CANVAS.result_registry)
             print(EXPLOG.relational_frame.flatten_explode())
             print()
             print("########################################################################################################")
@@ -573,6 +737,9 @@ You have a maximum of 1 hours to complete the entire study and make your final r
             print("########################################################################################################")
             
         # assert False
+        # durability="sync": the checkpoint (parent round OR inner tool-level)
+        # is committed to sqlite BEFORE execution continues, so a hard kill at
+        # any point is resumable from the last completed step.
         for s in graph.stream(
             inputs, 
             llm_config,
@@ -591,6 +758,10 @@ You have a maximum of 1 hours to complete the entire study and make your final r
                 log_file.write(f"{s}\n")
                 log_file.write("----\n")
                 log_file.flush()
+
+            # Each yielded update == one completed super-step (one big round)
+            # of the parent graph, i.e. a safe boundary to prune at.
+            prune_old_rounds(checkpointer, db_path, THREAD_ID)
         log_file.write(f"=== Session ended at {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n\n")
         if eval(config["SAVE_DIALOGUE"]):
             with open(f"{WORKING_DIRECTORY}/his.txt", "a") as f:

@@ -1,6 +1,13 @@
 from langchain.agents.structured_output import ToolStrategy
 from langchain.agents.middleware import ToolCallLimitMiddleware, AgentMiddleware, ModelRequest, wrap_tool_call, before_model
-from langchain.agents import create_agent
+from langchain.agents import create_agent, AgentState
+
+import copy
+from langgraph.types import Command
+try:
+    from typing import NotRequired
+except ImportError:  # python < 3.11
+    from typing_extensions import NotRequired
 
 from typing import Annotated, Sequence, TypedDict,Literal, List, Dict, Tuple, Union, Any
 import functools
@@ -186,6 +193,82 @@ class PlanExecute(TypedDict):
     explog_processes: pd.DataFrame
     time: float
     next: str
+
+
+# ---------------------------------------------------------------------------
+# Tool-call-level checkpointing of the full state
+#
+# The inner create_agent graphs run as *subgraphs* of the outer PlanExecute
+# graph: each node function receives the parent RunnableConfig (which carries
+# the SqliteSaver + thread_id + a per-task checkpoint namespace) and passes it
+# into agent.stream(). LangGraph then checkpoints every super-step of the
+# react loop (model call / tool call) under a namespaced checkpoint_ns like
+# "OER_Agent:<task_id>", in the SAME sqlite file — while
+# graph.get_state_history() on the parent thread keeps returning only the
+# round-level (checkpoint_ns == "") checkpoints, so time travel still indexes
+# big rounds.
+#
+# Because CANVAS / EXPLOG are process globals that only enter graph state when
+# a node returns, a mid-round checkpoint would otherwise contain messages but
+# not canvas/explog. SyncedAgentState extends the inner agents' state schema
+# with the mutable parts of PlanExecute, and StateSyncMiddleware copies the
+# globals into the subgraph state after EVERY tool call, so every tool-level
+# checkpoint is a complete, resumable snapshot.
+# ---------------------------------------------------------------------------
+
+class SyncedAgentState(AgentState):
+    canvas: NotRequired[Dict]
+    artifacts: NotRequired[Dict]
+    curr_round_result_ids: NotRequired[List[str]]
+    explog_candidates: NotRequired[pd.DataFrame]
+    explog_processes: NotRequired[pd.DataFrame]
+    time: NotRequired[float]
+
+
+def full_state_snapshot():
+    """Snapshot the global CANVAS / EXPLOG / elapsed time as state-channel
+    values. deepcopy/copy so later in-place mutation of the globals cannot
+    alias into an already-taken checkpoint."""
+    return {
+        "canvas": copy.deepcopy(CANVAS.canvas),
+        "artifacts": copy.deepcopy(CANVAS.result_registry),
+        # backs CANVAS.check_required_tool_use after a mid-round resume
+        "curr_round_result_ids": list(CANVAS.curr_round_result_ids),
+        "explog_candidates": EXPLOG.relational_frame.candidates.df.copy(),
+        "explog_processes": EXPLOG.relational_frame.processes.df.copy(),
+        "time": time.time() - var.startTime,
+    }
+
+
+class StateSyncMiddleware(AgentMiddleware):
+    """After each tool execution, write the full state snapshot into the
+    agent (subgraph) state via Command, so the checkpoint taken at the end of
+    that tool super-step contains canvas/artifacts/explog/time.
+
+    Must be FIRST in the middleware list (outermost wrapper), so it sees the
+    final ToolMessage after prevent_redundant_polling / handle_tool_errors
+    have run."""
+
+    state_schema = SyncedAgentState
+
+    def wrap_tool_call(self, request, handler):
+        result = handler(request)
+        update = full_state_snapshot()
+        if isinstance(result, Command):
+            result.update = {**(result.update or {}), **update}
+            return result
+        # plain ToolMessage -> wrap into a Command that also updates state
+        update["messages"] = [result]
+        return Command(update=update)
+
+    async def awrap_tool_call(self, request, handler):
+        result = await handler(request)
+        update = full_state_snapshot()
+        if isinstance(result, Command):
+            result.update = {**(result.update or {}), **update}
+            return result
+        update["messages"] = [result]
+        return Command(update=update)
 
 class DisableParallelToolCallsMiddleware(AgentMiddleware):
     
@@ -395,7 +478,11 @@ def print_stream(s, DAG=None):
             f.write("\n")
 
 
-def boss_node(state, agent, name):
+def boss_node(state, config, agent=None, name=None):
+    # Parent RunnableConfig is injected by LangGraph (carries the checkpointer,
+    # thread_id and this task's checkpoint namespace). Propagating it into
+    # agent.stream() makes the inner agent a checkpointed subgraph.
+    inner_cfg = {**config, "recursion_limit": 1000}
     # read "status.txt" in the working directory
     with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
         status = f.read()
@@ -444,8 +531,12 @@ def boss_node(state, agent, name):
             f.write("\n")
 
 
+    # stream_mode MUST be pinned: with the parent config propagated, the
+    # inner stream otherwise inherits the parent's stream context and yields
+    # "values"-mode chunks (full cumulative state) instead of {node: update},
+    # breaking print_stream and the structured_response extraction below.
     for agent_response in agent.stream(
-        {"messages": [("user", bossMessage)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
+        {"messages": [("user", bossMessage)]},  inner_cfg, stream_mode="updates", durability="sync"
     ):
         # set agent_response to be the value of the first key of the dictionary
         agent_response = next(iter(agent_response.values()))
@@ -459,6 +550,7 @@ def boss_node(state, agent, name):
             "boss_feedback": "",
             "next": "FINISH",
             "canvas": CANVAS.canvas,
+            "artifacts": CANVAS.result_registry,
             "explog_candidates": EXPLOG.relational_frame.candidates.df,
             "explog_processes": EXPLOG.relational_frame.processes.df,
         }
@@ -468,13 +560,17 @@ def boss_node(state, agent, name):
             "boss_feedback": agent_response.feedback,
             "next": "Supervisor",
             "canvas": CANVAS.canvas,
+            "artifacts": CANVAS.result_registry,
             "explog_candidates": EXPLOG.relational_frame.candidates.df,
             "explog_processes": EXPLOG.relational_frame.processes.df,
         }
     else:
         raise ValueError(f"Unexpected boss decision: {agent_response.decision}")
             
-def supervisor_chain_node(state, agent, name):
+def supervisor_chain_node(state, config, agent=None, name=None):
+    # Parent RunnableConfig injected by LangGraph -> inner agent runs as a
+    # checkpointed subgraph (see StateSyncMiddleware notes above).
+    inner_cfg = {**config, "recursion_limit": 1000}
     
     # read "status.txt" in the working directory
     with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
@@ -566,8 +662,12 @@ def supervisor_chain_node(state, agent, name):
     while not sup_good and sup_good_patient > 0:
         sup_good_patient -= 1
         try:
+            # NOTE: with subgraph checkpointing, retry iterations of this loop
+            # share one checkpoint namespace, so the retry message is APPENDED
+            # to the previous attempt's conversation (add_messages reducer)
+            # instead of starting a fresh one.
             for agent_response in agent.stream(
-                {"messages": [("user", supervisorMessage)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
+                {"messages": [("user", supervisorMessage)]},  inner_cfg, stream_mode="updates", durability="sync"
             ):
                 # set agent_response to be the value of the first key of the dictionary
                 agent_response = next(iter(agent_response.values()))
@@ -631,6 +731,7 @@ def supervisor_chain_node(state, agent, name):
             "draft_response": agent_response.action.response,
             "next": "Boss_Agent", 
             "canvas":CANVAS.canvas, 
+            "artifacts": CANVAS.result_registry,
             "explog_candidates": EXPLOG.relational_frame.candidates.df, 
             "explog_processes": EXPLOG.relational_frame.processes.df,
             }
@@ -648,7 +749,10 @@ def supervisor_chain_node(state, agent, name):
         return {
             "plan": plan[1:],
             "next": plan[1].agent,
-            "canvas":CANVAS.canvas
+            "canvas":CANVAS.canvas,
+            "artifacts": CANVAS.result_registry,
+            "explog_candidates": EXPLOG.relational_frame.candidates.df,
+            "explog_processes": EXPLOG.relational_frame.processes.df,
             }
     else:
         plan_str = "\n".join(f"{i+1}. {step.step}, agent={step.agent}, required_tools: {step.required_tools}" for i, step in enumerate(agent_response.action.steps))
@@ -661,13 +765,17 @@ def supervisor_chain_node(state, agent, name):
             "plan": agent_response.action.steps, 
             "next": agent_response.action.steps[0].agent, 
             "canvas":CANVAS.canvas,
+            "artifacts": CANVAS.result_registry,
             "explog_candidates": EXPLOG.relational_frame.candidates.df,
             "explog_processes": EXPLOG.relational_frame.processes.df,
             }
     
     
 
-def worker_agent_node(state, agent, name):
+def worker_agent_node(state, config, agent=None, name=None):
+    # Parent RunnableConfig injected by LangGraph -> inner agent runs as a
+    # checkpointed subgraph; every tool call gets a resumable checkpoint.
+    inner_cfg = {**config, "recursion_limit": 1000}
     # CANVAS.snap()
     # read "status.txt" in the working directory
     with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
@@ -706,7 +814,17 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
 """
     
     old_task_formatted = task_formatted
-    CANVAS.rest_curr_round_result_ids()
+    # On a mid-round resume, this node re-executes from the top while the
+    # inner agent continues after its last completed tool call — so the
+    # pre-crash result ids (restored by invoke.py into
+    # var.resume_curr_round_result_ids) must survive instead of being reset,
+    # or check_required_tool_use() will wrongly fail the round. One-shot.
+    _resume_ids = getattr(var, "resume_curr_round_result_ids", None)
+    if _resume_ids is not None:
+        CANVAS.curr_round_result_ids = list(_resume_ids)
+        var.resume_curr_round_result_ids = None
+    else:
+        CANVAS.rest_curr_round_result_ids()
     workerGood = False
     workerGood_patient = 2
     while not workerGood and workerGood_patient > 0:
@@ -720,8 +838,10 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
             with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
                 f.write(f"Agent {name} is processing!!!!!\n")
         workerGood_patient -= 1
+        # stream_mode pinned: see note in boss_node — without it the propagated
+        # parent config flips chunks to "values" mode.
         for agent_response in agent.stream(
-            {"messages": [("user", task_formatted)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
+            {"messages": [("user", task_formatted)]},  inner_cfg, stream_mode="updates", durability="sync"
         ):
             # set agent_response to be the value of the first key of the dictionary
             agent_response = next(iter(agent_response.values()))
@@ -899,7 +1019,7 @@ def create_planning_graph(config: dict) -> StateGraph:
         tools=boss_tools,
         system_prompt=boss_prompt,
         response_format=ToolStrategy(BossReview),
-        middleware=[DisableParallelToolCallsMiddleware(), handle_tool_errors]
+        middleware=[StateSyncMiddleware(), DisableParallelToolCallsMiddleware(), handle_tool_errors]
     )
     boss_agent_node = functools.partial(boss_node, agent=boss_agent, name="Boss_Agent")
     
@@ -916,7 +1036,7 @@ def create_planning_graph(config: dict) -> StateGraph:
         system_prompt=supervisor_prompt,
         # Structured output via ToolStrategy (tool-calling fallback)
         response_format=ToolStrategy(Act, handle_errors=on_act_parse_error),  # Or ProviderStrategy for native models
-        middleware=[DisableParallelToolCallsMiddleware(), handle_tool_errors]  # Middleware to handle tool errors and cap structured output retries
+        middleware=[StateSyncMiddleware(), DisableParallelToolCallsMiddleware(), handle_tool_errors]  # Middleware to handle tool errors and cap structured output retries
     )
     
     # supervisor_agent = create_react_agent(llm, tools=supervisor_tools,
@@ -954,7 +1074,7 @@ def create_planning_graph(config: dict) -> StateGraph:
         tools=dft_tools,
         system_prompt=dft_agent_prompt,
         response_format=ToolStrategy(wokerResponse),
-        middleware=[DisableParallelToolCallsMiddleware(), handle_tool_errors]
+        middleware=[StateSyncMiddleware(), DisableParallelToolCallsMiddleware(), handle_tool_errors]
     )
     dft_node = functools.partial(worker_agent_node, agent=dft_agent, name="DFT_Agent")
 
@@ -988,7 +1108,7 @@ def create_planning_graph(config: dict) -> StateGraph:
         tools=oer_tools,
         system_prompt=oer_agent_prompt,
         response_format=ToolStrategy(wokerResponse),
-        middleware=[DisableParallelToolCallsMiddleware(), prevent_redundant_polling, handle_tool_errors]
+        middleware=[StateSyncMiddleware(), DisableParallelToolCallsMiddleware(), prevent_redundant_polling, handle_tool_errors]
     )
     oer_node = functools.partial(worker_agent_node, agent=oer_agent, name="OER_Agent")
 
@@ -1009,7 +1129,7 @@ def create_planning_graph(config: dict) -> StateGraph:
         tools=hpc_tools,
         system_prompt=hpc_agent_prompt,
         response_format=ToolStrategy(wokerResponse),
-        middleware=[DisableParallelToolCallsMiddleware(), handle_tool_errors]
+        middleware=[StateSyncMiddleware(), DisableParallelToolCallsMiddleware(), handle_tool_errors]
     )
     hpc_node = functools.partial(worker_agent_node, agent=hpc_agent, name="HPC_Agent")
     

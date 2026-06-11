@@ -132,6 +132,9 @@ class myCANVAS():
     def print(self):
         print("##################### CANVAS #######################")
         myDictPP(self.canvas)
+        # print         self.result_registry = {}
+        for result_id, artifact in self.result_registry.items():
+            print(f"Result ID: {result_id}, Tool Name: {artifact.tool_name}, Value: {artifact.value}")
         print("################### CANVAS END #####################")
     
     def inspect(self):
