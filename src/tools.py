@@ -147,6 +147,33 @@ def check_time():
     timeElapsed = timedelta(seconds=timeElapsed_tmp)
     return f"total time elapsed since project start: {str(timeElapsed).split('.')[0]} "
 
+def queue_status_summary() -> str:
+    """One-line HPC queue status from the EXPLOG processes table (as of the
+    last update_log call). Adds a submission recommendation when the number
+    of pending jobs is below var.QUEUE_MIN_PENDING."""
+    df = EXPLOG.relational_frame.processes.df
+    n_running = int((df["status"] == "running").sum())
+    n_pending = int(df["status"].isin(["pending", "submitted"]).sum())
+    line = (
+        f"HPC queue status: {n_running} running + {n_pending} pending "
+        f"= {n_running + n_pending} jobs in flight."
+    )
+    if n_pending < var.QUEUE_MIN_PENDING:
+        line += (
+            f" The number of pending jobs is below the minimum of "
+            f"{var.QUEUE_MIN_PENDING}: the queue is at risk of draining and HPC "
+            "capacity going idle. RECOMMENDATION: consider registering new "
+            "candidates (chosen carefully, guided by the insights gained so far) "
+            "and submitting their bulk relaxations - this both fills the queue "
+            "now and creates future follow-up work. Also consider submitting any "
+            "ready follow-up jobs (OH adsorption for sites with promising G(O), "
+            "O adsorption for relaxed surfaces, surface relaxations for relaxed "
+            "bulks). If the remaining study time is too short for new jobs to "
+            "finish, winding down is reasonable instead. "
+            "You decide what is best for the study."
+        )
+    return line
+
 @tool
 def wait_for_update(
     patience: Annotated[int, "Timeout in minutes: if no jobs complete or fail within this time, the tool returns regardless. Defaults to 24 hours."] = 1440,
@@ -213,7 +240,8 @@ def wait_for_update(
             outText = f"Total time elapsed since project start {timeElapsed}, time waited: {hWaited}hours and {mWaited} minutes.\n Here are the updates while you are waiting: "
             for key, value in tmpUpdate.items():
                 outText += f"\nprocess_id {key} status is now {value}."
-            
+            outText += f"\n{queue_status_summary()}"
+
             id = CANVAS.register_tool_output(
                 tool_name="wait_for_update",
                 args={
@@ -229,24 +257,57 @@ def wait_for_update(
             
             return f"{outText}\nMessage_ID={id}. Please refer to this ID for the updates while waiting."
         elif time.time() - waitStartTime > patience*60:
-            
+            queue_line = queue_status_summary()
+
             id = CANVAS.register_tool_output(
                 tool_name="wait_for_update",
                 args={
                     "patience": patience,
                 },
-                value=f"Timeout reached after waiting for {patience} minutes with no updates in job statuses.",
+                value=f"Timeout reached after waiting for {patience} minutes with no updates in job statuses.\n{queue_line}",
                 description=f"Message indicating timeout after waiting for updates with patience {patience} minutes.",
                 parent_result_ids=[],
                 metadata={
                     "patience": patience,
                 }
             )
-            
-            return f"Total time elapsed since project start {timeElapsed}, you have been waiting for {patience} minutes with no update in the EXPLOG. You may want to check the EXPLOG and see if there is anything you can do to move the study forward.\nMessage_ID={id}. Please refer to this ID for the timeout message."
+
+            return f"Total time elapsed since project start {timeElapsed}, you have been waiting for {patience} minutes with no update in the EXPLOG. You may want to check the EXPLOG and see if there is anything you can do to move the study forward.\n{queue_line}\nMessage_ID={id}. Please refer to this ID for the timeout message."
         
         
                        
+@tool
+def check_queue_status() -> str:
+    """
+    Check the current HPC queue status: how many jobs are running and pending
+    according to the experiment log (statuses are refreshed from the job
+    scheduler first), together with a recommendation on whether more jobs
+    should be submitted.
+
+    Use this when deciding whether to submit more work: if the number of
+    pending jobs is below the configured minimum, the queue is at risk of
+    draining and submitting more jobs keeps HPC usage high. Registering new
+    candidates and submitting their bulk relaxations is a good way to keep
+    the queue supplied, alongside any ready follow-up jobs. Near the end of
+    the study time budget it can instead be reasonable to let the queue
+    drain, since new jobs would not finish in time.
+    """
+    _ = EXPLOG.update_log()
+    timeElapsed = timedelta(seconds=time.time() - var.startTime)
+    outString = (
+        f"{queue_status_summary()}\n"
+        f"Total time elapsed since project start: {str(timeElapsed).split('.')[0]}."
+    )
+    id = CANVAS.register_tool_output(
+        tool_name="check_queue_status",
+        args={},
+        value=outString,
+        description="HPC queue status check with submission recommendation.",
+        parent_result_ids=[],
+        metadata={},
+    )
+    return f"{outString}\nMessage_ID={id}. Refer to this ID if you need to refer back to this message later."
+
 @tool
 def inspect_explog():
     """
