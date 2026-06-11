@@ -563,7 +563,7 @@ You have a maximum of 1 hours to complete the entire study and make your final r
             initialize_database(db_file)
 
     EXPLOG.init(Path(WORKING_DIRECTORY)/"vasp_calcs",
-                "test",
+                "production",
                 reject_if_failed_exists = True,
                 require_relaxed_o_for_oh = True
                 )
