@@ -392,19 +392,23 @@ def _apply_filter(frame: pd.DataFrame, f) -> pd.DataFrame:
             raise ValueError("'not_in' requires a list value.")
         return frame[~s.isin(val)]
 
-    # Numeric comparisons (works for floats/ints; NaNs drop out naturally)
+    # Numeric/scalar comparisons. NA-safe: a missing value (numpy NaN OR pandas
+    # <NA> in nullable dtypes like Int64) is excluded from eq/gt/ge/lt/le and
+    # kept for ne — matching numpy float semantics. The .fillna is required so
+    # nullable columns (e.g. the n_<stage>_started progress counters, where <NA>
+    # means "not yet eligible for this stage") don't raise on boolean masking.
     if f.op == "eq":
-        return frame[s == val]
+        return frame[(s == val).fillna(False)]
     if f.op == "ne":
-        return frame[s != val]
+        return frame[(s != val).fillna(True)]
     if f.op == "gt":
-        return frame[s > val]
+        return frame[(s > val).fillna(False)]
     if f.op == "ge":
-        return frame[s >= val]
+        return frame[(s >= val).fillna(False)]
     if f.op == "lt":
-        return frame[s < val]
+        return frame[(s < val).fillna(False)]
     if f.op == "le":
-        return frame[s <= val]
+        return frame[(s <= val).fillna(False)]
 
     raise ValueError(f"Unsupported op: {f.op}")
 

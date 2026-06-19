@@ -521,7 +521,23 @@ def query_explog(
         notes (str, any notes you've added for the candidate),
         G(O) deviation (Float64, deviation of best available G(O) from ideal 2.46 eV),
         Overpotential_from_scaling (Float64, best available overpotential from OH-OOH scaling relation),
-        idealOverPotential (Float64, best available ideal overpotential across all studied sites)
+        idealOverPotential (Float64, best available ideal overpotential across all studied sites),
+        state (str, 'active' or 'failed'; 'failed' means the candidate is dead and should be skipped:
+            either all of its bulk relaxations failed, or no valid surface could be generated from its
+            relaxed bulk. Once 'failed' it stays 'failed'),
+        --- per-stage progress counters (Int64). For each stage: started = work initiated;
+            finalized = terminal/done and no longer running, FAILURES INCLUDED (so in-flight = started -
+            finalized). A counter is <NA> when the candidate is NOT YET ELIGIBLE for that stage (the
+            previous stage has not produced a usable result). Hence the filter idiom "n_X_started == 0"
+            returns exactly the candidates READY to begin stage X (an <NA> candidate is excluded), e.g.
+            n_surface_started == 0 -> bulk done, no surface relaxation started yet. Counts are per
+            LOGICAL UNIT, not per raw DFT sub-job: ---
+        n_bulk_started, n_bulk_finalized (0 or 1: ONE bulk relaxation per candidate, even though it runs
+            several magnetic sub-jobs internally; finalized = 1 once that magnetic batch is settled),
+        n_surface_started, n_surface_finalized (per surface termination; one DFT job each),
+        n_O_started, n_O_finalized (per adsorption site; one DFT job each),
+        n_OH_started, n_OH_finalized (per adsorption SITE, NOT per sub-job: each OH site runs 3 sub-jobs
+            that collapse to one unit; finalized counts sites whose 3 OH sub-jobs are all terminal)
     processes table contains:
         process_id (str, unique id for each process),
         candidate_id (str, MaterialID of the candidate this process belongs to),
