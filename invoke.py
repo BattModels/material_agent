@@ -766,7 +766,7 @@ You have a maximum of 1 hours to complete the entire study and make your final r
 
             # Each yielded update == one completed super-step (one big round)
             # of the parent graph, i.e. a safe boundary to prune at.
-            prune_old_rounds(checkpointer, db_path, THREAD_ID)
+            prune_old_rounds(checkpointer, db_path, THREAD_ID, max_bytes=30 * 1024**3, keep_rounds=3)
         log_file.write(f"=== Session ended at {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n\n")
         if eval(config["SAVE_DIALOGUE"]):
             with open(f"{WORKING_DIRECTORY}/his.txt", "a") as f:
