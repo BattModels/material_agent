@@ -728,11 +728,6 @@ You have a maximum of 1 hours to complete the entire study and make your final r
                     # still sees the tools that ran before the crash
                     var.resume_curr_round_result_ids = deepest.get("curr_round_result_ids")
 
-            # The canvas restore above reverts Worker_available_tools to the
-            # checkpointed (possibly outdated) tool list; re-write it from the
-            # yaml so resumed agents see the current tool set.
-            CANVAS.write("Worker_available_tools", Worker_available_tools, overwrite=True)
-
             CANVAS.print()
             print(CANVAS.result_registry)
             print(EXPLOG.relational_frame.flatten_explode())

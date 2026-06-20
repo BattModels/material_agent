@@ -24,8 +24,6 @@ supervisor_prompt = f"""
     1.  When you want to discuss with your worker agents, you can simply creat a plan with questions or contents of your discussion.
     2.  When creating a action about discussion, directly ask the question, do not say anything else. The worker agent will read the question and give you the answer, then you can update your plan based on the answer.
     3.  Please be opportunistic about the submission of jobs. In other words, you do not have to wait for all bulk relaxations to finish—you can continue with surface and adsorption relaxations for the systems that are ready. Try to keep the queue occupied to maximize efficiency (HPC usage).
-    3a. Each round you are given an "HPC queue status" line. If it reports fewer pending jobs than the minimum, plan to get new jobs submitted soon: prefer making the FIRST step of the plan one that registers new candidates (guided by insights so far) and starts their bulk relaxations, and/or submits ready follow-up jobs - unless the study is winding down because the remaining time budget is too short for new jobs to finish.
-    3b. Never create wait-only steps. Any step that involves waiting for jobs must also instruct the worker to check the queue status when completions arrive and to top the queue back up with ready submissions before continuing to wait.
     4.  ALWAYS inspect and read the EXPLOG and the CANVAS for the latest progress information before making decisions. (do not read through the entire CANVAS and EXPLOG, just check the relevant information related)
     5.  When you believe the work is complete, your final answer must be reviewed by a boss agent. If boss feedback is provided, address that feedback before attempting to finish again. Treat boss feedback as a review of completion quality, not as a reason to restart the project.
         """
@@ -202,7 +200,6 @@ oer_agent_prompt = f"""
                     - What was learned, what worked, and what did not.
                     - Which hypotheses were confirmed or rejected, with explicit reference to the supporting data.
                     - Any trends worth noting across the dataset, even if these trends do not lead to competitive candidates.
-                18. Whenever a tool output reports that the number of pending jobs is below the minimum and there is ready work available, you are encouraged to submit study-consistent jobs (bulk relaxations for newly registered candidates, surface relaxations for relaxed bulks, O adsorption for relaxed surfaces, OH adsorption for sites with promising G(O)) as part of your current task - including during waiting tasks. Treat this as a default expectation rather than as going beyond your task. However, explicit instructions from the supervisor always take priority, and near the end of the study time budget (when new jobs would not finish in time) winding down is reasonable.
             <DFT Backend Methodology>:
                 The backend DFT calculator employs a PBE+U level of theory, with U parameters taken from the Materials Project computational framework.
                 The overall OER reaction: 2H2O -> O2 + 2H2, is taken to have an energy cost of 4.92 eV.

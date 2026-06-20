@@ -74,7 +74,6 @@ class myStep(BaseModel):
                             "list_adsorption_sites",
                             "read_explog",
                             "wait_for_update",
-                            "check_queue_status",
                             "query_explog",
                             # "math_expression_tool",
                             # "extract_numeric_from_tool_output",
@@ -585,14 +584,7 @@ def supervisor_chain_node(state, config, agent=None, name=None):
     
     currentTime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     timeElapsed = timedelta(seconds= time.time() - var.startTime)
-    # Refresh job statuses so the queue line is current; node code is not
-    # wrapped by handle_tool_errors, so degrade to cached counts on failure.
-    try:
-        EXPLOG.update_log()
-        queue_line = queue_status_summary()
-    except Exception:
-        queue_line = queue_status_summary() + " (as of the last EXPLOG update; live refresh failed)"
-
+    
     print(f"supervisor is processing!!!!! Current time: {timeElapsed}.")
     if var.my_SAVE_DIALOGUE:
         with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
@@ -631,15 +623,13 @@ def supervisor_chain_node(state, config, agent=None, name=None):
         {current_boss_feedback}
 
         Current time: {timeElapsed}.
-        {queue_line}
-
+        
         Please inspect and extract related information from CANVAS and EXPLOG, then update the plan accordingly.
         """
     elif len(plan) == 0:
         supervisorMessage =  f"""
         Current time: {timeElapsed}.
-        {queue_line}
-
+        
         The overall goal is: {state['inputs']}.
 
         Nothing has been done yet and there is no plan yet. 
@@ -657,11 +647,10 @@ def supervisor_chain_node(state, config, agent=None, name=None):
 
         this is what has been done:
         {old_tasks_string}
-
+        
         Current time: {timeElapsed}.
-        {queue_line}
 
-        Please inspect and extract related information from CANVAS and EXPLOG, then update the plan accordingly.
+        Please inspect and extract related information from CANVAS and EXPLOG, then update the plan accordingly. 
         Only choose <NoChange> if you want the first step of the current plan to be removed, and the second step to be executed next without any change.
         Otherwise choose <Plan> and rewrite the plan with the steps you want, and the first step of the plan you just wrote will be executed.
         Or if you think the overall goal is finished, you can choose <Response> and write a draft final answer for the boss review. 
@@ -709,7 +698,6 @@ def supervisor_chain_node(state, config, agent=None, name=None):
                     "list_adsorption_sites",
                     "read_explog",
                     "wait_for_update",
-                    "check_queue_status",
                     "query_explog",
                     # "math_expression_tool",
                     # "extract_numeric_from_tool_output",
@@ -1040,7 +1028,6 @@ def create_planning_graph(config: dict) -> StateGraph:
         read_my_canvas,
         inspect_explog,
         query_explog,
-        check_queue_status,
         ]
     
     supervisor_agent = create_agent(
@@ -1108,7 +1095,6 @@ def create_planning_graph(config: dict) -> StateGraph:
         list_adsorption_sites,
         read_explog,
         wait_for_update,
-        check_queue_status,
         query_explog,
         # math_expression_tool,
         # extract_numeric_from_tool_output,
