@@ -504,8 +504,16 @@ def query_explog(
 
     if table_name == 'candidates':
         df = EXPLOG.relational_frame.candidates.df.copy()
-        # drop the "study_obj" column since it contains complex objects that are not easy to display in a dataframe format
-        df = df.drop(columns=["study_obj"])
+        # drop columns the agent must not see directly: study_obj (complex
+        # objects), disposition_record (raw list-of-dicts; read via
+        # get_disposition_info) and ready_for_disposition_update (internal
+        # write-lock). The agent-visible disposition columns are `decision` and
+        # `needs_disposition_update`.
+        df = df.drop(
+            columns=["study_obj", "disposition_record",
+                     "ready_for_disposition_update"],
+            errors="ignore",
+        )
     elif table_name == 'processes':
         df = EXPLOG.relational_frame.processes.df.copy()
         df = df.drop(columns=["VASP_dir"]) # drop the "VASP_dir" column since it contains file directory strings that are not easy to display in a dataframe format
@@ -570,7 +578,13 @@ def read_explog(
     # with open(os.path.join(var.my_WORKING_DIRECTORY, "EXPLOG.pkl"), "wb") as f:
     #     pickle.dump(EXPLOG, f)
     cadidate_row_df = EXPLOG.relational_frame.candidates[candidate_id].df
-    cadidate_row_df = cadidate_row_df.copy().drop(columns=["study_obj"])
+    # Hide the agent-internal columns (see query_explog): study_obj,
+    # disposition_record (read via get_disposition_info), ready_for_disposition_update.
+    cadidate_row_df = cadidate_row_df.copy().drop(
+        columns=["study_obj", "disposition_record",
+                 "ready_for_disposition_update"],
+        errors="ignore",
+    )
     related_process_df = EXPLOG.relational_frame.candidates[candidate_id].processes.df
     related_process_df = related_process_df.copy().drop(columns=["VASP_dir"])
     related_process_df = _drop_redundant_oh_rows(related_process_df)
