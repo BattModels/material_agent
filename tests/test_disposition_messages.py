@@ -93,11 +93,15 @@ def test_get_message_renders_latest_disposition_when_present():
     outstanding = {
         "must_cover": [],
         "legacy_optional": [],
-        "latest_disposition": {"Decision": "Investigating", "Summary": "promising"},
+        "latest_disposition": {"Decision": "Investigating", "Summary": "promising",
+                               "Future_plan": "run more OH sites",
+                               "Summarized_process_id": [1]},
         "has_finalized": True,
     }
     msg = format_get_disposition("matX", outstanding)
-    assert "Investigating" in msg
+    assert "Investigating" in msg                # Decision
+    assert "promising" in msg                    # Summary
+    assert "run more OH sites" in msg            # Future_plan, for context
 
 
 def test_get_message_states_no_prior_disposition_when_none():

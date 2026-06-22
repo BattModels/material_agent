@@ -57,6 +57,7 @@ import copy
 from aq_gnome import Data_Handler, Stable_Entries, Stability_Criteria, get_simplified_df, atoms_from_db
 from gnome_dreams_oer_screening.oer.oer_study import OER_catalyst_study
 from gnome_dreams_oer_screening.explog.explog import EXPLOG
+from src.disposition_messages import format_get_disposition, format_update_disposition
 from gnome_dreams_oer_screening.vasp.magnetic_enumeration import (
     count_magnetic_sites_from_formula
 )
@@ -146,6 +147,68 @@ def check_time():
     timeElapsed_tmp = time.time() - var.startTime
     timeElapsed = timedelta(seconds=timeElapsed_tmp)
     return f"total time elapsed since project start: {str(timeElapsed).split('.')[0]} "
+
+@tool
+def get_disposition_info(
+    candidate_id: Annotated[str, "MaterialId of the candidate whose disposition status you want to read."],
+) -> str:
+    """
+    Return a candidate's disposition status: its latest disposition (if any) and
+    the finished results that still need to be summarized into a disposition.
+
+    You MUST call this for a candidate before update_disposition_info -- it unlocks
+    the disposition write for that candidate.
+    """
+    res = EXPLOG.get_disposition_info(candidate_id)
+    msg = format_get_disposition(candidate_id, res)
+    id = CANVAS.register_tool_output(
+        tool_name="get_disposition_info",
+        args={"candidate_id": candidate_id},
+        value=msg,
+        description=f"Outstanding disposition information for candidate {candidate_id}.",
+        parent_result_ids=[],
+        metadata={"candidate_id": candidate_id},
+    )
+    return f"{msg}\nMessage_ID={id}. Refer to this ID if you need to reference this review."
+
+
+@tool
+def update_disposition_info(
+    candidate_id: Annotated[str, "MaterialId of the candidate to disposition."],
+    Summary: Annotated[str, "Candidate-level summary: what the finished results show, e.g. which hypothesis about this candidate was confirmed or rejected."],
+    Summarized_process_id: Annotated[list[int], "The finished process ids your Summary is based on (cite any one id per batch). Get the outstanding ids from get_disposition_info first."],
+    Future_plan: Annotated[str, "The specific next calculation(s) you want to run for this candidate (free text)."],
+    Decision: Annotated[str, f"Where to take this candidate next. Must be exactly one of: {', '.join(var.DISPOSITION_DECISIONS)}."],
+) -> str:
+    """
+    Record a disposition for a candidate: tie its finished results back to a
+    Summary, a Future_plan, and a Decision.
+
+    Call get_disposition_info(candidate_id) first to see what needs summarizing.
+    The disposition is recorded only once every outstanding finished result is
+    cited; otherwise the returned message explains why and how to fix it.
+    """
+    res = EXPLOG.update_disposition_info(
+        candidate_id, Summary, Summarized_process_id, Future_plan, Decision
+    )
+    msg = format_update_disposition(candidate_id, res, var.DISPOSITION_DECISIONS)
+    id = CANVAS.register_tool_output(
+        tool_name="update_disposition_info",
+        args={
+            "candidate_id": candidate_id,
+            "Summary": Summary,
+            "Summarized_process_id": Summarized_process_id,
+            "Future_plan": Future_plan,
+            "Decision": Decision,
+        },
+        value=msg,
+        description=f"Disposition update for candidate {candidate_id} (status: {res.get('status')}).",
+        reasons={"Summary": Summary},
+        parent_result_ids=[],
+        metadata={"candidate_id": candidate_id, "status": res.get("status")},
+    )
+    return f"{msg}\nMessage_ID={id}. Refer to this ID for this disposition update."
+
 
 @tool
 def wait_for_update(

@@ -71,7 +71,8 @@ def format_get_disposition(candidate_id: str, outstanding: Dict[str, Any]) -> st
     if latest is not None:
         parts.append(
             f"Latest disposition on record for {candidate_id}: "
-            f"Decision={latest.get('Decision')}; Summary={latest.get('Summary')}."
+            f"Decision={latest.get('Decision')}; Summary={latest.get('Summary')}; "
+            f"Future_plan={latest.get('Future_plan')}."
         )
     else:
         parts.append(f"No prior disposition for {candidate_id}.")
