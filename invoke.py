@@ -566,7 +566,8 @@ You have a maximum of 1 hours to complete the entire study and make your final r
     EXPLOG.init(Path(WORKING_DIRECTORY)/"vasp_calcs",
                 EXPLOG_MODE,
                 reject_if_failed_exists = True,
-                require_relaxed_o_for_oh = True
+                require_relaxed_o_for_oh = True,
+                legacy_disposition_exempt_ids = var.LEGACY_DISPOSITION_EXEMPT_IDS,
                 )
     # SAFETY: a positive var.QUEUE_MIN_PENDING arms the queue-floor gate, which
     # pushes the worker to keep the HPC queue stocked with REAL DFT jobs. In any
