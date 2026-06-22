@@ -76,7 +76,7 @@ _DBG_SLEEP = 2  # seconds to sleep after each debug print
 
 def _dbg(msg: str) -> None:
     """Print a debug message and sleep so logs are easy to follow live."""
-    sleep_time = int(len(f"[DBG] {msg}") * 0.01 * _DBG_SLEEP)
+    sleep_time = min(6, max(1, int(len(f"[DBG] {msg}") * 0.01 * _DBG_SLEEP)))
     outStr = f"[DBG][{sleep_time}] {msg}"
     print(outStr, flush=True)
     if var.my_SAVE_DIALOGUE:
@@ -1497,6 +1497,158 @@ Return:
         f"reasoning_preview={reasoning_preview!r}"
     )
     return result
+
+
+# =========================================================
+# Call-time tool-level guards (point 6)
+#
+# These run INSIDE the math / extraction tools, right after their
+# deterministic checks and BEFORE the value is registered, so a
+# fabricated / laundered / wrong-source value is caught before it can
+# propagate downstream. They are independent on-site LLM calls that reuse
+# the tested judge prompts above. They are NOT coupled to the report
+# verifier in any way: the report-time judge re-judges from scratch and is
+# unaware that a value was already locally guarded. Verdict contract:
+#   pass    -> caller registers the value normally
+#   warning -> caller registers, stamping metadata['guard_verdict']
+#   fail    -> caller refuses to register and returns the reasoning
+# =========================================================
+
+MATH_GUARD_GUIDANCE = """
+You are guarding a math_expression_tool call in a scientific-computing agent
+workflow. Every INPUT value has ALREADY been provenance-verified against a
+trusted source, so you do NOT need to re-check the inputs' origins. Your job
+is to catch two specific abuses of the math tool:
+
+1. VALUE LAUNDERING — using a trivial/identity expression to manufacture a
+   "computed" result that is really just an agent-chosen number wearing the
+   costume of a calculation. Examples to FAIL:
+     - x0 + 0, x0 * 1, x0 - 0, x0 / 1   (identity on a single input)
+     - x0 / 100, x0 * 1.0, round-trips that just restate an input
+     - any expression whose output is, for practical purposes, one input
+       passed through unchanged or rescaled by an arbitrary constant with no
+       stated physical basis
+   A legitimate computation combines inputs in a way that produces genuinely
+   new information (e.g. E_ads = x0 - x1 - x2; a percentage change between two
+   measured values; sqrt(x0**2 + x1**2)).
+
+2. PHYSICALLY MEANINGLESS / DIMENSIONALLY BROKEN expressions — combining
+   inputs in a way that has no scientific meaning given their stated roles
+   (e.g. adding an energy to a lattice constant, dividing a count by an
+   energy when the context implies they are unrelated). Use the inputs'
+   descriptions and the stated context to judge whether the combination is
+   coherent.
+
+Be lenient about legitimate intermediate arithmetic — differences, ratios of
+related quantities, unit conversions with a clear basis, and standard
+formulas are all fine. Only FAIL when the expression is laundering a value or
+is physically incoherent. Use WARNING for plausible-but-under-justified or
+ambiguous cases.
+"""
+
+
+def _call_math_guard_llm(
+    *,
+    expression: str,
+    inputs: List[Dict[str, Any]],   # [{name, value, description}]
+    context_and_reason: str,
+    judge,
+) -> Dict[str, Any]:
+    """On-site guard for math_expression_tool. Checks for value laundering
+    and physically meaningless expressions. Inputs are already
+    provenance-verified upstream, so this does NOT re-judge their origins."""
+    input_block = json.dumps(inputs, indent=2, default=str)
+    prompt = f"""
+You are auditing a math computation step by a scientific agent.
+
+Expression (variables x0, x1, ... map in order to the inputs below):
+{expression}
+
+Inputs (already provenance-verified; do NOT re-check their origins):
+{input_block}
+
+Stated context / rationale for this computation:
+{context_and_reason}
+
+{MATH_GUARD_GUIDANCE}
+
+Return:
+- pass     : the computation is a legitimate scientific calculation
+- fail     : the expression launders a value, or is physically meaningless
+- warning  : plausible but under-justified or ambiguous
+"""
+    t0 = time.time()
+    result = judge.invoke(prompt)
+    localPatient = 3
+    while result.get("verdict") is None and localPatient > 0:
+        result = judge.invoke(prompt)
+        localPatient -= 1
+    if result.get("verdict") is None:
+        print("_call_math_guard_llm: ERROR — verdict missing after retries.")
+        exit(1)
+    _dbg(
+        f"_call_math_guard_llm: RETURN verdict={result.get('verdict')!r} "
+        f"elapsed={time.time()-t0:.2f}s"
+    )
+    return result
+
+
+def _get_guard_judge():
+    """Build a judge instance for on-site guarding. Reuses the same judge
+    factory the run wires onto var (so the run-control pause / logging
+    behavior is identical), falling back to None if unavailable (guard then
+    no-ops, fail-open, so a misconfigured run is never blocked by the guard
+    machinery itself)."""
+    factory = getattr(var, "JUDGE_FACTORY", None)
+    if factory is None:
+        _dbg("_get_guard_judge: no var.JUDGE_FACTORY; guard will no-op.")
+        return None
+    try:
+        return factory()
+    except Exception as e:  # noqa: BLE001
+        _dbg(f"_get_guard_judge: factory failed ({e}); guard will no-op.")
+        return None
+
+
+def guard_math_expression(*, expression, inputs, context_and_reason):
+    """Public entry point called by math_expression_tool. Returns
+    (verdict, reasoning). verdict is 'pass' | 'warning' | 'fail'; on any
+    guard-infrastructure problem it fails OPEN ('pass') so the guard never
+    blocks a run for a non-scientific reason."""
+    judge = _get_guard_judge()
+    if judge is None:
+        return "pass", ""
+    res = _call_math_guard_llm(
+        expression=expression,
+        inputs=inputs,
+        context_and_reason=context_and_reason,
+        judge=judge,
+    )
+    return res.get("verdict", "pass"), str(res.get("reasoning", ""))
+
+
+def guard_extraction(*, source_description, source_tool, source_args,
+                     source_text, extracted_value, extraction_rationale):
+    """Public entry point called by the extraction tools. Returns
+    (verdict, reasoning). Fails OPEN on guard-infrastructure problems."""
+    judge = _get_guard_judge()
+    if judge is None:
+        return "pass", ""
+    try:
+        args_json = json.dumps(source_args, default=str)
+    except Exception:  # noqa: BLE001
+        args_json = str(source_args)
+    res = _call_extraction_judge_llm(
+        overall_goal=getattr(var, "OVERALL_GOAL", "") or "",
+        source_description=source_description,
+        source_tool=source_tool,
+        source_args_json=args_json,
+        source_text=source_text,
+        extracted_value=extracted_value,
+        extraction_rationale=extraction_rationale,
+        judge=judge,
+    )
+    return res.get("verdict", "pass"), str(res.get("reasoning", ""))
 
 
 # =========================================================

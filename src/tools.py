@@ -7,14 +7,16 @@ from networkx import predecessor
 import pandas as pd
 from src.utils import *
 from src.myCANVAS import CANVAS, ListedArtifact
+from src.safety_guard import guard_math_expression, guard_extraction
 from ase import Atoms, Atom
-from pydantic import StrictStr, StrictFloat
+from pydantic import StrictStr, StrictFloat, BaseModel, Field
 from langchain.tools import tool
 from langchain_anthropic import ChatAnthropic
 # from langchain_openai import AzureChatOpenAI
 import math
 import os
 import copy
+import difflib
 from typing import Annotated, Dict, List, Literal, Optional, Sequence, Tuple, Union, Any
 import numpy as np
 from ase.lattice.cubic import FaceCenteredCubic
@@ -46,6 +48,20 @@ from autocat.surface import generate_surface_structures
 from autocat.adsorption import get_adsorption_sites, get_adsorbate_height_estimate
 from src import var
 from collections import OrderedDict
+
+_DBG_SLEEP = 2  # seconds to sleep after each debug print
+
+
+def _dbg(msg: str) -> None:
+    """Print a debug message and sleep so logs are easy to follow live."""
+    sleep_time = min(6, max(1, int(len(f"[DBG] {msg}") * 0.01 * _DBG_SLEEP)))
+    outStr = f"[DBG][{sleep_time}] {msg}"
+    print(outStr, flush=True)
+    if var.my_SAVE_DIALOGUE:
+            with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
+                f.write(outStr)
+                f.write("\n")
+    time.sleep(sleep_time)  # longer sleep for longer messages
 
 #################################################################################################                                    Supervisor tools                                        ####
 ##                                      Supervisor tools                                       ##
@@ -179,11 +195,44 @@ def math_expression_tool(
     bare_values = [float(v) for v, _ in values_w_ref]
     bare_refs = [ref for _, ref in values_w_ref]
 
+    # ---- Call-time guard (point 6): inputs are now provenance-verified;
+    # guard against value laundering / physically-meaningless expressions
+    # BEFORE registering. Independent on-site LLM check; fails open if the
+    # guard infrastructure is unavailable. ----
+    _guard_inputs = [
+        {"name": f"x{i}", "value": bare_values[i], "ref_result_id": bare_refs[i]}
+        for i in range(len(bare_values))
+    ]
+    _dbg(f"[PT6 math-guard] expr={expression!r} over {len(_guard_inputs)} "
+         f"provenance-verified input(s); calling on-site guard ...")
+    _gv, _gr = guard_math_expression(
+        expression=expression,
+        inputs=_guard_inputs,
+        context_and_reason=merged_reasons,
+    )
+    _dbg(f"[PT6 math-guard] verdict={_gv}"
+         f"{(' reason=' + repr(_gr[:120])) if _gr else ''}")
+    if _gv == "fail":
+        _dbg("[PT6 math-guard] FAIL -> value NOT registered (hard block).")
+        return (
+            "MATH_GUARD_FAILED: this computation was rejected by the on-site "
+            f"guard. Reason: {_gr}\nThe result was NOT registered. If you "
+            "believe this is a legitimate calculation, re-call with a clearer "
+            "`context`/`reasons` explaining the scientific meaning; otherwise "
+            "obtain the value through the proper computation."
+        )
+    if _gv == "warning":
+        _dbg("[PT6 math-guard] WARNING -> registering with metadata stamp.")
+
     variables = {f"x{i}": v for i, v in enumerate(bare_values)}
     mapping = {f"x{i}": ref for i, ref in enumerate(bare_refs)}
 
     try:
         result = _safe_eval(expression, variables)
+        _md = {"mapping": mapping}
+        if _gv == "warning":
+            _md["guard_verdict"] = "warning"
+            _md["guard_reasoning"] = _gr
         result_id = CANVAS.register_tool_output(
             tool_name="math_expression_tool",
             args={
@@ -196,7 +245,7 @@ def math_expression_tool(
         reasons=merged_reasons,
             parent_result_ids=list(set(bare_refs)),
             parent_result_ids_w_args={"values": bare_refs},
-            metadata={"mapping": mapping},
+            metadata=_md,
         )
         return f"Result: {result}. Result_ID={result_id}."
     except Exception as e:
@@ -205,22 +254,369 @@ def math_expression_tool(
 
 @tool
 def inspect_my_canvas():
-    """Inspect the working canvas to get available keys"""
+    "Inspect the working canvas to get available keys."
     return CANVAS.inspect()
 
 
 @tool
-def read_my_canvas(key: Annotated[str, "key"]):
-    """Read a value from the working canvas"""
+def read_my_canvas(key: Annotated[str, "Exact key to read. Returns that exact key's content"]):
+    """Read a value from the working canvas."""
     return CANVAS.read(key)
 
 
+# =====================================================================
+# Progress-note routing guard (Q1)
+#
+# Two tools can place markdown on the canvas: write_my_canvas (short
+# factual entries / structured data) and write_progress_note (multi-section
+# free-hand progress notes). To keep them from overlapping, write_my_canvas
+# takes a REQUIRED `is_free_handed_progress_note` flag forcing the worker to
+# declare intent. A conservative content heuristic backstops the declaration:
+# if the worker says "not a note" but the content is unmistakably a note, we
+# refuse ONCE, remember (key -> value) in var.NOTE_BACKSTOP_OVERRIDES, and
+# tell the worker it can resend the same key to override. var.NOTE_BACKSTOP_
+# OVERRIDES is reset per worker round (in worker_agent_node), so an override
+# never grants a cross-round free pass.
+# =====================================================================
+
+# Map status enums (used by write_progress_note too) to display glyphs,
+# derived from the vocabulary already present in worker notes.
+_STATUS_GLYPHS = {
+    "done": "✅",
+    "pending": "⏭",
+    "in_progress": "⏳",
+    "failed": "❌",
+    "warning": "⚠️",
+}
+
+# Heuristic note-detection thresholds. Deliberately UNDER-eager: only trips
+# on clearly multi-section, long, heading/glyph-heavy blobs, so legitimate
+# short structured writes are never caught.
+_NOTE_MIN_CHARS = 700
+_NOTE_MIN_HEADINGS = 2
+_BACKSTOP_SIMILARITY_THRESHOLD = 0.90
+_BACKSTOP_SIMILARITY_LENGTH_CAP = 6000  # cap SequenceMatcher work on huge notes
+
+
+def _looks_like_progress_note(value) -> bool:
+    """Conservative test: does this value look like a multi-section
+    free-hand progress note (as opposed to a short factual entry or a
+    structured dict)?"""
+    if not isinstance(value, str):
+        return False
+    if len(value) < _NOTE_MIN_CHARS:
+        return False
+    heading_count = len(re.findall(r"(?m)^#{1,4}\s", value))
+    glyph_count = sum(value.count(g) for g in _STATUS_GLYPHS.values())
+    # Note-like if it has several markdown headings, OR is long and sprinkled
+    # with the status-glyph vocabulary that notes use.
+    return heading_count >= _NOTE_MIN_HEADINGS or (glyph_count >= 3 and heading_count >= 1)
+
+
+def _backstop_similarity(a: str, b: str) -> float:
+    """SequenceMatcher ratio with a quick_ratio() prefilter and a length cap
+    to bound cost on large notes."""
+    if not isinstance(a, str) or not isinstance(b, str):
+        return 0.0
+    a2 = a[:_BACKSTOP_SIMILARITY_LENGTH_CAP]
+    b2 = b[:_BACKSTOP_SIMILARITY_LENGTH_CAP]
+    sm = difflib.SequenceMatcher(None, a2, b2)
+    # quick_ratio is an upper bound on ratio; if it's already below the
+    # threshold we can skip the expensive ratio() call.
+    tmpQuickRatio = sm.quick_ratio()
+    if tmpQuickRatio < _BACKSTOP_SIMILARITY_THRESHOLD:
+        return tmpQuickRatio
+    return sm.ratio()
+
+
 @tool
-def write_my_canvas(key: Annotated[str, "key"],
+def write_my_canvas(key: Annotated[str, "key. Must NOT end in '_v<N>' (reserved for the version system)."],
                     value: Annotated[Any, "value"],
-                    overwrite: Annotated[bool, "True to overwrite if key already exist. only set to True if you are certain you want to overwrite the existing value"] = False):
-    """Write a value to the working canvas. If the key already exists, it will not overwrite unless specified."""
+                    is_free_handed_progress_note: Annotated[bool, "REQUIRED. Set True ONLY if what you are writing is a free-hand, multi-section progress note / status write-up / report. If True, this tool will redirect you to write_progress_note. Set False for everything else, such as short factual entries, IDs, structured data, tmp results, and etc."],
+                    overwrite: Annotated[bool, "True to overwrite if key already exist. only set to True if you are certain you want to overwrite the existing value. Overwrite is refused for version-controlled docs — use version_controlled_edit_canvas_doc for those."] = False):
+    """Write a NEW non-progress-note value to the working canvas — short factual
+    entries, IDs, structured data, temporary results, and the like.
+    Multi-section status write-ups do NOT belong here: use write_progress_note
+    to create one, or version_controlled_edit_canvas_doc to revise an existing
+    one. You MUST declare, via is_free_handed_progress_note, whether this write
+    is such a note.
+    Writes are create-only by default: if the key already exists it will not be
+    overwritten unless you set overwrite. To revise existing text, do NOT
+    overwrite — use version_controlled_edit_canvas_doc, which creates a new
+    '_v<N>' version and preserves history."""
+    # --- Q1 declared-intent guard ---
+    if is_free_handed_progress_note:
+        _dbg(f"[PT2a write_my_canvas] key={key!r} declared as progress note "
+             f"-> redirected to write_progress_note (not written here).")
+        return (
+            "This write is marked as a free-hand progress note, which does "
+            "NOT belong in write_my_canvas. Use write_progress_note to create "
+            "a new note, or version_controlled_edit_canvas_doc to revise an "
+            "existing one."
+        )
+
+    # --- Q1 contradiction backstop: declared not-a-note, but looks like one ---
+    overrides = getattr(var, "NOTE_BACKSTOP_OVERRIDES", None)
+    if overrides is None:
+        overrides = {}
+        var.NOTE_BACKSTOP_OVERRIDES = overrides
+
+    if _looks_like_progress_note(value):
+        prior = overrides.get(key)
+        _sim = _backstop_similarity(value, prior) if prior is not None else 0.0
+        already_overridden = (
+            prior is not None
+            and _sim >= _BACKSTOP_SIMILARITY_THRESHOLD
+        )
+        if not already_overridden:
+            # Remember (key -> value) and refuse once.
+            overrides[key] = value
+            _dbg(f"[PT2a write_my_canvas] backstop TRIGGERED for key={key!r}: "
+                 f"declared not-a-note but looks like one "
+                 f"(prior_sim={_sim:.2f}). Remembered key; asking worker to "
+                 f"resend to override or use write_progress_note.")
+            return (
+                f"This looks like a multi-section progress note, which "
+                f"usually belongs in write_progress_note (to create) or "
+                f"version_controlled_edit_canvas_doc (to revise). If it really "
+                f"is NOT a free-hand progress note, call write_my_canvas again "
+                f"with the same key '{key}' (and is_free_handed_progress_note="
+                f"False) and I won't stop you. Nothing else needs to change."
+            )
+        # else: the worker confirmed by re-sending the same key with
+        # near-identical content -> fall through and write.
+        _dbg(f"[PT2a write_my_canvas] backstop OVERRIDDEN for key={key!r} "
+             f"(resend sim={_sim:.2f} >= {_BACKSTOP_SIMILARITY_THRESHOLD}); "
+             f"writing as requested.")
+
     return CANVAS.write(key, value, overwrite)
+
+
+class CanvasEditOp(BaseModel):
+    """One edit operation for version_controlled_edit_canvas_doc."""
+    mode: Literal["replace", "append"] = Field(
+        description="'replace' swaps a unique snippet of the latest version "
+                    "for new text; 'append' adds new text at the end of the "
+                    "doc."
+    )
+    old_str: str = Field(
+        default="",
+        description="For mode='replace' only: an EXACT, UNIQUE snippet of "
+                    "the latest version's content (copy it verbatim from a "
+                    "fresh read, include enough surrounding text to be "
+                    "unique). Leave empty for mode='append'.",
+    )
+    new_str: str = Field(
+        description="Replacement text (mode='replace'; may be empty to "
+                    "delete the snippet) or text to append (mode='append')."
+    )
+
+
+@tool
+def version_controlled_edit_canvas_doc(
+    name: Annotated[
+        str,
+        "CANVAS content key name. Pass the plain base name (e.g. 'my_notes'); a "
+        "'_v<N>' suffix is also accepted but only if it is the LATEST "
+        "version.",
+    ],
+    edits: Annotated[
+        List[CanvasEditOp],
+        "Edits applied IN ORDER to the latest version's content. All "
+        "succeed or none do (no partial version is ever written).",
+    ],
+):
+    """Revise an existing text content on the canvas WITHOUT rewriting it from
+    scratch. Reads the LATEST version of the doc, applies your edits, and
+    stores the result as the next '_v<N>' version. Previous versions are
+    never modified — history stays readable via 'name_v<N>'.
+
+    Use this instead of regenerating a whole content when only parts changed
+    (e.g. updating a progress note's status lines, appending newly
+    generated file IDs). Base your old_str snippets on a FRESH read of the
+    doc: if the content changed since you last read it, a replace edit will
+    fail with a clear message and nothing will be written.
+
+    Only works on text (string) docs created via write_my_canvas.
+    Structured reports are immutable and cannot be edited."""
+    parsed = []
+    for e in edits:
+        if isinstance(e, CanvasEditOp):
+            parsed.append(e.model_dump())
+        elif isinstance(e, dict):
+            parsed.append(CanvasEditOp.model_validate(e).model_dump())
+        else:
+            return (f"EDIT_FAILED: could not parse edit operation {e!r}. "
+                    f"Each edit must provide mode ('replace'|'append'), "
+                    f"old_str (replace only), and new_str.")
+    _dbg(f"[PT2b version-edit] doc={name!r}: applying {len(parsed)} edit "
+         f"op(s) -> next version.")
+    return CANVAS.edit_doc(name, parsed)
+
+
+# =====================================================================
+# write_progress_note (Q2 + Q3)
+#
+# Creates the FIRST version of a structured-but-flexible progress note and
+# stores it on the canvas via write_my_canvas's underlying path. Subsequent
+# revisions go through version_controlled_edit_canvas_doc (create-only here).
+#
+# Schema = a fixed spine (title, purpose, optional typed fixed_parameters /
+# swept_parameter blocks, free-form sections, next_steps, status, references)
+# rendered deterministically. Status enums render to glyphs (Q3). The
+# references list is existence-validated against the artifact registry (Q2,
+# hard-reject) to enforce the implicit waterfall/provenance model.
+# =====================================================================
+
+_NOTE_STATUS = Literal["done", "pending", "in_progress", "failed", "warning"]
+
+
+class NoteSection(BaseModel):
+    """A free-form, arbitrary markdown, body section of a progress note."""
+    heading: str = Field(description="Section heading (rendered as '### <heading>').")
+    body: str = Field(description="Section content as markdown (free-form).")
+
+
+class NoteStatusItem(BaseModel):
+    """One status / next-step line with a structured status (rendered to a
+    glyph), so status is queryable rather than free-text emoji."""
+    text: str = Field(description="The status or next-step text.")
+    status: _NOTE_STATUS = Field(
+        description="One of: done, pending, in_progress, failed, warning. "
+                    "Rendered to a glyph (✅/⏭/⏳/❌/⚠️)."
+    )
+
+
+class NoteReference(BaseModel):
+    """A named reference to a registered artifact. The id is existence-checked
+    against the registry."""
+    name: str = Field(description="Human-readable name of the referenced thing.")
+    id: str = Field(description="The registered result_id / reference id.")
+
+
+def _render_status_lines(items: List[NoteStatusItem]) -> str:
+    lines = []
+    for i, it in enumerate(items):
+        glyph = _STATUS_GLYPHS.get(it.status, "")
+        lines.append(f"{i+1}. {glyph} -- {it.text}")
+    return "\n".join(lines)
+
+
+def _render_progress_note(
+    title: str,
+    purpose: str,
+    fixed_parameters,
+    swept_parameter,
+    sections,
+    next_steps,
+    status,
+    references,
+) -> str:
+    parts = [f"## {title}", ""]
+    if purpose:
+        parts.append("### Overview")
+        parts.append(purpose)
+        parts.append("")
+
+    if swept_parameter:
+        parts.append("### Swept Parameter")
+        for k, v in swept_parameter.items():
+            parts.append(f"- **{k}**: {v}")
+        parts.append("")
+
+    if fixed_parameters:
+        parts.append("### Fixed Parameters")
+        for k, v in fixed_parameters.items():
+            parts.append(f"- **{k}**: {v}")
+        parts.append("")
+
+    for sec in sections:
+        parts.append(f"### {sec.heading}")
+        parts.append(sec.body)
+        parts.append("")
+
+    if next_steps:
+        parts.append("### Next Steps")
+        parts.append(_render_status_lines(next_steps))
+        parts.append("")
+
+    if status:
+        parts.append("### Status")
+        parts.append(_render_status_lines(status))
+        parts.append("")
+
+    if references:
+        parts.append("### References")
+        for ref in references:
+            parts.append(f"- {ref.name}: ID={ref.id}")
+        parts.append("")
+
+    return "\n".join(parts).rstrip() + "\n"
+
+
+@tool
+def write_progress_note(
+    name: Annotated[str, "Canvas key for this NEW progress note. Must be a fresh name (this tool only CREATES; to revise an existing progress note use version_controlled_edit_canvas_doc). Must not end in '_v<N>' (use version_controlled_edit_canvas_doc to revise, and _v<N>' will be handled automatically)."],
+    title: Annotated[str, "Note title (rendered as the top-level heading)."],
+    purpose: Annotated[str, "One-paragraph overview: what this progress note records and why."],
+    sections: Annotated[List[NoteSection], "Free-form sections (heading + markdown body). Put anything the fixed fields don't cover here — root-cause analyses, option comparisons, provenance chains, tables, etc. You are NOT limited to the fixed fields."] = [],
+    next_steps: Annotated[List[NoteStatusItem], "Next-step items, each with a status (done/pending/in_progress/failed/warning)."] = [],
+    status: Annotated[List[NoteStatusItem], "Closing status summary items, each with a status."] = [],
+    references: Annotated[List[NoteReference], "Named references to REGISTERED artifacts (name + id). Every id is checked for existence in the registry; unknown ids are rejected."] = [],
+    fixed_parameters: Annotated[Optional[Dict[str, str]], "Optional: parameters held constant (e.g. ecutwfc, kspacing, pseudopotential ids). Rendered as a consistent block."] = None,
+    swept_parameter: Annotated[Optional[Dict[str, str]], "Optional: for convergence-style notes, the varied parameter and its test range/reference/threshold. Rendered as a consistent block."] = None,
+):
+    """Create a NEW free-hand progress note on the canvas with a consistent
+    structure: title, overview, optional fixed/swept parameter blocks,
+    free-form sections, next steps, status, and references. Use this instead
+    of write_my_canvas for any multi-section status write-up. To REVISE an
+    existing note later, use version_controlled_edit_canvas_doc (do not
+    re-create it here). Reference ids are validated against the artifact
+    registry."""
+    # Coerce dict inputs to models (tolerant of raw-dict tool args).
+    def _coerce(items, model):
+        out = []
+        for it in items or []:
+            out.append(it if isinstance(it, model) else model.model_validate(it))
+        return out
+    sections = _coerce(sections, NoteSection)
+    next_steps = _coerce(next_steps, NoteStatusItem)
+    status = _coerce(status, NoteStatusItem)
+    references = _coerce(references, NoteReference)
+
+    # --- Q2: existence-validate reference ids against the registry ---
+    unknown = [ref.id for ref in references if ref.id not in CANVAS.result_registry]
+    if unknown:
+        _dbg(f"[PT2a write_progress_note] name={name!r} REJECTED: "
+             f"{len(unknown)} unregistered reference id(s): {unknown}.")
+        return (
+            f"NOTE_NOT_WRITTEN: the following reference id(s) are not "
+            f"registered artifacts: {unknown}. A progress note must only cite "
+            f"ids that actually exist in the registry (this enforces the "
+            f"waterfall/provenance model). Fix or remove the unknown id(s) and "
+            f"try again. If a value isn't registered yet, obtain it from the "
+            f"proper tool first."
+        )
+
+    rendered = _render_progress_note(
+        title=title,
+        purpose=purpose,
+        fixed_parameters=fixed_parameters,
+        swept_parameter=swept_parameter,
+        sections=sections,
+        next_steps=next_steps,
+        status=status,
+        references=references,
+    )
+    _dbg(f"[PT2a write_progress_note] name={name!r}: "
+         f"{len(sections)} section(s), {len(next_steps)} next-step(s), "
+         f"{len(status)} status item(s), {len(references)} validated "
+         f"reference(s); rendered {len(rendered)} chars. Writing (create-only).")
+
+    # Create-only: route through the canvas write (which enforces reserved
+    # prefix/suffix guards and refuses overwrite of existing keys).
+    result = CANVAS.write(name, rendered, overwrite=False)
+    return result
 
 
 @tool
@@ -826,6 +1222,37 @@ def extract_numeric_from_tool_output(
 
     merged_reasons = _merge_context(context, reasons)
 
+    # ---- Call-time guard (point 6): the value is now mechanically verified
+    # to be present and unique in the source. Guard value-correctness and
+    # source-appropriateness BEFORE registering. ----
+    _dbg(f"[PT6 extract-guard:numeric] value={registring_value!r} from "
+         f"source={getattr(record, 'tool_name', '')!r}; calling on-site guard ...")
+    _gv, _gr = guard_extraction(
+        source_description=getattr(record, "description", "") or "",
+        source_tool=getattr(record, "tool_name", "") or "",
+        source_args=getattr(record, "args", {}) or {},
+        source_text=raw_text,
+        extracted_value=registring_value,
+        extraction_rationale=merged_reasons,
+    )
+    _dbg(f"[PT6 extract-guard:numeric] verdict={_gv}"
+         f"{(' reason=' + repr(_gr[:120])) if _gr else ''}")
+    if _gv == "fail":
+        _dbg("[PT6 extract-guard:numeric] FAIL -> value NOT registered (hard block).")
+        return (
+            "EXTRACTION_GUARD_FAILED: the on-site guard rejected this "
+            f"extraction. Reason: {_gr}\nThe value was NOT registered. Check "
+            "that you are extracting from the correct source (not a test / "
+            "scratch / stale run) and that the value matches its stated "
+            "purpose, then try again."
+        )
+
+    _md = {}
+    if _gv == "warning":
+        _dbg("[PT6 extract-guard:numeric] WARNING -> registering with metadata stamp.")
+        _md["guard_verdict"] = "warning"
+        _md["guard_reasoning"] = _gr
+
     result_id = CANVAS.register_tool_output(
         tool_name="extract_numeric_from_tool_output",
         args={
@@ -840,7 +1267,7 @@ def extract_numeric_from_tool_output(
         reasons=merged_reasons,
         parent_result_ids=[source_tool_call_id],
         parent_result_ids_w_args={"source_tool_call_id": source_tool_call_id},
-        metadata={},
+        metadata=_md,
     )
 
     return f"value: {registring_value} is now registered with id {result_id} and can be used for further calculations."
@@ -995,6 +1422,41 @@ def extract_text_from_tool_output(
 
     merged_reasons = _merge_context(context, reasons)
 
+    # ---- Call-time guard (point 6): text is now mechanically verified to be
+    # present and unique in the source. Guard value-correctness and
+    # source-appropriateness BEFORE registering. ----
+    _dbg(f"[PT6 extract-guard:text] text={text[:60]!r} from "
+         f"source={getattr(record, 'tool_name', '')!r}; calling on-site guard ...")
+    _gv, _gr = guard_extraction(
+        source_description=getattr(record, "description", "") or "",
+        source_tool=getattr(record, "tool_name", "") or "",
+        source_args=getattr(record, "args", {}) or {},
+        source_text=raw_text,
+        extracted_value=text,
+        extraction_rationale=merged_reasons,
+    )
+    _dbg(f"[PT6 extract-guard:text] verdict={_gv}"
+         f"{(' reason=' + repr(_gr[:120])) if _gr else ''}")
+    if _gv == "fail":
+        _dbg("[PT6 extract-guard:text] FAIL -> text NOT registered (hard block).")
+        return (
+            "EXTRACTION_GUARD_FAILED: the on-site guard rejected this "
+            f"extraction. Reason: {_gr}\nThe text was NOT registered. Check "
+            "that you are extracting from the correct source (not a test / "
+            "scratch / stale run) and that the span matches its stated "
+            "purpose, then try again."
+        )
+
+    _md = {
+        "matched_text": matched_text,
+        "matched_span": [text_start, text_end],
+        "evidence_snippet_span": [s0, s1],
+    }
+    if _gv == "warning":
+        _dbg("[PT6 extract-guard:text] WARNING -> registering with metadata stamp.")
+        _md["guard_verdict"] = "warning"
+        _md["guard_reasoning"] = _gr
+
     result_id = CANVAS.register_tool_output(
         tool_name="extract_text_from_tool_output",
         args={
@@ -1009,11 +1471,7 @@ def extract_text_from_tool_output(
         reasons=merged_reasons,
         parent_result_ids=[source_tool_call_id],
         parent_result_ids_w_args={"source_tool_call_id": source_tool_call_id},
-        metadata={
-            "matched_text": matched_text,
-            "matched_span": [text_start, text_end],
-            "evidence_snippet_span": [s0, s1],
-        },
+        metadata=_md,
     )
 
     return f"text: {text!r} is now registered with id {result_id} and can be used for further calculations."
