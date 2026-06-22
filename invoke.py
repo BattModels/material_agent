@@ -562,11 +562,29 @@ You have a maximum of 1 hours to complete the entire study and make your final r
         if not os.path.exists(db_file):
             initialize_database(db_file)
 
+    EXPLOG_MODE = "production"
     EXPLOG.init(Path(WORKING_DIRECTORY)/"vasp_calcs",
-                "production",
+                EXPLOG_MODE,
                 reject_if_failed_exists = True,
                 require_relaxed_o_for_oh = True
                 )
+    # SAFETY: a positive var.QUEUE_MIN_PENDING arms the queue-floor gate, which
+    # pushes the worker to keep the HPC queue stocked with REAL DFT jobs. In any
+    # test mode (anything other than "production") that is dangerous, so warn
+    # loudly if a non-zero floor was left on. Set var.QUEUE_MIN_PENDING = 0 for tests.
+    if EXPLOG_MODE != "production" and var.QUEUE_MIN_PENDING > 0:
+        print("\n" + "!" * 80, flush=True)
+        print(
+            f"!! WARNING: QUEUE_MIN_PENDING = {var.QUEUE_MIN_PENDING} (> 0) while "
+            f"EXPLOG mode is '{EXPLOG_MODE}' (a TEST mode).",
+            flush=True,
+        )
+        print(
+            "!! The queue-floor gate will push the agent to keep REAL DFT jobs "
+            "queued. Set var.QUEUE_MIN_PENDING = 0 for test modes.",
+            flush=True,
+        )
+        print("!" * 80 + "\n", flush=True)
     # print(EXPLOG.relational_frame.candidates.df.dtypes)
     # print(EXPLOG.relational_frame.processes.df.dtypes)
     # new_candidate_row = {"candidate_id": "test_candidate",
