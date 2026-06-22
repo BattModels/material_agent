@@ -3782,6 +3782,15 @@ def get_convergence_suggestions(
     You are a DFT expert who's good at giving concise suggestions on how to resolve issues in DFT calculations. Do not modify nosym and pesudopotentials. Never make any adjustment to make the calculation less accurate.
     Please use the format: parameterX: suggestionX, reasonX; parameterY: suggestionY, reasonY; ...
     You must include target values for the parameters you suggest to change, e.g. if you suggest to increase the ecutwfc, you should give a specific value for the new ecutwfc, not just say "increase ecutwfc".
+    available parameter to change is:
+    ecutwfc: kinetic energy cutoff (Ry).
+    occupations: could be one of the following: ['smearing', 'tetrahedra', 'tetrahedra_lin', 'tetrahedra_opt', 'fixed', 'from_input'].
+    smearing: could be one of the following: ['gaussian', 'methfessel-paxton', 'marzari-vanderbilt', 'fermi-dirac'].
+    degauss: value of the gaussian spreading (Ry).
+    conv_thr: Convergence threshold for self-consistent loop.
+    electron_maxstep: Maximum number of SCF iterations.
+    kspacing: K-point spacing (in Angstrom^-1). Lower value means more k-points and better accuracy.
+    and Any additional QE parameters from the official QE documentation could be added. Do not add any additional input parameters that conflict with above settings!
     """
                 
                 invokingMsg = [
@@ -3811,6 +3820,16 @@ def get_convergence_suggestions(
                 system_msg = """
     You are a DFT expert who's good at giving concise suggestions on how to resolve issues in DFT calculations based on part of the output files. Do not modify nosym and pesudopotentials. Never make any adjustment to make the calculation less accurate.
     Please use the format: parameterX: suggestionX, reasonX; parameterY: suggestionY, reasonY; ...
+    You must include target values for the parameters you suggest to change, e.g. if you suggest to increase the ecutwfc, you should give a specific value for the new ecutwfc, not just say "increase ecutwfc".
+    available parameter to change is:
+    ecutwfc: kinetic energy cutoff (Ry).
+    occupations: could be one of the following: ['smearing', 'tetrahedra', 'tetrahedra_lin', 'tetrahedra_opt', 'fixed', 'from_input'].
+    smearing: could be one of the following: ['gaussian', 'methfessel-paxton', 'marzari-vanderbilt', 'fermi-dirac'].
+    degauss: value of the gaussian spreading (Ry).
+    conv_thr: Convergence threshold for self-consistent loop.
+    electron_maxstep: Maximum number of SCF iterations.
+    kspacing: K-point spacing (in Angstrom^-1). Lower value means more k-points and better accuracy.
+    and Any additional QE parameters from the official QE documentation could be added. Do not add any additional input parameters that conflict with above settings!
     """
                 
                 invokingMsg = [
