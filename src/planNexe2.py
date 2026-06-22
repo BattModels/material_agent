@@ -89,7 +89,7 @@ WORKER_TOOL_NAMES: List[str] = [
     "generateSurface_and_getPossibleSite",
     "generate_myAdsorbate",
     "add_myAdsorbate",
-    "init_structure_data",
+    "init_structure_data_for_none_adsorption_calculations",
     "find_pseudopotential",
     "write_QE_script_w_ASE",
     "calculate_lc",
@@ -524,11 +524,10 @@ def _summarize_episode_llm(records, goal: str) -> str:
         f"Span of executed steps to compress:\n{body}\n\n"
         f"Write the 3-5 sentence summary now."
     )
-    llm = ChatAnthropic(
-        model="claude-sonnet-4-5-20250929",
-        api_key=config["ANTHROPIC_API_KEY"],
-        temperature=0.0,
-    )
+    if 'opus' in config['ANTHROPIC_MODEL']:
+        llm = ChatAnthropic(model=config['ANTHROPIC_MODEL'], api_key=config["ANTHROPIC_API_KEY"])
+    else:
+        llm = ChatAnthropic(model=config['ANTHROPIC_MODEL'], api_key=config["ANTHROPIC_API_KEY"], temperature=0.0)
     last_err = None
     for attempt in range(3):
         try:
@@ -1148,7 +1147,10 @@ corrected required_quantities.
 class judge():
     def __init__(self):
         config = var.OTHER_GLOBAL_VARIABLES
-        self.llm = ChatAnthropic(model="claude-sonnet-4-5-20250929", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0).with_structured_output(judgeResponse, include_raw=True)
+        if 'opus' in config['ANTHROPIC_MODEL']:
+            self.llm = ChatAnthropic(model=config['ANTHROPIC_MODEL'], api_key=config['ANTHROPIC_API_KEY']).with_structured_output(judgeResponse, include_raw=True)
+        else:
+            self.llm = ChatAnthropic(model=config['ANTHROPIC_MODEL'], api_key=config['ANTHROPIC_API_KEY'],temperature=0.0).with_structured_output(judgeResponse, include_raw=True)
     
     def invoke(self, input):
         with open(f"{var.my_WORKING_DIRECTORY}/judge_status.txt", "r") as f:
@@ -1639,8 +1641,12 @@ def create_planning_graph(config: dict) -> StateGraph:
     # Define the model
     # llm = ChatAnthropic(model="claude-opus-4-7", api_key=config['ANTHROPIC_API_KEY'])
     # workerllm = ChatAnthropic(model="claude-opus-4-7", api_key=config['ANTHROPIC_API_KEY'], tool_choice="auto")
-    llm = ChatAnthropic(model="claude-sonnet-4-5-20250929", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-    workerllm = ChatAnthropic(model="claude-sonnet-4-5-20250929", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0, tool_choice="auto")
+    if 'opus' in config['ANTHROPIC_MODEL']:
+        llm = ChatAnthropic(model=config['ANTHROPIC_MODEL'], api_key=config['ANTHROPIC_API_KEY'])
+        workerllm = ChatAnthropic(model=config['ANTHROPIC_MODEL'], api_key=config['ANTHROPIC_API_KEY'], tool_choice="auto")
+    else:
+        llm = ChatAnthropic(model=config['ANTHROPIC_MODEL'], api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+        workerllm = ChatAnthropic(model=config['ANTHROPIC_MODEL'], api_key=config['ANTHROPIC_API_KEY'],temperature=0.0, tool_choice="auto")
     # workerllm = ChatAnthropic(model="claude-3-5-sonnet-20241022", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # llm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
     # workerllm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"], model_kwargs={'parallel_tool_calls': False})
@@ -1695,7 +1701,7 @@ def create_planning_graph(config: dict) -> StateGraph:
         generateSurface_and_getPossibleSite,
         generate_myAdsorbate,
         add_myAdsorbate,
-        init_structure_data,
+        init_structure_data_for_none_adsorption_calculations,
         find_pseudopotential,
         write_QE_script_w_ASE,
         calculate_lc,

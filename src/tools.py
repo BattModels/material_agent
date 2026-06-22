@@ -1760,7 +1760,7 @@ def get_ase_atoms_property(
     return f"Extracted result {result}.\nThe above result is registered as an entire string with id={id}. Please extract and register specific information you need."
 
 @tool
-def init_structure_data(
+def init_structure_data_for_none_adsorption_calculations(
     reasons: Annotated[
         Dict[str, str],
         "Per-parameter rationale. For each parameter, write 2-3 sentences "
