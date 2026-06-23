@@ -18,6 +18,7 @@
 
 from gnome_dreams_oer_screening.explog.explog import EXPLOG
 
+from src.forgotten_jobs import find_forgotten_jobs
 from src.disposition_messages import (
     MSG_NOTHING_TO_WAIT_FOR,
     evaluate_wait_entry,
@@ -40,12 +41,16 @@ def _add_candidate(cid):
                          reason_or_hypothesis="wait gate test")
 
 
-def _inject(cid, job_type, status, termination_index=None, site_index=None):
+def _inject(cid, job_type, status, termination_index=None, site_index=None,
+            go_dev=None):
     table = EXPLOG.relational_frame.processes
     pid = (int(table.df["process_id"].max()) + 1) if len(table.df) else 0
-    table.add_row({"process_id": pid, "candidate_id": cid, "job_type": job_type,
-                   "status": status, "termination_index": termination_index,
-                   "site_index": site_index}, allow_update=False)
+    row = {"process_id": pid, "candidate_id": cid, "job_type": job_type,
+           "status": status, "termination_index": termination_index,
+           "site_index": site_index}
+    if go_dev is not None:
+        row["G(O) deviation"] = go_dev          # competitive-site signal for OH
+    table.add_row(row, allow_update=False)
     return pid
 
 
@@ -161,10 +166,13 @@ def test_gate1_refusal_names_candidates_and_both_tools():
     assert "update_disposition_info" in msg
 
 
-def test_gate2_refusal_states_pending_floor_and_routes_to_supervisor():
-    msg = format_wait_gate2_refusal(5, 15)
-    assert "5" in msg and "15" in msg
-    assert "supervisor" in msg.lower()        # the return-to-supervisor route
+def test_gate2_refusal_states_no_numeric_deficit_and_routes_to_supervisor():
+    # Anti-gaming: the Gate 2 message advises a LARGE batch but never states a
+    # pending count / floor / headroom the agent could barely clear.
+    msg = format_wait_gate2_refusal()
+    assert "40-50" in msg                      # advise a large batch, not a deficit
+    assert "supervisor" in msg.lower()         # the return-to-supervisor route
+    assert "headroom" not in msg.lower()
 
 
 def test_exit_hint_names_candidates_else_empty():
@@ -191,7 +199,7 @@ def test_evaluate_gate2_when_current_and_queue_low():
     msg = evaluate_wait_entry(candidates_need_disposition=[], pending_count=5,
                               has_running=True, enforce_queue_floor=True,
                               queue_min_pending=15)
-    assert msg == format_wait_gate2_refusal(5, 15)
+    assert msg == format_wait_gate2_refusal()   # numbers drive the decision, not the prose
 
 
 def test_evaluate_floor_off_when_enforce_false():
@@ -224,3 +232,145 @@ def test_evaluate_proceeds_when_current_and_queue_full():
                               has_running=False, enforce_queue_floor=True,
                               queue_min_pending=15)
     assert msg is None
+
+
+# ===========================================================================
+# Forgotten-jobs detection: find_forgotten_jobs (parent src.forgotten_jobs,
+# dataframe-only over EXPLOG)
+#
+# Each item is {candidate_id, kind in {bulk,surface,O,OH}, termination_index,
+# site_index}. Categories 1-3 are the per-candidate frontier (mutually
+# exclusive); category 4 (OH) is one item per competitive O site without OH.
+# ===========================================================================
+
+THR = 0.3        # GO_DEV_OH_THRESHOLD used in these tests
+
+
+def _kinds(items):
+    return [(i["candidate_id"], i["kind"], i["termination_index"],
+             i["site_index"]) for i in items]
+
+
+def test_forgotten_bulk_when_no_bulk_started(tmp_path):
+    _setup(tmp_path)
+    _add_candidate("c")
+    assert _kinds(find_forgotten_jobs(EXPLOG, THR)) == \
+        [("c", "bulk", None, None)]
+
+
+def test_forgotten_surface_when_bulk_finalized_no_surface(tmp_path):
+    _setup(tmp_path)
+    _add_candidate("c")
+    _inject("c", "bulk_relaxation", "completed")
+    assert _kinds(find_forgotten_jobs(EXPLOG, THR)) == \
+        [("c", "surface", None, None)]
+
+
+def test_forgotten_O_when_surface_finalized_no_O(tmp_path):
+    _setup(tmp_path)
+    _add_candidate("c")
+    _inject("c", "bulk_relaxation", "completed")
+    _inject("c", "surface_relaxation", "completed", termination_index=0)
+    assert _kinds(find_forgotten_jobs(EXPLOG, THR)) == \
+        [("c", "O", None, None)]
+
+
+def test_forgotten_OH_for_competitive_O_site_without_OH(tmp_path):
+    _setup(tmp_path)
+    _add_candidate("c")
+    _inject("c", "bulk_relaxation", "completed")
+    _inject("c", "surface_relaxation", "completed", termination_index=0)
+    _inject("c", "O_adsorption", "completed", termination_index=0, site_index=2,
+            go_dev=0.1)                                   # |0.1| < 0.3 -> competitive
+    assert _kinds(find_forgotten_jobs(EXPLOG, THR)) == \
+        [("c", "OH", 0, 2)]
+
+
+def test_no_forgotten_OH_when_O_not_competitive(tmp_path):
+    _setup(tmp_path)
+    _add_candidate("c")
+    _inject("c", "bulk_relaxation", "completed")
+    _inject("c", "surface_relaxation", "completed", termination_index=0)
+    _inject("c", "O_adsorption", "completed", termination_index=0, site_index=2,
+            go_dev=0.9)                                   # |0.9| >= 0.3
+    assert find_forgotten_jobs(EXPLOG, THR) == []
+
+
+def test_no_forgotten_OH_when_oh_already_present(tmp_path):
+    _setup(tmp_path)
+    _add_candidate("c")
+    _inject("c", "bulk_relaxation", "completed")
+    _inject("c", "surface_relaxation", "completed", termination_index=0)
+    _inject("c", "O_adsorption", "completed", termination_index=0, site_index=2,
+            go_dev=0.1)
+    _inject("c", "OH_adsorption", "pending", termination_index=0, site_index=2)
+    assert find_forgotten_jobs(EXPLOG, THR) == []   # OH already at (0,2)
+
+
+def test_negative_threshold_disables_oh_detection(tmp_path):
+    _setup(tmp_path)
+    _add_candidate("c")
+    _inject("c", "bulk_relaxation", "completed")
+    _inject("c", "surface_relaxation", "completed", termination_index=0)
+    _inject("c", "O_adsorption", "completed", termination_index=0, site_index=2,
+            go_dev=0.1)
+    assert find_forgotten_jobs(EXPLOG, -1) == []    # OH category off
+
+
+def test_failed_bulk_candidate_is_not_forgotten(tmp_path):
+    _setup(tmp_path)
+    _add_candidate("c")
+    _inject("c", "bulk_relaxation", "failed")            # no winner -> dead end
+    assert find_forgotten_jobs(EXPLOG, THR) == []
+
+
+# ===========================================================================
+# Gate 2 message with the forgotten-jobs hint (pure formatter)
+# ===========================================================================
+
+def _fitem(cid, kind, t=None, s=None):
+    return {"candidate_id": cid, "kind": kind, "termination_index": t,
+            "site_index": s}
+
+
+def test_gate2_lists_forgotten_jobs():
+    jobs = [_fitem("matA", "bulk"), _fitem("matB", "O")]
+    msg = format_wait_gate2_refusal(jobs)
+    assert "matA" in msg and "matB" in msg
+    assert "supervisor" in msg.lower()                   # small list -> closer kept
+
+
+def test_gate2_caps_at_ten_and_reports_remainder():
+    jobs = [_fitem(f"mat{i}", "bulk") for i in range(12)]
+    msg = format_wait_gate2_refusal(jobs)
+    assert "mat0" in msg and "mat9" in msg               # first 10 shown
+    assert "mat10" not in msg and "mat11" not in msg     # capped out
+    assert "2 more" in msg
+    assert "once these 10 are taken care of" in msg.lower()
+
+
+def test_gate2_drops_closer_when_many_forgotten():
+    # > var.FORGOTTEN_CLOSER_SUPPRESS_ABOVE (30): plenty of work -> no
+    # supervisor/literature closer, just the list + remainder.
+    jobs = [_fitem(f"mat{i}", "bulk") for i in range(35)]
+    msg = format_wait_gate2_refusal(jobs)
+    assert "supervisor" not in msg.lower()
+    assert "literature" not in msg.lower()
+    assert "25 more" in msg                              # 35 - 10 shown
+
+
+def test_gate2_general_reminder_when_no_forgotten():
+    msg = format_wait_gate2_refusal([])
+    assert "n_O_started" in msg and "n_OH_started" in msg
+    assert "<NA>" in msg                                 # the eligibility semantics
+    assert "supervisor" in msg.lower()
+    assert "literature" in msg.lower()
+
+
+def test_evaluate_forwards_forgotten_jobs_to_gate2():
+    jobs = [_fitem("matZ", "surface")]
+    msg = evaluate_wait_entry(candidates_need_disposition=[], pending_count=3,
+                              has_running=True, enforce_queue_floor=True,
+                              queue_min_pending=15, forgotten_jobs=jobs)
+    assert msg == format_wait_gate2_refusal(jobs)
+    assert "matZ" in msg

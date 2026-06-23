@@ -4,10 +4,13 @@ These turn the STRUCTURED result of ``EXPLOG.get_disposition_info`` /
 ``EXPLOG.update_disposition_info`` into the single agent-facing sentence that the
 ``@tool`` in ``src/tools.py`` hands back to the worker. The prose lives here
 (rather than in ``src/tools.py``) so it can be unit-tested without importing
-``src.tools`` -- which loads the GNoME database on import. Only stdlib imports.
+``src.tools`` -- which loads the GNoME database on import. Imports only the stdlib
+plus the tiny stdlib-only ``src.var`` config module (never ``src.tools``).
 """
 
 from typing import Any, Dict, Iterable, List
+
+from src import var
 
 
 # Machine job_type -> readable label used in agent messages.
@@ -199,21 +202,80 @@ def format_wait_gate1_refusal(candidate_ids: Iterable[str]) -> str:
     )
 
 
-def format_wait_gate2_refusal(pending_count: int, queue_min_pending: int) -> str:
+def _forgotten_job_line(item: Dict[str, Any]) -> str:
+    """One agent-facing line for a forgotten-work item from find_forgotten_jobs."""
+    cid = item.get("candidate_id")
+    kind = item.get("kind")
+    if kind == "bulk":
+        return f"{cid}: no bulk relaxation started -- start the bulk relaxation."
+    if kind == "surface":
+        return (f"{cid}: bulk finished but no surface relaxation started -- "
+                "start surface relaxations.")
+    if kind == "O":
+        return (f"{cid}: surface finished but no O adsorption started -- "
+                "start O adsorption jobs.")
+    if kind == "OH":
+        return (f"{cid}: competitive O site (termination "
+                f"{item.get('termination_index')}, site {item.get('site_index')}) "
+                "has no OH adsorption -- start OH there.")
+    return f"{cid}: ready unstarted work ({kind})."
+
+
+def format_wait_gate2_refusal(forgotten_jobs: Iterable[Dict[str, Any]] = ()) -> str:
     """Gate 2 refusal: analysis is current but the HPC queue is below its floor.
 
-    Routes the worker to refill the queue or, if it has no more ready work, back
-    to the supervisor to discuss expanding the study.
+    DELIBERATELY states no pending count / floor / headroom: a precise deficit is
+    a target the agent would game (submit just enough to clear the gate). Instead
+    it advises submitting a LARGE batch and, if available, lists up to 10 concrete
+    ready-but-unstarted items (from find_forgotten_jobs) to launch; otherwise it
+    points at the candidates df's per-stage progress columns.
+
+    When there are <= var.FORGOTTEN_CLOSER_SUPPRESS_ABOVE forgotten jobs it also
+    routes the worker back to the supervisor to discuss expanding submissions and
+    to ground decisions in a literature review; above that there is plainly plenty
+    of work, so that closer is dropped to keep the worker moving.
     """
-    headroom = queue_min_pending - pending_count
-    return (
-        f"Your analysis is up to date, but the HPC queue is low: only "
-        f"{pending_count} job(s) are pending against a floor of "
-        f"{queue_min_pending} (room for ~{headroom} more). Before waiting, "
-        "submit more ready work to keep the queue stocked. If you have no more "
-        "ready work to submit, return to the supervisor to discuss expanding the "
-        "study. (When winding the study down, the supervisor can lift this floor.)"
+    header = (
+        "The HPC queue is running low -- submit a large batch of new jobs now to "
+        "keep the cluster well fed. Aim to queue many jobs (on the order of 40-50 "
+        "or more), not just the bare minimum, so utilization stays high while "
+        "results come in."
     )
+
+    jobs = list(forgotten_jobs)
+    if jobs:
+        shown = jobs[:10]
+        listing = "\n".join("  - " + _forgotten_job_line(j) for j in shown)
+        body = "Ready, unstarted work you can launch right now:\n" + listing
+        extra = len(jobs) - len(shown)
+        if extra > 0:
+            body += (
+                f"\n... and {extra} more forgotten job(s), which will be listed "
+                "once these 10 are taken care of."
+            )
+    else:
+        body = (
+            "No ready-but-unstarted work was detected automatically. To find "
+            "more, filter the candidates table with query_explog on the per-stage "
+            "progress columns -- n_surface_started, n_O_started, n_OH_started "
+            "(and the n_*_finalized variants): for each, <NA> means the candidate "
+            "is not yet eligible for that stage while == 0 means eligible but not "
+            "yet started (so n_O_started == 0 lists candidates whose surface "
+            "finished but no O job was launched, and n_OH_started == 0 those "
+            "ready for OH). Also revisit your reports and summaries, review the "
+            "decision notes, and consider adding new AQ-GNoME candidates."
+        )
+
+    parts = [header, body]
+    if len(jobs) <= var.FORGOTTEN_CLOSER_SUPPRESS_ABOVE:
+        parts.append(
+            "Also return to the supervisor to discuss how best to expand the "
+            "submissions, and consider a literature review (e.g. arXiv_search) to "
+            "inform which candidates and adsorption sites are most worth pursuing "
+            "-- let both your and the supervisor's decisions be guided by that "
+            "literature."
+        )
+    return " ".join(parts)
 
 
 def format_wait_exit_disposition_hint(candidate_ids: Iterable[str]) -> str:
@@ -239,6 +301,7 @@ def evaluate_wait_entry(
     has_running: bool,
     enforce_queue_floor: bool,
     queue_min_pending: int,
+    forgotten_jobs: Iterable[Dict[str, Any]] = (),
 ) -> str:
     """Decide whether wait_for_update may proceed. Returns a refusal message, or
     ``None`` to proceed into the wait loop. Precedence:
@@ -247,6 +310,11 @@ def evaluate_wait_entry(
       2. Gate 2 (iff enforce_queue_floor AND queue_min_pending > 0): the queue
          must be at/above its floor -- a non-positive floor is a hard off-switch.
       3. Nothing pending or running -> nothing to wait for.
+
+    The numeric inputs (pending_count, queue_min_pending) drive the Gate 2
+    DECISION only; they are never shown to the agent (the Gate 2 message states no
+    deficit, to avoid making the floor a gameable target). ``forgotten_jobs``
+    (from find_forgotten_jobs) is passed through to the Gate 2 message.
 
     Gate 2 precedes the nothing-to-wait check so that, when the floor is active,
     a drained queue yields the (more actionable) refill/expand message rather
@@ -259,7 +327,7 @@ def evaluate_wait_entry(
         and queue_min_pending > 0
         and pending_count < queue_min_pending
     ):
-        return format_wait_gate2_refusal(pending_count, queue_min_pending)
+        return format_wait_gate2_refusal(forgotten_jobs)
     if pending_count == 0 and not has_running:
         return MSG_NOTHING_TO_WAIT_FOR
     return None

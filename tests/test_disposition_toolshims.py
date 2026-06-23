@@ -215,5 +215,6 @@ def test_wait_refuses_when_queue_below_floor(tmp_path):
     _inject("matX", "surface_relaxation", "pending", termination_index=1)
     out = T.wait_for_update.invoke({"patience": 1})        # Gate 2 fires -> refusal
     assert isinstance(out, str)
-    assert str(var.QUEUE_MIN_PENDING) in out               # names the live queue floor
+    assert "queue is running low" in out.lower()           # the Gate 2 header
+    assert "matX" in out                                   # lists matX's forgotten work
     assert "supervisor" in out.lower()                     # routes back to supervisor

@@ -35,7 +35,14 @@ DISPOSITION_DECISIONS = ("Abandon", "Investigating", "Sufficient")
 # G(O) deviation (|G(O) - 2.46| eV) at/under which an O-adsorption site is
 # "competitive" enough to warrant an OH job. Used by the forgotten-OH reminder
 # and cited by requirement-13 in the worker prompt so the two stay consistent.
+# Set negative to disable forgotten-OH detection entirely.
 GO_DEV_OH_THRESHOLD = 0.3
+
+# When the wait-tool's Gate-2 message lists more than this many forgotten jobs,
+# there is plainly plenty of work to do, so it drops the "return to the
+# supervisor / do a literature review" closer and just tells the worker to get on
+# with it. At or below this count the closer is kept.
+FORGOTTEN_CLOSER_SUPPRESS_ABOVE = 30
 
 # Process ids that were already finalized before the first resume after the
 # disposition-gate rollout. The wait-tool's Gate-1 coverage check treats these

@@ -63,6 +63,7 @@ from src.disposition_messages import (
     format_wait_exit_disposition_hint,
     evaluate_wait_entry,
 )
+from src.forgotten_jobs import find_forgotten_jobs
 from gnome_dreams_oer_screening.vasp.magnetic_enumeration import (
     count_magnetic_sites_from_formula
 )
@@ -242,6 +243,7 @@ def wait_for_update(
         has_running=("running" in statusList),
         enforce_queue_floor=getattr(var, "enforce_queue_floor", True),
         queue_min_pending=var.QUEUE_MIN_PENDING,
+        forgotten_jobs=find_forgotten_jobs(EXPLOG, var.GO_DEV_OH_THRESHOLD),
     )
     if gate_msg is not None:
         return gate_msg
