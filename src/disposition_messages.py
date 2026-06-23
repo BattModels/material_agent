@@ -62,8 +62,16 @@ def format_get_disposition(candidate_id: str, outstanding: Dict[str, Any]) -> st
     summarize for ``candidate_id``.
 
     ``outstanding`` is the dict returned by ``candidate_outstanding`` --
-    ``{must_cover, legacy_optional, latest_disposition, has_finalized}``.
+    ``{must_cover, legacy_optional, latest_disposition, has_finalized}`` -- or
+    ``{"unknown_candidate": True}`` when the candidate is not in the log.
     """
+    # The candidate id was not found in the experiment log.
+    if outstanding.get("unknown_candidate"):
+        return (
+            f"No candidate '{candidate_id}' exists in the experiment log. "
+            f"Check the candidate id and try again."
+        )
+
     must = outstanding.get("must_cover", []) or []
     latest = outstanding.get("latest_disposition")
 
@@ -138,6 +146,15 @@ def format_update_disposition(
             f"{allowed}. Then call update_disposition_info again."
         )
 
+    # Cited ids that belong to a different candidate (or do not exist): name them.
+    if status == "foreign_ids":
+        ids = ", ".join(str(i) for i in result.get("ids", []))
+        return (
+            f"These process ids do not belong to candidate {candidate_id}: "
+            f"{ids}. Cite only {candidate_id}'s own finished results (see "
+            f"get_disposition_info), then call update_disposition_info again."
+        )
+
     # Cited ids that are not finished yet: name them; the agent waits or omits.
     if status == "non_terminal_ids":
         ids = ", ".join(str(i) for i in result.get("ids", []))
@@ -189,13 +206,20 @@ MSG_NOTHING_TO_WAIT_FOR = (
 def format_wait_gate1_refusal(candidate_ids: Iterable[str]) -> str:
     """Gate 1 refusal: finished results are not yet tied back to a disposition.
 
-    Names the offending candidates and the exact two-step workflow to clear
-    them. Gate 1 is ALWAYS enforced -- analysis must be current before waiting.
+    Names the offending candidates (capped at 10 + a remainder count, so a large
+    backlog -- e.g. the first post-rollout resume -- cannot dump hundreds of ids
+    into one message) and the exact two-step workflow to clear them. Gate 1 is
+    ALWAYS enforced -- analysis must be current before waiting.
     """
-    ids = ", ".join(str(c) for c in candidate_ids)
+    ids_list = [str(c) for c in candidate_ids]
+    shown = ids_list[:10]
+    listing = ", ".join(shown)
+    extra = len(ids_list) - len(shown)
+    if extra > 0:
+        listing += f" (and {extra} more)"
     return (
         "You cannot wait yet: these candidates have finished results you have "
-        f"not yet summarized into a disposition: {ids}. For each, call "
+        f"not yet summarized into a disposition: {listing}. For each, call "
         "get_disposition_info(candidate_id) to see what needs summarizing, then "
         "update_disposition_info(...) to record your reading of the results. "
         "Once every finished result is dispositioned you may wait."
@@ -307,27 +331,38 @@ def evaluate_wait_entry(
     ``None`` to proceed into the wait loop. Precedence:
 
       1. Gate 1 (always): finished work must be dispositioned first.
-      2. Gate 2 (iff enforce_queue_floor AND queue_min_pending > 0): the queue
-         must be at/above its floor -- a non-positive floor is a hard off-switch.
-      3. Nothing pending or running -> nothing to wait for.
+      2. Nothing in flight (no pending, no running): "nothing to wait for" --
+         UNLESS the floor is armed AND there is detectable ready work, in which
+         case the (more actionable) Gate 2 refill message wins. A genuinely idle
+         worker with no detectable work is therefore NOT pushed to submit a large
+         batch, even with the floor on (that case routes to the supervisor).
+      3. Something in flight but the queue is below its floor (and the floor is
+         armed) -> Gate 2 refill.
+      4. Otherwise -> proceed (None).
 
     The numeric inputs (pending_count, queue_min_pending) drive the Gate 2
     DECISION only; they are never shown to the agent (the Gate 2 message states no
     deficit, to avoid making the floor a gameable target). ``forgotten_jobs``
-    (from find_forgotten_jobs) is passed through to the Gate 2 message.
-
-    Gate 2 precedes the nothing-to-wait check so that, when the floor is active,
-    a drained queue yields the (more actionable) refill/expand message rather
-    than "nothing to wait for".
+    (from find_forgotten_jobs) is passed through to the Gate 2 message. A
+    non-positive floor or enforce_queue_floor=False disarms Gate 2 entirely.
     """
     if candidates_need_disposition:
         return format_wait_gate1_refusal(candidates_need_disposition)
-    if (
+
+    jobs = list(forgotten_jobs)
+    gate2_armed = (
         enforce_queue_floor
         and queue_min_pending > 0
         and pending_count < queue_min_pending
-    ):
-        return format_wait_gate2_refusal(forgotten_jobs)
+    )
+
     if pending_count == 0 and not has_running:
+        # Nothing to wait for. Only push to refill if the floor is armed AND we
+        # actually have ready work to point the worker at.
+        if gate2_armed and jobs:
+            return format_wait_gate2_refusal(jobs)
         return MSG_NOTHING_TO_WAIT_FOR
+
+    if gate2_armed:
+        return format_wait_gate2_refusal(jobs)
     return None

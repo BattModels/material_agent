@@ -213,3 +213,39 @@ def test_update_unknown_candidate_does_not_crash(tmp_path):
     res = EXPLOG.update_disposition_info("ghost", "s", [], "f", "Investigating")
     assert res["status"] == "unknown_candidate"
     assert res["ok"] is False
+
+
+def test_get_unknown_candidate_is_flagged(tmp_path):
+    _setup(tmp_path)                                          # no candidate added
+    res = EXPLOG.get_disposition_info("ghost")
+    assert res.get("unknown_candidate") is True              # not a vacuous success
+
+
+def test_update_rejects_ids_from_another_candidate(tmp_path):
+    _setup(tmp_path)
+    _add_candidate("c")
+    _add_candidate("other")
+    pid_self = _inject("c", "surface_relaxation", "completed", termination_index=0)
+    pid_foreign = _inject("other", "surface_relaxation", "completed",
+                          termination_index=0)              # belongs to 'other'
+    EXPLOG.get_disposition_info("c")
+    res = _update("c", [pid_self, pid_foreign])
+    assert res["status"] == "foreign_ids"
+    assert pid_foreign in res["ids"]
+    assert pid_self not in res["ids"]                        # only the foreign one
+    assert _dispositions("c") == []                          # nothing written
+
+
+def test_update_self_heals_disposition_columns_on_resume(tmp_path):
+    # Simulate a pre-rollout checkpoint: drop the four disposition columns, then
+    # call update WITHOUT a prior get/update_log -- it must self-heal and return
+    # "locked" (the write-lock), never KeyError.
+    _setup(tmp_path)
+    _add_candidate("c")
+    pid = _inject("c", "surface_relaxation", "completed", termination_index=0)
+    cdf = EXPLOG.relational_frame.candidates.df
+    cdf.drop(columns=["disposition_record", "decision",
+                      "ready_for_disposition_update", "needs_disposition_update"],
+             inplace=True, errors="ignore")
+    res = EXPLOG.update_disposition_info("c", "s", [pid], "f", "Investigating")
+    assert res["status"] == "locked"                         # healed, not crashed

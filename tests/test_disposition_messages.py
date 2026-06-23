@@ -134,3 +134,18 @@ def test_unknown_candidate_update_message():
     # must NOT read like a success or echo a recorded disposition
     assert "Recorded" not in msg
     assert "Decision:" not in msg
+
+
+def test_foreign_ids_update_message_names_them():
+    msg = format_update_disposition(
+        "matX", {"ok": False, "status": "foreign_ids", "ids": [42, 99]}, ALLOWED)
+    assert "42" in msg and "99" in msg       # the offending ids
+    assert "matX" in msg                     # they do not belong to this candidate
+    assert "Recorded" not in msg             # not a success
+
+
+def test_get_message_unknown_candidate():
+    msg = format_get_disposition("ghost", {"unknown_candidate": True})
+    assert "ghost" in msg                    # names the offending candidate id
+    assert "experiment log" in msg.lower()   # explains it is not in the log
+    assert "no prior disposition" not in msg.lower()  # must not read like success

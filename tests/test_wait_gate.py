@@ -166,6 +166,16 @@ def test_gate1_refusal_names_candidates_and_both_tools():
     assert "update_disposition_info" in msg
 
 
+def test_gate1_refusal_caps_long_candidate_list():
+    # A big backlog (e.g. first post-rollout resume) must not dump every id into
+    # one message: show at most 10 + a "(and N more)" remainder.
+    cands = [f"mat{i}" for i in range(12)]
+    msg = format_wait_gate1_refusal(cands)
+    assert "mat0" in msg and "mat9" in msg          # first 10 shown
+    assert "mat10" not in msg and "mat11" not in msg  # capped out
+    assert "2 more" in msg
+
+
 def test_gate2_refusal_states_no_numeric_deficit_and_routes_to_supervisor():
     # Anti-gaming: the Gate 2 message advises a LARGE batch but never states a
     # pending count / floor / headroom the agent could barely clear.
@@ -232,6 +242,28 @@ def test_evaluate_proceeds_when_current_and_queue_full():
                               has_running=False, enforce_queue_floor=True,
                               queue_min_pending=15)
     assert msg is None
+
+
+def test_evaluate_nothing_in_flight_no_work_is_not_pushed_to_submit():
+    # Nothing pending/running AND no detectable ready work -> "nothing to wait
+    # for", NOT the Gate 2 "submit a large batch" push, even with the floor on
+    # (a genuinely-idle/done worker should not be told to submit 40-50 jobs).
+    msg = evaluate_wait_entry(candidates_need_disposition=[], pending_count=0,
+                              has_running=False, enforce_queue_floor=True,
+                              queue_min_pending=15, forgotten_jobs=[])
+    assert msg == MSG_NOTHING_TO_WAIT_FOR
+
+
+def test_evaluate_nothing_in_flight_but_forgotten_work_lists_it():
+    # Drained queue but detectable ready work -> still surface the actionable
+    # forgotten-jobs list rather than the terse nothing-to-wait message.
+    jobs = [{"candidate_id": "matZ", "kind": "bulk",
+             "termination_index": None, "site_index": None}]
+    msg = evaluate_wait_entry(candidates_need_disposition=[], pending_count=0,
+                              has_running=False, enforce_queue_floor=True,
+                              queue_min_pending=15, forgotten_jobs=jobs)
+    assert msg == format_wait_gate2_refusal(jobs)
+    assert "matZ" in msg
 
 
 # ===========================================================================
