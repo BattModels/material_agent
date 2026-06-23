@@ -162,3 +162,104 @@ def format_update_disposition(
 
     # Defensive fallback for an unrecognised status.
     return f"Unexpected disposition result for {candidate_id}: {status!r}."
+
+
+# ===========================================================================
+# wait_for_update gate prose + the pure entry decision
+#
+# wait_for_update (src/tools.py) is a sleep/poll loop, so its entry-gate
+# DECISION is factored out here as a pure function over scalars + the prose it
+# selects. This keeps the gate logic testable without importing src.tools (which
+# loads the GNoME database). The loop itself only gathers the inputs (from the
+# nested EXPLOG helpers + var) and returns whatever message this hands back.
+# ===========================================================================
+
+# Returned (unchanged from the original tool) when there is genuinely nothing to
+# wait for: no pending and no running work, and no analysis owed.
+MSG_NOTHING_TO_WAIT_FOR = (
+    "No pending or running jobs found in the EXPLOG. Please check the EXPLOG "
+    "and see if there is anything you can do to move the study forward, instead "
+    "of waiting for updates."
+)
+
+
+def format_wait_gate1_refusal(candidate_ids: Iterable[str]) -> str:
+    """Gate 1 refusal: finished results are not yet tied back to a disposition.
+
+    Names the offending candidates and the exact two-step workflow to clear
+    them. Gate 1 is ALWAYS enforced -- analysis must be current before waiting.
+    """
+    ids = ", ".join(str(c) for c in candidate_ids)
+    return (
+        "You cannot wait yet: these candidates have finished results you have "
+        f"not yet summarized into a disposition: {ids}. For each, call "
+        "get_disposition_info(candidate_id) to see what needs summarizing, then "
+        "update_disposition_info(...) to record your reading of the results. "
+        "Once every finished result is dispositioned you may wait."
+    )
+
+
+def format_wait_gate2_refusal(pending_count: int, queue_min_pending: int) -> str:
+    """Gate 2 refusal: analysis is current but the HPC queue is below its floor.
+
+    Routes the worker to refill the queue or, if it has no more ready work, back
+    to the supervisor to discuss expanding the study.
+    """
+    headroom = queue_min_pending - pending_count
+    return (
+        f"Your analysis is up to date, but the HPC queue is low: only "
+        f"{pending_count} job(s) are pending against a floor of "
+        f"{queue_min_pending} (room for ~{headroom} more). Before waiting, "
+        "submit more ready work to keep the queue stocked. If you have no more "
+        "ready work to submit, return to the supervisor to discuss expanding the "
+        "study. (When winding the study down, the supervisor can lift this floor.)"
+    )
+
+
+def format_wait_exit_disposition_hint(candidate_ids: Iterable[str]) -> str:
+    """Trailing line for a wait EXIT: the candidates whose work just finalized.
+
+    Empty when nothing finalized (the wait exited on timeout) -> returns "" so
+    the caller can append unconditionally.
+    """
+    ids = [str(c) for c in candidate_ids]
+    if not ids:
+        return ""
+    return (
+        f"\nFinished work belongs to candidate(s): {', '.join(ids)}. Before "
+        "waiting again, summarize their finished results with "
+        "get_disposition_info then update_disposition_info."
+    )
+
+
+def evaluate_wait_entry(
+    *,
+    candidates_need_disposition: List[str],
+    pending_count: int,
+    has_running: bool,
+    enforce_queue_floor: bool,
+    queue_min_pending: int,
+) -> str:
+    """Decide whether wait_for_update may proceed. Returns a refusal message, or
+    ``None`` to proceed into the wait loop. Precedence:
+
+      1. Gate 1 (always): finished work must be dispositioned first.
+      2. Gate 2 (iff enforce_queue_floor AND queue_min_pending > 0): the queue
+         must be at/above its floor -- a non-positive floor is a hard off-switch.
+      3. Nothing pending or running -> nothing to wait for.
+
+    Gate 2 precedes the nothing-to-wait check so that, when the floor is active,
+    a drained queue yields the (more actionable) refill/expand message rather
+    than "nothing to wait for".
+    """
+    if candidates_need_disposition:
+        return format_wait_gate1_refusal(candidates_need_disposition)
+    if (
+        enforce_queue_floor
+        and queue_min_pending > 0
+        and pending_count < queue_min_pending
+    ):
+        return format_wait_gate2_refusal(pending_count, queue_min_pending)
+    if pending_count == 0 and not has_running:
+        return MSG_NOTHING_TO_WAIT_FOR
+    return None

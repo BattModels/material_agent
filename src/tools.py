@@ -57,7 +57,12 @@ import copy
 from aq_gnome import Data_Handler, Stable_Entries, Stability_Criteria, get_simplified_df, atoms_from_db
 from gnome_dreams_oer_screening.oer.oer_study import OER_catalyst_study
 from gnome_dreams_oer_screening.explog.explog import EXPLOG
-from src.disposition_messages import format_get_disposition, format_update_disposition
+from src.disposition_messages import (
+    format_get_disposition,
+    format_update_disposition,
+    format_wait_exit_disposition_hint,
+    evaluate_wait_entry,
+)
 from gnome_dreams_oer_screening.vasp.magnetic_enumeration import (
     count_magnetic_sites_from_formula
 )
@@ -226,8 +231,20 @@ def wait_for_update(
     with no updates, returns a timeout message prompting further action.
     """
     statusList = EXPLOG.relational_frame.processes.df["status"].tolist()
-    if 'pending' not in statusList and 'running' not in statusList:
-        return "No pending or running jobs found in the EXPLOG. Please check the EXPLOG and see if there is anything you can do to move the study forward, instead of waiting for updates."
+    # Entry gates (pure decision in src.disposition_messages.evaluate_wait_entry):
+    #   Gate 1 (always): every finished result must be tied back to a disposition.
+    #   Gate 2 (iff var.enforce_queue_floor and var.QUEUE_MIN_PENDING > 0): keep
+    #           the HPC queue at/above its pending floor.
+    # Either refusal -- or the legacy "nothing to wait for" message -- short-circuits.
+    gate_msg = evaluate_wait_entry(
+        candidates_need_disposition=EXPLOG.candidates_needing_disposition(),
+        pending_count=EXPLOG.job_handler.count_pending(),
+        has_running=("running" in statusList),
+        enforce_queue_floor=getattr(var, "enforce_queue_floor", True),
+        queue_min_pending=var.QUEUE_MIN_PENDING,
+    )
+    if gate_msg is not None:
+        return gate_msg
 
     waitStartTime = time.time()
     
@@ -269,14 +286,27 @@ def wait_for_update(
         print('-----------------------\n')
 
 
-        if len(tmpUpdate) > 0:
+        # Batch-aware exit: a bulk/OH sub-job counts as an exit only once its
+        # whole batch is terminal (surface/O always count); the result expands
+        # to the full finalized unit so the report is complete regardless of
+        # which poll finished which sub-job.
+        exit_ids = EXPLOG.job_handler.finalized_exit_ids(tmpUpdate.keys())
+        print('Batch-aware exit ids:', exit_ids)
+
+        if exit_ids:
             hWaited = int((time.time() - waitStartTime)/3600)
             mWaited = int(((time.time() - waitStartTime)%3600)/60)
 
+            pdf = EXPLOG.relational_frame.processes.df
+            fin = pdf[pdf["process_id"].isin(exit_ids)].sort_values("process_id")
+
             outText = f"Total time elapsed since project start {timeElapsed}, time waited: {hWaited}hours and {mWaited} minutes.\n Here are the updates while you are waiting: "
-            for key, value in tmpUpdate.items():
-                outText += f"\nprocess_id {key} status is now {value}."
-            
+            for _, r in fin.iterrows():
+                outText += f"\nprocess_id {int(r['process_id'])} status is now {r['status']}."
+            # Name the candidates whose work finalized + how to disposition them.
+            fin_cands = sorted({str(c) for c in fin["candidate_id"].tolist()})
+            outText += format_wait_exit_disposition_hint(fin_cands)
+
             id = CANVAS.register_tool_output(
                 tool_name="wait_for_update",
                 args={
@@ -288,8 +318,8 @@ def wait_for_update(
                 metadata={
                     "patience": patience,
                 }
-            )    
-            
+            )
+
             return f"{outText}\nMessage_ID={id}. Please refer to this ID for the updates while waiting."
         elif time.time() - waitStartTime > patience*60:
             

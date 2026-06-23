@@ -182,3 +182,38 @@ def test_enforce_queue_floor_bridge_fallback_true():
     class _OldStep:
         pass
     assert getattr(_OldStep(), "enforce_queue_floor", True) is True
+
+
+# ===========================================================================
+# wait_for_update entry gates, end-to-end (refusals short-circuit before the
+# sleep loop, so these exercise the real tool without waiting)
+# ===========================================================================
+
+def test_wait_refuses_until_finished_work_is_dispositioned(tmp_path):
+    _setup(tmp_path)
+    _add_candidate("matX")
+    _inject("matX", "surface_relaxation", "completed", termination_index=7)
+    out = T.wait_for_update.invoke({"patience": 1})        # Gate 1 fires -> refusal
+    assert isinstance(out, str)
+    assert "matX" in out                                   # names the candidate
+    assert "get_disposition_info" in out and "update_disposition_info" in out
+
+
+def test_wait_refuses_when_queue_below_floor(tmp_path):
+    _setup(tmp_path)
+    var.enforce_queue_floor = True
+    var.QUEUE_MIN_PENDING = 12        # distinctive floor; asserted via var, not a literal
+    _add_candidate("matX")
+    # finished work, fully dispositioned -> Gate 1 satisfied; queue then below floor.
+    pid = _inject("matX", "surface_relaxation", "completed", termination_index=0)
+    T.get_disposition_info.invoke({"candidate_id": "matX"})
+    T.update_disposition_info.invoke({
+        "candidate_id": "matX", "Summary": "s",
+        "Summarized_process_id": [pid], "Future_plan": "f",
+        "Decision": "Investigating",
+    })
+    _inject("matX", "surface_relaxation", "pending", termination_index=1)
+    out = T.wait_for_update.invoke({"patience": 1})        # Gate 2 fires -> refusal
+    assert isinstance(out, str)
+    assert str(var.QUEUE_MIN_PENDING) in out               # names the live queue floor
+    assert "supervisor" in out.lower()                     # routes back to supervisor
