@@ -84,6 +84,7 @@ class myStep(BaseModel):
                             "search_artifacts",
                             ""
                 ]] = Field(f"must-use tools for this step, should be a subset of the tools available to the agent. read the CANVAS with key Worker_available_tools to see more details about each tools.")
+    enforce_queue_floor: bool = Field(True, description="Whether the worker must keep the HPC queue stocked with ready work before it may wait for current jobs to finish. Keep True to ensure maximum HPC utilization (generally desirable): if the queue falls below the floor while HPC resources are free and the worker has no more ready work to submit, the worker returns to the supervisor to discuss expanding the study, rather than being allowed to pause and wait. Set False only when winding the study down -- when the remaining time is too short for newly-submitted jobs to finish, or when further submissions would no longer meaningfully advance the study -- so the worker may instead wait for and finalize the in-flight results.")
 
 class myPastStep(BaseModel):
     """Step in the plan."""
@@ -804,6 +805,10 @@ def worker_agent_node(state, config, agent=None, name=None):
     #         f.write(plan_str)
     #         f.write("\n")
     task = plan[0]
+    # Bridge the per-task queue-floor flag to the global wait_for_update tool
+    # (Gate 2, Step 6). Re-derived from plan[0] every turn, so it survives resume;
+    # defaults True when the supervisor omits it.
+    var.enforce_queue_floor = getattr(task, "enforce_queue_floor", True)
 #     task_formatted = f"""For the following plan:
 # {plan_str}\n\nYou are tasked with executing step {1}, {task}."""
     old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step} [total time elapsed since project start: {str(step.timeStamp).split('.')[0]}, time spent on step {i+1}: {step.timeSpent}]" for i, step in enumerate(state["past_steps"]))

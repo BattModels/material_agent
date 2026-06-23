@@ -17,9 +17,11 @@ reportName = ""
 QUEUE_MIN_PENDING = 15
 
 # --- Disposition gate ---------------------------------------------------------
-# Per-task queue-floor switch. Default enforced; the supervisor clears it only
-# when winding the study down (set per-task in worker_agent_node before the
-# worker agent runs). Read by wait_for_update's Gate 2.
+# Runtime slot mirroring the CURRENT task's `myStep.enforce_queue_floor` (the
+# authoritative per-task default lives there). worker_agent_node copies
+# plan[0].enforce_queue_floor here each turn (re-derived on resume); Gate 2 in
+# wait_for_update reads it via getattr(var, "enforce_queue_floor", True). This
+# initial value is just the pre-first-turn fallback, NOT a config knob.
 enforce_queue_floor = True
 
 # The fixed Decision vocabulary for a candidate disposition. Three mutually
