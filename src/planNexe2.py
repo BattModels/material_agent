@@ -1167,14 +1167,21 @@ class judge():
             with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
                 f.write(f"Judge Agent is processing!!!!!\n")
         
+        agent_response = {}
+        patient = 3
+        while 'verdict' not in agent_response or 'reasoning' not in agent_response:
         # print(input)    
-        agent_response_raw = self.llm.invoke(input)
-        # print(agent_response_raw)
-        agent_response = agent_response_raw['raw'].content[0]['input']
-        # print(agent_response)
-        # 'input_tokens': 2102, 'output_tokens': 393, '
-        token_usage = agent_response_raw['raw'].usage_metadata
-        # print(token_usage)
+            patient -= 1
+            agent_response_raw = self.llm.invoke(input)
+            # print(agent_response_raw)
+            agent_response = agent_response_raw['raw'].content[0]['input']
+            # 'input_tokens': 2102, 'output_tokens': 393, '
+            token_usage = agent_response_raw['raw'].usage_metadata
+            # print(token_usage)
+            if patient <= 0:
+                print(agent_response)
+                print("Judge Agent failed to give a valid response after 3 attempts. Exiting.")
+                exit()
         
         outStr = f"Judge's verdict: {agent_response['verdict']}\nJudge's reasoning: {agent_response['reasoning']}\nJudge's token usage: input_tokens: {token_usage['input_tokens']}, output_tokens: {token_usage['output_tokens']}"
         print(outStr)

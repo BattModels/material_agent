@@ -3748,7 +3748,7 @@ def get_convergence_suggestions(
     # config = load_config(os.path.join('./config', "default.yaml"))
     config = var.OTHER_GLOBAL_VARIABLES
     # llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-    workerllm = ChatAnthropic(model="claude-haiku-4-5", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    workerllm = ChatAnthropic(model="claude-sonnet-4-5-20250929", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # llm = ChatAnthropic(model="claude-3-5-sonnet-20241022", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # workerllm = ChatAnthropic(model="claude-3-5-sonnet-20241022", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # llm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
@@ -3790,7 +3790,8 @@ def get_convergence_suggestions(
     conv_thr: Convergence threshold for self-consistent loop.
     electron_maxstep: Maximum number of SCF iterations.
     kspacing: K-point spacing (in Angstrom^-1). Lower value means more k-points and better accuracy.
-    and Any additional QE parameters from the official QE documentation could be added. Do not add any additional input parameters that conflict with above settings!
+    
+    Additionally, not limited to above input settings, you may suggest Any additional QE parameters from the official QE documentation could be added, as long as those additional input settings does not conflict with above settings!
     """
                 
                 invokingMsg = [
@@ -3829,7 +3830,8 @@ def get_convergence_suggestions(
     conv_thr: Convergence threshold for self-consistent loop.
     electron_maxstep: Maximum number of SCF iterations.
     kspacing: K-point spacing (in Angstrom^-1). Lower value means more k-points and better accuracy.
-    and Any additional QE parameters from the official QE documentation could be added. Do not add any additional input parameters that conflict with above settings!
+
+    Additionally, not limited to above input settings, you may suggest Any additional QE parameters from the official QE documentation could be added, as long as those additional input settings does not conflict with above settings!
     """
                 
                 invokingMsg = [
@@ -4042,7 +4044,7 @@ def find_optimal_parameter(
             "comparison_mode": comparison_mode,
         },
         value=chosen[1],
-        description=f"The most optimal parameter value for production run based on the reference file {reference_file} and the threshold {threshold} ({comparison_mode} comparison). The chosen parameter value is {chosen[1]} with file name {chosen[0]}. It is totally okay for agent to use filenames ending with .pwi since, in that case, the tool automatically append .pwo to the all filenames to read the output files.",
+        description=f"The most optimal parameter value for production run based on the reference file {reference_file} (**MUST BE INCLUDED IN THE LIST**) and the threshold {threshold} ({comparison_mode} comparison). The chosen parameter value is {chosen[1]} with file name {chosen[0]}. It is totally okay for agent to use filenames ending with .pwi since, in that case, the tool automatically append .pwo to the all filenames to read the output files.",
         context=context,
         reasons=merged_reasons,
         parent_result_ids=parent_result_ids,
@@ -4416,7 +4418,7 @@ def find_optimal_parameter_from_derived(
     description = (
         f"Optimal {sweeping_parameter} = {chosen_axis_value} selected "
         f"from a derived-quantity convergence test. Reference data "
-        f"point: {sweeping_parameter}={reference_axis_value}, "
+        f"point: {sweeping_parameter}={reference_axis_value} (**MUST BE INCLUDED IN THE LIST**), "
         f"quantity={reference_quantity}. Threshold (absolute): "
         f"{threshold}. "
         f"\n\n"

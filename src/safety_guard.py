@@ -259,6 +259,16 @@ class IssueCategory(str):
     """
     # Claim-level: the claim's value doesn't match its registered artifact.
     VALUE_MISMATCH_CLAIM = "value_mismatch_claim"
+    # Claim-level: the claim's value DOES match the artifact numerically,
+    # but the artifact's producing tool / result_description is a
+    # categorically wrong source for a quantity of the kind named in the
+    # claim (e.g. `optimal_n_layers` backed by a `math_expression_tool`
+    # identity op rather than a `find_optimal_parameter`-family call;
+    # `optimal_ecutwfc_Ry` backed by a `read_energy_from_output` whose
+    # numeric output happens to coincide with the cutoff value). The
+    # numeric match passed; the categorical claim<->source mismatch
+    # failed.
+    CLAIM_SOURCE_MISMATCH = "claim_source_mismatch"
     # Per-parameter: a parameter's value doesn't match the upstream artifact
     # it was sourced from (deterministic check, before any judge involvement).
     VALUE_MISMATCH_PARAM = "value_mismatch_param"
@@ -374,6 +384,29 @@ REMEDIATION_OPTIONS: Dict[str, List[str]] = {
         "If the claim is pointing at the wrong artifact (e.g. the agent "
         "captured the result_id of an intermediate calculation instead of "
         "the final one), update the `result_id` to the correct artifact.",
+    ],
+    IssueCategory.CLAIM_SOURCE_MISMATCH: [
+        "The claim's value matches the artifact numerically, but the "
+        "artifact's producing tool (or its agent-written description) is "
+        "not a coherent source for a quantity of this kind. The fix is "
+        "to obtain the value from the RIGHT tool for the claimed "
+        "quantity — for example, an `optimal_*` quantity must come from "
+        "`find_optimal_parameter` / `find_optimal_parameter_from_derived` "
+        "with a justified threshold; an adsorption / formation energy "
+        "must come from `calculate_formation_E`; an energy reading from "
+        "an output file must come from `read_energy_from_output`; a "
+        "lattice constant must come from `calculate_lc`. Identify the "
+        "correct tool for the claimed quantity, run it (or call the "
+        "selection-family tool with a relaxed threshold and a stated "
+        "scientific reason if no value meets the original threshold), "
+        "and cite the new artifact's `result_id` in the report.",
+        "If the claim's `quantity_name` was inaccurate (e.g. naming a "
+        "SPAN as a COUNT, or naming an INTERMEDIATE value as OPTIMAL), "
+        "rename the claim to honestly describe what the artifact "
+        "actually represents. Do this only when the artifact's value "
+        "really is what the corrected name says — do NOT rename to "
+        "paper over a categorical mismatch.",
+        _NO_REF_PATCHING_WARNING,
     ],
     IssueCategory.VALUE_MISMATCH_PARAM: [
         "The parameter's value does not match the upstream artifact it "
@@ -1495,6 +1528,251 @@ Return:
         f"_call_extraction_judge_llm: RETURN extracted={extracted_value!r} "
         f"verdict={result.get('verdict')!r} elapsed={elapsed:.2f}s "
         f"reasoning_preview={reasoning_preview!r}"
+    )
+    return result
+
+
+# =========================================================
+# Claim-to-source coherence judge
+# =========================================================
+#
+# This judge fires once per top-level claim in `verify_structured_report`,
+# AFTER the deterministic value match passes and BEFORE the recursive
+# per-parameter descent. It answers a question none of the existing
+# checks address: "the numbers match, but is the producing tool a
+# coherent SOURCE for a quantity of this kind?" The walker's
+# per-parameter judges only ask whether each input was set correctly
+# given the artifact's OWN study context; they never look UP at the
+# claim and ask "is this artifact the right thing to be backing a
+# claim called X." The result is that an agent can attach any
+# artifact whose registered value happens to numerically equal the
+# claim's value and slip past all per-parameter checks. This judge
+# closes that gap.
+
+
+def _lookup_tool_description(tool_name: str) -> Optional[str]:
+    """Return the registered docstring/description of `tool_name`.
+
+    The agent's worker prompt writes a `Worker_available_tools` block
+    on the CANVAS keyed by agent name (e.g. 'DFT_Agent', 'HPC_Agent'),
+    with the per-tool descriptions used to ground judge prompts.
+    Returns the first non-empty description found across agents, or
+    `None` if the tool isn't catalogued (the caller falls back to
+    inference from the tool name alone).
+    """
+    try:
+        catalog = CANVAS.canvas.get("Worker_available_tools")
+    except Exception as e:                                  # noqa: BLE001
+        _dbg(
+            f"_lookup_tool_description: tool={tool_name!r} CANVAS access "
+            f"raised {type(e).__name__}: {e} — returning None"
+        )
+        return None
+    if not isinstance(catalog, dict):
+        _dbg(
+            f"_lookup_tool_description: tool={tool_name!r} "
+            f"catalog_present={catalog is not None} "
+            f"catalog_is_dict=False — returning None"
+        )
+        return None
+    for _agent, _tools in catalog.items():
+        if not isinstance(_tools, dict):
+            continue
+        entry = _tools.get(tool_name)
+        if entry is None:
+            continue
+        # Entry can be either a description string directly OR a dict
+        # like {"description": "...", ...}. Handle both shapes.
+        if isinstance(entry, str) and entry.strip():
+            _dbg(
+                f"_lookup_tool_description: tool={tool_name!r} HIT under "
+                f"agent={_agent!r} shape='str' len={len(entry)}"
+            )
+            return entry
+        if isinstance(entry, dict):
+            desc = entry.get("description") or entry.get("doc") or entry.get("docstring")
+            if isinstance(desc, str) and desc.strip():
+                _dbg(
+                    f"_lookup_tool_description: tool={tool_name!r} HIT under "
+                    f"agent={_agent!r} shape='dict' len={len(desc)}"
+                )
+                return desc
+    _dbg(
+        f"_lookup_tool_description: tool={tool_name!r} MISS — not found "
+        f"under any agent in Worker_available_tools (n_agents="
+        f"{len(catalog)})"
+    )
+    return None
+
+
+def _call_claim_coherence_judge(
+    *,
+    claim_name: str,
+    claim_value: Any,
+    claim_unit: Optional[str],
+    claim_note: str,
+    claim_varied_parameters: List[str],
+    source_tool_name: str,
+    source_tool_description: Optional[str],
+    source_result_description: str,
+    source_args_json: str,
+    source_value_repr: str,
+    overall_goal: str,
+    judge,
+) -> Dict[str, Any]:
+    """Judge whether `source_*` is a coherent SOURCE for a claim named
+    `claim_name`.
+
+    Returns the standard {"verdict": "pass"|"fail"|"warning",
+    "reasoning": "..."} shape. `pass` means the source's tool family
+    legitimately produces a quantity of the kind named by the claim,
+    and the artifact's own description does not contradict that.
+    `fail` means a categorical mismatch (wrong tool family for the
+    kind of quantity, or the artifact's description disclaims being
+    what the claim says it is). `warning` is used when the tool isn't
+    in the catalogue and the judge cannot infer with confidence — in
+    that case the surrounding code can still surface the issue but
+    treats it as advisory.
+    """
+    overall_goal_text = overall_goal if overall_goal and overall_goal.strip() else "(not specified)"
+    unit_text = claim_unit if claim_unit else "(none specified)"
+    note_text = claim_note if claim_note else "(none)"
+    varied_text = (
+        ", ".join(claim_varied_parameters)
+        if claim_varied_parameters else "(none — not a sweep)"
+    )
+    if source_tool_description and source_tool_description.strip():
+        tool_doc_text = source_tool_description.strip()
+        tool_doc_provenance = (
+            "(from the catalogued worker tool description)"
+        )
+    else:
+        tool_doc_text = (
+            "(no catalogued description available — infer from the tool "
+            "name alone, conservatively)"
+        )
+        tool_doc_provenance = "(NOT catalogued; treat with extra caution)"
+
+    prompt = f"""
+You are auditing whether a top-level numerical claim in a scientific
+agent's structured report is backed by a coherent SOURCE artifact.
+
+The deterministic value check has already passed — the claim's value
+matches the artifact's registered output value numerically. Your job is
+DIFFERENT: decide whether the producing tool and the artifact's
+agent-written description are the right KIND of source for a quantity
+of the kind named in the claim.
+
+Overall study goal:
+{overall_goal_text}
+
+The CLAIM under review:
+  quantity_name:       {claim_name}
+  value:               {repr(claim_value)}
+  unit:                {unit_text}
+  note:                {note_text}
+  varied_parameters:   {varied_text}
+
+The SOURCE artifact backing the claim:
+  producing tool:                {source_tool_name}
+  tool description {tool_doc_provenance}:
+  \"\"\"
+  {tool_doc_text}
+  \"\"\"
+
+  description of the RESULT
+  this artifact represents:      {source_result_description}
+  args:                          {source_args_json}
+  registered output value:       {source_value_repr}
+
+Decide whether the source is COHERENT for the claim:
+
+1. TOOL-DOMAIN MATCH
+   - Does the producing tool's documented purpose match the kind of
+     quantity the claim names?
+   - Selection-of-optimal-X quantities (names like 'optimal_*',
+     'converged_*', 'best_*') must come from selection-family tools
+     such as `find_optimal_parameter` or `find_optimal_parameter_from_derived`.
+     They MUST NOT be backed by `math_expression_tool` (which derives,
+     it does not select) or by extraction tools (which read, they do
+     not select).
+   - Energy values read from output files come from
+     `read_energy_from_output` (or similar extraction-family tools).
+   - Adsorption / formation energies come from `calculate_formation_E`.
+   - Lattice constants come from `calculate_lc`.
+   - Derived quantities — differences, ratios, conversions — may
+     legitimately come from `math_expression_tool` PROVIDED the
+     expression uses real upstream sources and the claim's name
+     accurately describes a derived quantity (e.g. an explicit
+     'difference', 'span', 'ratio', conversion). A claim named for a
+     primary quantity (an energy, a converged parameter) cannot be
+     backed by `math_expression_tool` operating on an unrelated input.
+
+2. RESULT-DESCRIPTION MATCH
+   - The artifact's `result_description` is the agent's stated meaning
+     of the artifact AT REGISTRATION TIME. Does it match the claim's
+     name and intent? Pay attention to honest hedges in the
+     description — if it says 'intermediate test value', 'expert
+     estimate', 'documenting a decision' or similar, and the claim
+     names it as a converged or selected result, that is a mismatch
+     even if the numerics align.
+   - Watch for SPAN-vs-COUNT and similar semantic ambiguities. A
+     claim of 'test_range' is ambiguous; the description should
+     resolve whether the value is a span (max−min), a count (number
+     of distinct values tested), or something else. If the
+     description and claim name disagree on this, that is a mismatch.
+
+3. UNIT / DIMENSIONAL CONSISTENCY
+   - The claim's unit must be dimensionally compatible with what the
+     producing tool yields. An eV-claimed quantity cannot be backed by
+     a tool that produces a layer count or an Angstrom. A
+     layers-claimed quantity cannot be backed by a tool that produces
+     an energy.
+
+4. NOT-CATALOGUED TOOL HANDLING
+   - If the tool description is marked NOT catalogued above, infer
+     the tool's role conservatively from its name alone. If the
+     inference is unambiguous (e.g. the name is one of the canonical
+     workflow tools listed earlier), proceed normally. If the
+     inference is ambiguous, return `warning` and explain.
+
+Verdict contract:
+- pass     : the source's tool family and the artifact's description
+             cohere with the claim's name, unit, and varied_parameters.
+- fail     : a categorical mismatch — wrong tool family, or the
+             description disclaims being what the claim says it is, or
+             unit/dimensional incompatibility.
+- warning  : ambiguous (e.g. an unknown tool that cannot be confidently
+             classified, or a claim name that the description neither
+             clearly confirms nor clearly disclaims).
+
+Be especially alert to the failure pattern where the agent attached
+an artifact whose value happens to numerically equal the claim's
+value but the artifact was produced by an unrelated tool — the
+numeric match is a coincidence, the categorical relationship is
+absent. Such cases must FAIL.
+"""
+    _dbg(
+        f"_call_claim_coherence_judge: INVOKE claim={claim_name!r} "
+        f"value={claim_value!r} unit={claim_unit!r} "
+        f"varied={claim_varied_parameters} "
+        f"source_tool={source_tool_name!r} "
+        f"tool_doc_catalogued={source_tool_description is not None and bool(source_tool_description.strip())} "
+        f"tool_doc_provenance={tool_doc_provenance!r} "
+        f"tool_doc_text[:300]={tool_doc_text[:300]!r} "
+        f"result_desc[:200]={source_result_description[:200]!r} "
+        f"source_value_repr={source_value_repr!r} "
+        f"prompt_len={len(prompt)}"
+    )
+    t0 = time.time()
+    result = judge.invoke(prompt)
+    elapsed = time.time() - t0
+    reasoning_preview = str(result.get("reasoning", ""))[:400]
+    _dbg(
+        f"_call_claim_coherence_judge: RETURN claim={claim_name!r} "
+        f"source_tool={source_tool_name!r} "
+        f"verdict={result.get('verdict')!r} elapsed={elapsed:.2f}s "
+        f"reasoning[:400]={reasoning_preview!r}"
     )
     return result
 
@@ -3925,6 +4203,176 @@ def verify_structured_report(
                 judge_reasoning=msg,
             ))
             continue
+
+        # Claim-to-source COHERENCE check. The numeric value already
+        # matches; this asks whether the source artifact's tool family
+        # and agent-written description are a coherent SOURCE for a
+        # claim of this name. Catches cases where the agent attached
+        # an artifact whose value happens to numerically equal the
+        # claim's value but the artifact came from an unrelated tool.
+        # On `fail` the categorical mismatch is logged and we SKIP the
+        # per-parameter descent for this claim — auditing the inputs
+        # of a categorically wrong artifact is busy-work; the fix is
+        # to obtain a different artifact entirely. On `warning` we
+        # still descend (the source might be right; the per-parameter
+        # audit can still surface useful information). On `pass` we
+        # proceed normally.
+        try:
+            _coh_source_artifact = _get_artifact(claim.result_id)
+            _coh_tool_name = _coh_source_artifact.tool_name
+            _coh_tool_desc = _lookup_tool_description(_coh_tool_name)
+            _coh_result_desc = _coh_source_artifact.description or "(none)"
+            try:
+                _coh_args_json = json.dumps(
+                    _coh_source_artifact.args or {}, indent=2, default=str,
+                )
+            except Exception:                               # noqa: BLE001
+                _coh_args_json = repr(_coh_source_artifact.args)
+            _coh_value_repr = repr(
+                _flatten_listed_value(_coh_source_artifact)
+            )
+            _dbg(
+                f"verify_structured_report: claim {claim.quantity_name!r} — "
+                f"CLAIM-COHERENCE pre-call: "
+                f"source_tool={_coh_tool_name!r} "
+                f"tool_doc_catalogued={_coh_tool_desc is not None} "
+                f"tool_doc_text[:300]="
+                f"{(_coh_tool_desc or '(uncatalogued)')[:300]!r} "
+                f"result_desc[:200]={_coh_result_desc[:200]!r} "
+                f"claim_value={claim.value!r} "
+                f"claim_unit={claim.unit!r} "
+                f"varied={claim.varied_parameters}"
+            )
+            _coh_result = _call_claim_coherence_judge(
+                claim_name=claim.quantity_name,
+                claim_value=claim.value,
+                claim_unit=claim.unit,
+                claim_note=claim.note or "",
+                claim_varied_parameters=claim.varied_parameters or [],
+                source_tool_name=_coh_tool_name,
+                source_tool_description=_coh_tool_desc,
+                source_result_description=_coh_result_desc,
+                source_args_json=_coh_args_json,
+                source_value_repr=_coh_value_repr,
+                overall_goal=overall_goal,
+                judge=judge,
+            )
+            _coh_verdict = _coh_result.get("verdict", "warning")
+            _coh_reasoning = _coh_result.get("reasoning", "")
+            _dbg(
+                f"verify_structured_report: claim {claim.quantity_name!r} — "
+                f"CLAIM-COHERENCE post-call: verdict={_coh_verdict!r} "
+                f"action="
+                f"{'SKIP descent' if _coh_verdict == 'fail' else 'CONTINUE to descent'} "
+                f"source_tool={_coh_tool_name!r}"
+            )
+        except Exception as e:                              # noqa: BLE001
+            # The coherence judge itself raised. We cannot proceed —
+            # but before terminating, flush the cross-report cache so
+            # work already completed on prior claims is not lost, and
+            # log enough context to diagnose the failure.
+            _dbg(
+                f"verify_structured_report: claim {claim.quantity_name!r} "
+                f"CLAIM-COHERENCE judge raised {type(e).__name__}: {e}"
+            )
+            _dbg(
+                f"verify_structured_report: terminating run via exit(0); "
+                f"flushing cross-report cache to disk first; "
+                f"claim under verification was "
+                f"{claim.quantity_name!r} (result_id={claim.result_id!r}); "
+                f"issues accumulated so far: {len(issues)}"
+            )
+            try:
+                _save_cross_report_cache()
+                _dbg(
+                    "verify_structured_report: cross-report cache flushed."
+                )
+            except Exception as save_err:                   # noqa: BLE001
+                _dbg(
+                    f"verify_structured_report: cache flush FAILED — "
+                    f"{type(save_err).__name__}: {save_err}"
+                )
+            issues.append(ReportVerificationIssue(
+                category=IssueCategory.CLAIM_SOURCE_MISMATCH,
+                severity="warning",
+                where={
+                    "claim_name": claim.quantity_name,
+                    "claim_value": claim.value,
+                    "claim_unit": claim.unit,
+                    "result_id": claim.result_id,
+                },
+                problem=(
+                    f"The claim-coherence judge for "
+                    f"'{claim.quantity_name}' raised an internal "
+                    f"error and the verifier is terminating to avoid "
+                    f"running on unaudited claims. This is not a "
+                    f"verdict on the claim itself."
+                ),
+                judge_reasoning=f"{type(e).__name__}: {e}",
+            ))
+            exit(0)
+
+        if _coh_verdict in ("fail", "warning"):
+            _coh_severity = "fail" if _coh_verdict == "fail" else "warning"
+            if _coh_verdict == "fail":
+                _coh_problem = (
+                    f"When verifying the claim "
+                    f"'{claim.quantity_name}' ({claim.result_id}) "
+                    f"directly: the claim's numeric value matches the "
+                    f"registered artifact, BUT the artifact's "
+                    f"producing tool "
+                    f"'{_coh_source_artifact.tool_name}' (or its "
+                    f"agent-written description) is not a coherent "
+                    f"source for a quantity of this kind. The "
+                    f"numeric coincidence does not imply categorical "
+                    f"correctness — find the RIGHT tool for the "
+                    f"claimed quantity."
+                )
+            else:
+                _coh_problem = (
+                    f"When verifying the claim "
+                    f"'{claim.quantity_name}' ({claim.result_id}) "
+                    f"directly: the claim's numeric value matches the "
+                    f"registered artifact, and the artifact's "
+                    f"producing tool "
+                    f"'{_coh_source_artifact.tool_name}' MAY be a "
+                    f"coherent source — but the judge could not "
+                    f"confirm it confidently (e.g. ambiguous claim "
+                    f"name, uncatalogued tool, or a description that "
+                    f"neither clearly affirms nor clearly disclaims "
+                    f"the claim). Please review whether this source "
+                    f"is appropriate. The per-parameter descent will "
+                    f"still proceed; this is advisory."
+                )
+            issues.append(ReportVerificationIssue(
+                category=IssueCategory.CLAIM_SOURCE_MISMATCH,
+                severity=_coh_severity,
+                where={
+                    "claim_name": claim.quantity_name,
+                    "claim_value": claim.value,
+                    "claim_unit": claim.unit,
+                    "result_id": claim.result_id,
+                    "source_tool_name": (
+                        _coh_source_artifact.tool_name
+                    ),
+                    "source_result_description": (
+                        _coh_source_artifact.description or ""
+                    ),
+                },
+                problem=_coh_problem,
+                judge_reasoning=_coh_reasoning,
+            ))
+            if _coh_verdict == "fail":
+                # Skip the per-parameter descent: the artifact is
+                # categorically wrong and the fix is to obtain a
+                # different artifact, not to tweak this one's inputs.
+                _dbg(
+                    f"verify_structured_report: claim "
+                    f"{claim.quantity_name!r} — coherence FAIL, "
+                    f"skipping recursive descent"
+                )
+                continue
+            # warning: fall through to descent.
 
         # Per-claim descent. Reuse the cross-claim `visited_cache` so the
         # second claim that reaches a shared upstream artifact under the
