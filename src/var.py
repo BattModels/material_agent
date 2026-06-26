@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 my_WORKING_DIRECTORY = None
 my_SAVE_DIALOGUE = True
 my_RESOURCE_DIRECTORY = {}
@@ -47,6 +50,17 @@ FORGOTTEN_CLOSER_SUPPRESS_ABOVE = 30
 # Process ids that were already finalized before the first resume after the
 # disposition-gate rollout. The wait-tool's Gate-1 coverage check treats these
 # as exempt (the agent need not cite them to dispose a legacy candidate), but
-# the agent is never blinded to them. Frozen snapshot -> lives in source so it
-# survives resume. TODO(Step 7): fill from the production explog's finalized ids.
-LEGACY_DISPOSITION_EXEMPT_IDS: set[int] = set()
+# the agent is never blinded to them.
+#
+# Frozen snapshot, hard-saved in the repo (legacy_disposition_exempt_ids.json,
+# generated once by dry_run_disposition.py from the production explog's finalized
+# process ids). It is loaded on EVERY resume and must NEVER be updated or
+# cleared: a historical candidate is dispositioned with an EMPTY citation
+# (because its old units are exempt), so emptying this set later would make those
+# old units "uncovered & not exempt" and re-block the candidate forever. The
+# empty-set fallback keeps startup crash-proof if the file is absent.
+try:
+    LEGACY_DISPOSITION_EXEMPT_IDS: set[int] = set(json.loads(
+        (Path(__file__).parent / "legacy_disposition_exempt_ids.json").read_text()))
+except (OSError, ValueError):
+    LEGACY_DISPOSITION_EXEMPT_IDS = set()
