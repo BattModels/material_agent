@@ -83,7 +83,7 @@ def format_get_disposition(candidate_id: str, outstanding: Dict[str, Any]) -> st
         parts.append(
             f"Latest disposition on record for {candidate_id}: "
             f"Decision={latest.get('Decision')}; Summary={latest.get('Summary')}; "
-            f"Future_plan={latest.get('Future_plan')}."
+            f"Latest Future_plan when this candidate was dispositioned last time={latest.get('Future_plan')}."
         )
     else:
         parts.append(f"No prior disposition for {candidate_id}.")
@@ -135,7 +135,8 @@ def format_update_disposition(
         return (
             f"Cannot record a disposition for {candidate_id} yet: call "
             f"get_disposition_info('{candidate_id}') first to review its "
-            f"outstanding results, then call update_disposition_info again."
+            f"outstanding results, analyze latest results and previous findings,"
+            f"then call update_disposition_info again."
         )
 
     # Bad Decision: name the offending value and list the allowed vocabulary.
@@ -294,10 +295,10 @@ def format_wait_gate2_refusal(forgotten_jobs: Iterable[Dict[str, Any]] = ()) -> 
     if len(jobs) <= var.FORGOTTEN_CLOSER_SUPPRESS_ABOVE:
         parts.append(
             "Also return to the supervisor to discuss how best to expand the "
-            "submissions, and consider a literature review (e.g. arXiv_search) to "
+            "submissions, and consider literature reviews (e.g. arXiv_search) to "
             "inform which candidates and adsorption sites are most worth pursuing "
-            "-- let both your and the supervisor's decisions be guided by that "
-            "literature."
+            "-- let both your and the supervisor's decisions be guided by all of the following: "
+            "1. you current findings, 2. your hypothesis, 3. Literature suggestions."
         )
     return " ".join(parts)
 
