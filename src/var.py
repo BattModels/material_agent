@@ -52,15 +52,28 @@ FORGOTTEN_CLOSER_SUPPRESS_ABOVE = 30
 # as exempt (the agent need not cite them to dispose a legacy candidate), but
 # the agent is never blinded to them.
 #
-# Frozen snapshot, hard-saved in the repo (legacy_disposition_exempt_ids.json,
-# generated once by dry_run_disposition.py from the production explog's finalized
-# process ids). It is loaded on EVERY resume and must NEVER be updated or
-# cleared: a historical candidate is dispositioned with an EMPTY citation
-# (because its old units are exempt), so emptying this set later would make those
-# old units "uncovered & not exempt" and re-block the candidate forever. The
-# empty-set fallback keeps startup crash-proof if the file is absent.
+# Frozen snapshot in legacy_disposition_exempt_ids.json (generated once by
+# dry_run_disposition.py from the production explog's finalized process ids).
+#
+# NOTE: that JSON is NOT committed -- the repo's '*' .gitignore keeps it
+# untracked, so it lives ONLY in this working tree (the one we resume the 27-05
+# run from), where it loads 488 ids. A fresh clone won't have it and falls back
+# to the empty set below. That is CORRECT for anyone NOT resuming this exact run:
+# leave it empty (or regenerate your own snapshot with dry_run_disposition.py).
+# So a clone degrades to empty by design, not by accident.
+#
+# Loaded on EVERY resume; must NEVER be cleared for THIS run: a historical
+# candidate is dispositioned with an EMPTY citation (its old units are exempt),
+# so emptying this set later would make those old units "uncovered & not exempt"
+# and re-block the candidate forever. The empty-set fallback keeps startup
+# crash-proof if the file is absent.
 try:
-    LEGACY_DISPOSITION_EXEMPT_IDS: set[int] = set(json.loads(
-        (Path(__file__).parent / "legacy_disposition_exempt_ids.json").read_text()))
-except (OSError, ValueError):
+    # Coerce to int HERE (inside the try) so a wrong-shape file -- a dict, or a
+    # list with a non-numeric element -- degrades to the empty set like a missing
+    # file, instead of slipping through and crashing later at EXPLOG.init's int().
+    LEGACY_DISPOSITION_EXEMPT_IDS: set[int] = {
+        int(x) for x in json.loads(
+            (Path(__file__).parent / "legacy_disposition_exempt_ids.json").read_text())
+    }
+except (OSError, ValueError, TypeError):
     LEGACY_DISPOSITION_EXEMPT_IDS = set()
