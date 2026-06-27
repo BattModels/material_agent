@@ -59,7 +59,7 @@ def _unit_desc(unit: Dict[str, Any]) -> str:
 
 def format_get_disposition(candidate_id: str, outstanding: Dict[str, Any]) -> str:
     """Build the get_disposition_info message: tell the agent what it must
-    summarize for ``candidate_id``.
+    review and analyze for ``candidate_id``.
 
     ``outstanding`` is the dict returned by ``candidate_outstanding`` --
     ``{must_cover, legacy_optional, latest_disposition, has_finalized}`` -- or
@@ -82,7 +82,8 @@ def format_get_disposition(candidate_id: str, outstanding: Dict[str, Any]) -> st
     if latest is not None:
         parts.append(
             f"Latest disposition on record for {candidate_id}: "
-            f"Decision={latest.get('Decision')}; Summary={latest.get('Summary')}; "
+            f"Decision={latest.get('Decision')}; "
+            f"Analysis_and_implications={latest.get('Summary')}; "
             f"Latest Future_plan when this candidate was dispositioned last time={latest.get('Future_plan')}."
         )
     else:
@@ -95,9 +96,10 @@ def format_get_disposition(candidate_id: str, outstanding: Dict[str, Any]) -> st
         listing = "; ".join(_unit_desc(u) for u in must)
         parts.append(
             f"Candidate {candidate_id} has finished results that still need a "
-            f"disposition: {listing}. Base your Summary on these results and pass "
-            f"the process ids you used (any one id per batch) as "
-            f"Summarized_process_id to update_disposition_info."
+            f"disposition: {listing}. Review and analyze these results, base your "
+            f"Analysis_and_implications on what they show and imply, and pass the "
+            f"process ids you used (any one id per batch) as Analyzed_process_id "
+            f"to update_disposition_info."
         )
     else:
         parts.append(
@@ -160,7 +162,7 @@ def format_update_disposition(
     if status == "non_terminal_ids":
         ids = ", ".join(str(i) for i in result.get("ids", []))
         return (
-            f"These process ids are not finished yet and cannot be summarized: "
+            f"These process ids are not finished yet and cannot be analyzed: "
             f"{ids}. Wait for them to finish (or omit them), then call "
             f"update_disposition_info again."
         )
@@ -220,8 +222,8 @@ def format_wait_gate1_refusal(candidate_ids: Iterable[str]) -> str:
         listing += f" (and {extra} more)"
     return (
         "You cannot wait yet: these candidates have finished results you have "
-        f"not yet summarized into a disposition: {listing}. For each, call "
-        "get_disposition_info(candidate_id) to see what needs summarizing, then "
+        f"not yet reviewed and analyzed into a disposition: {listing}. For each, "
+        "call get_disposition_info(candidate_id) to see what needs analyzing, then "
         "update_disposition_info(...) to record your reading of the results. "
         "Once every finished result is dispositioned you may wait."
     )
@@ -287,7 +289,7 @@ def format_wait_gate2_refusal(forgotten_jobs: Iterable[Dict[str, Any]] = ()) -> 
             "is not yet eligible for that stage while == 0 means eligible but not "
             "yet started (so n_O_started == 0 lists candidates whose surface "
             "finished but no O job was launched, and n_OH_started == 0 those "
-            "ready for OH). Also revisit your reports and summaries, review the "
+            "ready for OH). Also revisit your reports and analyses, review the "
             "decision notes, and consider adding new AQ-GNoME candidates."
         )
 
@@ -314,7 +316,7 @@ def format_wait_exit_disposition_hint(candidate_ids: Iterable[str]) -> str:
         return ""
     return (
         f"\nFinished work belongs to candidate(s): {', '.join(ids)}. Before "
-        "waiting again, summarize their finished results with "
+        "waiting again, review and analyze their finished results with "
         "get_disposition_info then update_disposition_info."
     )
 

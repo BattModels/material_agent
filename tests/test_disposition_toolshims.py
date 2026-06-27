@@ -78,8 +78,8 @@ def test_update_tool_shim_records_disposition(tmp_path):
     T.get_disposition_info.invoke({"candidate_id": "c"})
     out = T.update_disposition_info.invoke({
         "candidate_id": "c",
-        "Summary": "surface looks promising",
-        "Summarized_process_id": [pid_s],
+        "Analysis_and_implications": "surface looks promising",
+        "Analyzed_process_id": [pid_s],
         "Future_plan": "run OH on the best site",
         "Decision": "Investigating",
     })
@@ -96,8 +96,8 @@ def test_update_tool_shim_locked_message_when_no_get(tmp_path):
     _add_candidate("c")
     pid_s = _inject("c", "surface_relaxation", "completed", termination_index=0)
     out = T.update_disposition_info.invoke({          # no get first -> locked
-        "candidate_id": "c", "Summary": "x",
-        "Summarized_process_id": [pid_s], "Future_plan": "y",
+        "candidate_id": "c", "Analysis_and_implications": "x",
+        "Analyzed_process_id": [pid_s], "Future_plan": "y",
         "Decision": "Investigating",
     })
     assert isinstance(out, str) and out
@@ -114,8 +114,8 @@ def test_update_tool_shim_invalid_decision_lists_allowed(tmp_path):
     pid_s = _inject("c", "surface_relaxation", "completed", termination_index=0)
     T.get_disposition_info.invoke({"candidate_id": "c"})
     out = T.update_disposition_info.invoke({
-        "candidate_id": "c", "Summary": "x",
-        "Summarized_process_id": [pid_s], "Future_plan": "y",
+        "candidate_id": "c", "Analysis_and_implications": "x",
+        "Analyzed_process_id": [pid_s], "Future_plan": "y",
         "Decision": "Maybe",
     })
     assert all(d in out for d in var.DISPOSITION_DECISIONS)   # built from var.py
@@ -208,8 +208,8 @@ def test_wait_refuses_when_queue_below_floor(tmp_path):
     pid = _inject("matX", "surface_relaxation", "completed", termination_index=0)
     T.get_disposition_info.invoke({"candidate_id": "matX"})
     T.update_disposition_info.invoke({
-        "candidate_id": "matX", "Summary": "s",
-        "Summarized_process_id": [pid], "Future_plan": "f",
+        "candidate_id": "matX", "Analysis_and_implications": "s",
+        "Analyzed_process_id": [pid], "Future_plan": "f",
         "Decision": "Investigating",
     })
     _inject("matX", "surface_relaxation", "pending", termination_index=1)

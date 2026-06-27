@@ -160,7 +160,8 @@ def get_disposition_info(
 ) -> str:
     """
     Return a candidate's disposition status: its latest disposition (if any) and
-    the finished results that still need to be summarized into a disposition.
+    the finished results that still need to be reviewed and analyzed for a
+    disposition.
 
     You MUST call this for a candidate before update_disposition_info -- it unlocks
     the disposition write for that candidate.
@@ -181,35 +182,36 @@ def get_disposition_info(
 @tool
 def update_disposition_info(
     candidate_id: Annotated[str, "MaterialId of the candidate to disposition."],
-    Summary: Annotated[str, "Candidate-level summary: what the finished results show, e.g. which hypothesis about this candidate was confirmed or rejected."],
-    Summarized_process_id: Annotated[list[int], "The finished process ids your Summary is based on (cite any one id per batch). Get the outstanding ids from get_disposition_info first."],
-    Future_plan: Annotated[str, "The specific next calculation(s) you want to run for this candidate (free text)."],
+    Analysis_and_implications: Annotated[str, "Review and analyze the candidate's current and historical finished results, then record what they show AND what they imply for this candidate -- e.g. which hypothesis about it was confirmed or rejected. This is more than a restatement: interpret the numbers, do not just list them."],
+    Analyzed_process_id: Annotated[list[int], "The finished process ids your Analysis_and_implications is based on (cite any one id per batch). Get the outstanding ids from get_disposition_info first."],
+    Future_plan: Annotated[str, "The hypothesis you want to test next for this candidate and the specific calculation(s) that would test it (free text)."],
     Decision: Annotated[str, f"Where to take this candidate next. Must be exactly one of: {', '.join(var.DISPOSITION_DECISIONS)}."],
 ) -> str:
     """
-    Record a disposition for a candidate: tie its finished results back to a
-    Summary, a Future_plan, and a Decision.
+    Record a disposition for a candidate: tie its finished results back to an
+    Analysis_and_implications, a Future_plan (the hypothesis to test next), and a
+    Decision.
 
-    Call get_disposition_info(candidate_id) first to see what needs summarizing.
+    Call get_disposition_info(candidate_id) first to see what needs analyzing.
     The disposition is recorded only once every outstanding finished result is
     cited; otherwise the returned message explains why and how to fix it.
     """
     res = EXPLOG.update_disposition_info(
-        candidate_id, Summary, Summarized_process_id, Future_plan, Decision
+        candidate_id, Analysis_and_implications, Analyzed_process_id, Future_plan, Decision
     )
     msg = format_update_disposition(candidate_id, res, var.DISPOSITION_DECISIONS)
     id = CANVAS.register_tool_output(
         tool_name="update_disposition_info",
         args={
             "candidate_id": candidate_id,
-            "Summary": Summary,
-            "Summarized_process_id": Summarized_process_id,
+            "Analysis_and_implications": Analysis_and_implications,
+            "Analyzed_process_id": Analyzed_process_id,
             "Future_plan": Future_plan,
             "Decision": Decision,
         },
         value=msg,
         description=f"Disposition update for candidate {candidate_id} (status: {res.get('status')}).",
-        reasons={"Summary": Summary},
+        reasons={"Analysis_and_implications": Analysis_and_implications},
         parent_result_ids=[],
         metadata={"candidate_id": candidate_id, "status": res.get("status")},
     )
