@@ -65,7 +65,8 @@ from src.disposition_messages import (
 )
 from src.forgotten_jobs import find_forgotten_jobs
 from gnome_dreams_oer_screening.vasp.magnetic_enumeration import (
-    count_magnetic_sites_from_formula
+    count_magnetic_sites_from_formula,
+    MagneticEnumerationError,
 )
 
 try:
@@ -943,7 +944,21 @@ def submit_dft_job(
         assert False, "Unreachable: raise_for_error() should have raised"
 
     # a list of ids will be provided for OH_calculations and not for all other:
-    id_list = EXPLOG.add_process(MaterialId, calculation_type, termination_index, ad_site_index, note)
+    try:
+        id_list = EXPLOG.add_process(MaterialId, calculation_type, termination_index, ad_site_index, note)
+    except MagneticEnumerationError as e:
+        # Magnetic-ordering enumeration failed before any bulk process row was entered
+        # (enter_process re-raises pymatgen's ValueError as MagneticEnumerationError).
+        # The candidate looks un-started and would be flagged "forgotten" forever, so
+        # mark it failed -> the wait-tool hints and the gate skip it. ONLY this specific
+        # failure is caught; every other add_process error (duplicate / existing jobs /
+        # bad id / validation) propagates unchanged.
+        EXPLOG.mark_candidate_failed(MaterialId)
+        return (
+            f"Candidate {MaterialId} could not be set up for bulk relaxation "
+            f"(magnetic-ordering enumeration failed: {e}). It has been marked as "
+            f"failed and will not be retried or flagged as ready work."
+        )
     if not isinstance(id_list, list):
         id_list = [id_list]
 

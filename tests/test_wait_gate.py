@@ -356,6 +356,20 @@ def test_failed_bulk_candidate_is_not_forgotten(tmp_path):
     assert find_forgotten_jobs(EXPLOG, THR) == []
 
 
+def test_norow_failed_candidate_is_excluded_from_forgotten(tmp_path):
+    # A candidate whose bulk magnetic enumeration failed has NO process rows -- it would
+    # otherwise be flagged forever ("start the bulk relaxation"). Marking it state='failed'
+    # (what mark_candidate_failed does) must exclude it from the forgotten-jobs hint.
+    _setup(tmp_path)
+    _add_candidate("c")                                  # no process rows
+    assert any(it["candidate_id"] == "c"                 # fresh -> flagged for bulk
+               for it in find_forgotten_jobs(EXPLOG, THR))
+    EXPLOG.relational_frame.candidates.set_value(
+        "c", "state", "failed", allow_new_columns=True)
+    assert all(it["candidate_id"] != "c"                 # marked failed -> excluded
+               for it in find_forgotten_jobs(EXPLOG, THR))
+
+
 # ===========================================================================
 # Gate 2 message with the forgotten-jobs hint (pure formatter)
 # ===========================================================================
