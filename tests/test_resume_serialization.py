@@ -27,7 +27,8 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 def _setup(tmp_path):
     EXPLOG.init(tmp_path, mode="test")
-    EXPLOG.job_handler.disposition_decisions = ("Abandon", "Investigating",
+    EXPLOG.job_handler.disposition_decisions = ("Abandon", "Low priority",
+                                                "Medium priority", "High priority",
                                                 "Sufficient")
 
 
@@ -54,7 +55,7 @@ def _dispositions(cid):
     return EXPLOG.job_handler._candidate_dispositions(cid)
 
 
-def _record_disposition(cid, ids, decision="Investigating"):
+def _record_disposition(cid, ids, decision="Medium priority"):
     EXPLOG.get_disposition_info(cid)
     return EXPLOG.update_disposition_info(cid, "surface looks promising",
                                           list(ids), "run OH on the best site",
@@ -92,7 +93,7 @@ def test_recorded_disposition_survives_checkpoint_serde(tmp_path):
     _setup(tmp_path)
     _add_candidate("c")
     pid_s = _inject("c", "surface_relaxation", "completed", termination_index=0)
-    res = _record_disposition("c", [pid_s], decision="Investigating")
+    res = _record_disposition("c", [pid_s], decision="Medium priority")
     assert res["status"] == "ok"
 
     _resume_via_serde(_production_serde())          # <-- the real round-trip
@@ -100,11 +101,11 @@ def test_recorded_disposition_survives_checkpoint_serde(tmp_path):
     # the disposition_record object column (list[dict]) came back intact:
     recs = _dispositions("c")
     assert len(recs) == 1
-    assert recs[0]["Decision"] == "Investigating"
+    assert recs[0]["Decision"] == "Medium priority"
     assert recs[0]["Summarized_process_id"] == [pid_s]
     assert recs[0]["Summary"] == "surface looks promising"
     # the visible `decision` column survived too:
-    assert _val("c", "decision") == "Investigating"
+    assert _val("c", "decision") == "Medium priority"
     # and Gate 1 reads it correctly post-resume: nothing left to disposition.
     assert EXPLOG.candidates_needing_disposition() == []
 
@@ -115,7 +116,7 @@ def test_resume_reblocks_gate1_on_work_finished_after_checkpoint(tmp_path):
     _setup(tmp_path)
     _add_candidate("c")
     pid_s = _inject("c", "surface_relaxation", "completed", termination_index=0)
-    _record_disposition("c", [pid_s], decision="Investigating")
+    _record_disposition("c", [pid_s], decision="Medium priority")
 
     _resume_via_serde(_production_serde())
 
@@ -126,5 +127,5 @@ def test_resume_reblocks_gate1_on_work_finished_after_checkpoint(tmp_path):
 
     # get surfaces BOTH the restored latest disposition and the new must_cover id.
     out = EXPLOG.get_disposition_info("c")
-    assert out["latest_disposition"]["Decision"] == "Investigating"
+    assert out["latest_disposition"]["Decision"] == "Medium priority"
     assert any(pid_o in set(u["ids"]) for u in out["must_cover"])

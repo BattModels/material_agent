@@ -18,8 +18,19 @@ from src.disposition_messages import (
     format_get_disposition,
     format_update_disposition,
 )
+from src import var
 
-ALLOWED = ("Abandon", "Investigating", "Sufficient")
+ALLOWED = ("Abandon", "Low priority", "Medium priority", "High priority", "Sufficient")
+
+
+def test_decision_vocab_partition():
+    # Step 1 (TDD): the new vocabulary partitions cleanly into terminal + active,
+    # with a neutral active default.
+    terminal = set(var.DISPOSITION_TERMINAL_DECISIONS)
+    active = set(var.DISPOSITION_ACTIVE_DECISIONS)
+    assert terminal | active == set(var.DISPOSITION_DECISIONS)
+    assert terminal.isdisjoint(active)
+    assert var.DISPOSITION_DEFAULT_ACTIVE in active
 
 
 # ---------------------------------------------------------------------------
@@ -57,9 +68,9 @@ def test_incomplete_message_names_missing_and_resolution():
 
 def test_ok_message_confirms_candidate_and_decision():
     msg = format_update_disposition(
-        "matX", {"ok": True, "status": "ok", "decision": "Investigating"}, ALLOWED)
+        "matX", {"ok": True, "status": "ok", "decision": "Medium priority"}, ALLOWED)
     assert "matX" in msg
-    assert "Investigating" in msg
+    assert "Medium priority" in msg
 
 
 # ---------------------------------------------------------------------------
@@ -93,13 +104,13 @@ def test_get_message_renders_latest_disposition_when_present():
     outstanding = {
         "must_cover": [],
         "legacy_optional": [],
-        "latest_disposition": {"Decision": "Investigating", "Summary": "promising",
+        "latest_disposition": {"Decision": "Medium priority", "Summary": "promising",
                                "Future_plan": "run more OH sites",
                                "Summarized_process_id": [1]},
         "has_finalized": True,
     }
     msg = format_get_disposition("matX", outstanding)
-    assert "Investigating" in msg                # Decision
+    assert "Medium priority" in msg                # Decision
     assert "promising" in msg                    # Summary
     assert "run more OH sites" in msg            # Future_plan, for context
 

@@ -54,8 +54,9 @@ def _inject(cid, job_type, status, termination_index=None, site_index=None,
     return pid
 
 
-def _update(cid, ids, decision="Investigating"):
-    EXPLOG.job_handler.disposition_decisions = ("Abandon", "Investigating",
+def _update(cid, ids, decision="Medium priority"):
+    EXPLOG.job_handler.disposition_decisions = ("Abandon", "Low priority",
+                                                "Medium priority", "High priority",
                                                 "Sufficient")
     EXPLOG.get_disposition_info(cid)
     return EXPLOG.update_disposition_info(cid, "s", list(ids), "f", decision)

@@ -81,14 +81,14 @@ def test_update_tool_shim_records_disposition(tmp_path):
         "Analysis_and_implications": "surface looks promising",
         "Analyzed_process_id": [pid_s],
         "Future_plan": "run OH on the best site",
-        "Decision": "Investigating",
+        "Decision": "Medium priority",
     })
     assert isinstance(out, str)
     recs = _dispositions("c")
     assert len(recs) == 1
-    assert recs[0]["Decision"] == "Investigating"
+    assert recs[0]["Decision"] == "Medium priority"
     assert recs[0]["Summarized_process_id"] == [pid_s]
-    assert _val("c", "decision") == "Investigating"
+    assert _val("c", "decision") == "Medium priority"
 
 
 def test_update_tool_shim_locked_message_when_no_get(tmp_path):
@@ -98,7 +98,7 @@ def test_update_tool_shim_locked_message_when_no_get(tmp_path):
     out = T.update_disposition_info.invoke({          # no get first -> locked
         "candidate_id": "c", "Analysis_and_implications": "x",
         "Analyzed_process_id": [pid_s], "Future_plan": "y",
-        "Decision": "Investigating",
+        "Decision": "Medium priority",
     })
     assert isinstance(out, str) and out
     assert "get_disposition_info" in out              # instructive: how to resolve
@@ -210,7 +210,7 @@ def test_wait_refuses_when_queue_below_floor(tmp_path):
     T.update_disposition_info.invoke({
         "candidate_id": "matX", "Analysis_and_implications": "s",
         "Analyzed_process_id": [pid], "Future_plan": "f",
-        "Decision": "Investigating",
+        "Decision": "Medium priority",
     })
     _inject("matX", "surface_relaxation", "pending", termination_index=1)
     out = T.wait_for_update.invoke({"patience": 1})        # Gate 2 fires -> refusal

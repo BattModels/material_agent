@@ -58,7 +58,7 @@ def _dispositions(cid):
     return EXPLOG.job_handler._candidate_dispositions(cid)
 
 
-def _update(cid, ids, decision="Investigating", summary="s", future="f"):
+def _update(cid, ids, decision="Medium priority", summary="s", future="f"):
     return EXPLOG.update_disposition_info(cid, summary, list(ids), future, decision)
 
 
@@ -122,13 +122,13 @@ def test_update_complete_records(tmp_path):
     _add_candidate("c")
     pid_s = _inject("c", "surface_relaxation", "completed", termination_index=0)
     EXPLOG.get_disposition_info("c")
-    res = _update("c", [pid_s], decision="Investigating")
+    res = _update("c", [pid_s], decision="Medium priority")
     assert res["status"] == "ok"
     recs = _dispositions("c")
     assert len(recs) == 1
-    assert recs[0]["Decision"] == "Investigating"
+    assert recs[0]["Decision"] == "Medium priority"
     assert recs[0]["Summarized_process_id"] == [pid_s]
-    assert _val("c", "decision") == "Investigating"
+    assert _val("c", "decision") == "Medium priority"
     assert _val("c", "ready_for_disposition_update") == False  # noqa: E712
     assert _val("c", "needs_disposition_update") == False      # noqa: E712
 
@@ -195,7 +195,7 @@ def test_latest_disposition_is_the_most_recent_of_several(tmp_path):
     _add_candidate("c")
     pid_a = _inject("c", "surface_relaxation", "completed", termination_index=0)
     EXPLOG.get_disposition_info("c")
-    _update("c", [pid_a], decision="Investigating")          # disposition #1
+    _update("c", [pid_a], decision="Medium priority")          # disposition #1
 
     pid_b = _inject("c", "O_adsorption", "completed",
                     termination_index=0, site_index=0)        # new finished work
@@ -210,7 +210,7 @@ def test_latest_disposition_is_the_most_recent_of_several(tmp_path):
 
 def test_update_unknown_candidate_does_not_crash(tmp_path):
     _setup(tmp_path)                                          # no candidate added
-    res = EXPLOG.update_disposition_info("ghost", "s", [], "f", "Investigating")
+    res = EXPLOG.update_disposition_info("ghost", "s", [], "f", "Medium priority")
     assert res["status"] == "unknown_candidate"
     assert res["ok"] is False
 
@@ -247,5 +247,5 @@ def test_update_self_heals_disposition_columns_on_resume(tmp_path):
     cdf.drop(columns=["disposition_record", "decision",
                       "ready_for_disposition_update", "needs_disposition_update"],
              inplace=True, errors="ignore")
-    res = EXPLOG.update_disposition_info("c", "s", [pid], "f", "Investigating")
+    res = EXPLOG.update_disposition_info("c", "s", [pid], "f", "Medium priority")
     assert res["status"] == "locked"                         # healed, not crashed

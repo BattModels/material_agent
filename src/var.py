@@ -27,13 +27,25 @@ QUEUE_MIN_PENDING = 15
 # initial value is just the pre-first-turn fallback, NOT a config knob.
 enforce_queue_floor = True
 
-# The fixed Decision vocabulary for a candidate disposition. Three mutually
-# exclusive lifecycle states (single-valued): a candidate is either being
-# worked, deemed done-good, or dropped.
-#   Abandon       -> stop, unpromising
-#   Investigating -> actively working it; specifics live in Future_plan
-#   Sufficient    -> characterized, no further compute warranted
-DISPOSITION_DECISIONS = ("Abandon", "Investigating", "Sufficient")
+# The fixed Decision vocabulary for a candidate disposition (single-valued).
+# Two TERMINAL tags (no further compute) bracket three ACTIVE priority levels:
+#   Abandon         -> terminal: stop, unpromising
+#   Low priority    -> active: keep going, low priority
+#   Medium priority -> active: keep going, medium priority (neutral default)
+#   High priority   -> active: keep going, high priority
+#   Sufficient      -> terminal: characterized, no further compute warranted
+# A TERMINAL tag may only be set once the candidate is "fully settled" (no
+# forgotten/ready work AND nothing in flight); a FAILED candidate may ONLY be
+# Abandon. That gate is enforced in the disposition tool layer (src/tools.py),
+# since find_forgotten_jobs lives in the parent. The active priority levels are
+# assigned but currently DEFERRED -- not surfaced or used to drive planning (so
+# they never discourage adding new candidates).
+DISPOSITION_DECISIONS = ("Abandon", "Low priority", "Medium priority", "High priority", "Sufficient")
+# Subsets/derived -- used by the terminal-tag gate (Part 2) and the resume
+# reconciliation (Part 3); inert until then.
+DISPOSITION_TERMINAL_DECISIONS = ("Abandon", "Sufficient")
+DISPOSITION_ACTIVE_DECISIONS = ("Low priority", "Medium priority", "High priority")  # ascending
+DISPOSITION_DEFAULT_ACTIVE = "Medium priority"   # neutral; legacy "Investigating" migrates here
 
 # G(O) deviation (|G(O) - 2.46| eV) at/under which an O-adsorption site is
 # "competitive" enough to warrant an OH job. Used by the forgotten-OH reminder
