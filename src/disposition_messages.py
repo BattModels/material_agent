@@ -369,3 +369,46 @@ def evaluate_wait_entry(
     if gate2_armed:
         return format_wait_gate2_refusal(jobs)
     return None
+
+
+def evaluate_terminal_tag_gate(
+    *,
+    decision: str,
+    state: Any,
+    is_forgotten: bool,
+    has_in_flight: bool,
+    terminal_decisions: Iterable[str],
+    active_decisions: Iterable[str],
+) -> str | None:
+    """Decide whether a NEW disposition ``Decision`` is allowed for a candidate,
+    given the candidate's state. Returns a rejection sentence, or ``None`` to allow
+    the write. PURE (no EXPLOG): the caller passes the three facts in, so this is
+    fast-testable without importing ``src.tools``.
+
+    Rules (the Part 2 terminal-tag gate):
+      - A FAILED candidate may ONLY be "Abandon" -- any other decision is rejected.
+      - A terminal tag (Abandon/Sufficient) on a non-failed candidate is allowed
+        only when the candidate is "fully settled" = NOT a forgotten job AND no
+        in-flight (pending/running) process. Otherwise it still has pipeline work to
+        finish, so it is steered to continue or record an active priority.
+      - An active priority on a non-failed candidate is always allowed (None).
+    """
+    if str(state) == "failed":
+        if decision != "Abandon":
+            return (
+                f"Candidate has FAILED, so its only valid disposition is 'Abandon' "
+                f"(you gave '{decision}'). Re-record this disposition with "
+                f"Decision='Abandon'."
+            )
+        return None
+    if decision in tuple(terminal_decisions):
+        if is_forgotten or has_in_flight:
+            active = ", ".join(active_decisions)
+            return (
+                f"'{decision}' is a terminal decision, but this candidate is not "
+                f"fully settled yet -- it still has ready or in-flight pipeline work. "
+                f"Let that work finish first (its ready jobs will be submitted), or "
+                f"record an active priority instead ({active})."
+            )
+        return None
+    return None

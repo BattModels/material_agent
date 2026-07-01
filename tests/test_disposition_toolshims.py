@@ -108,6 +108,116 @@ def test_update_tool_shim_locked_message_when_no_get(tmp_path):
     assert _val("c", "ready_for_disposition_update") == False  # noqa: E712 (lock still closed)
 
 
+# ---------------------------------------------------------------------------
+# Terminal-tag gate wiring (Part 2). The pure rule is unit-tested in
+# test_disposition_messages; here we drive the REAL tool so its own computation
+# of is_forgotten (via find_forgotten_jobs) / has_in_flight / state is exercised
+# end to end, across every branch.
+# ---------------------------------------------------------------------------
+
+def _tool_disposition(cid, ids, decision, get_first=True):
+    if get_first:
+        T.get_disposition_info.invoke({"candidate_id": cid})   # open the write-lock
+    return T.update_disposition_info.invoke({
+        "candidate_id": cid, "Analysis_and_implications": "x",
+        "Analyzed_process_id": list(ids), "Future_plan": "y", "Decision": decision,
+    })
+
+
+def test_gate_rejects_terminal_on_forgotten_bulk(tmp_path):
+    # No started work -> forgotten (bulk frontier); Abandon is rejected, nothing
+    # is written, and the lock is left OPEN so the agent can retry.
+    _setup(tmp_path); _add_candidate("c")
+    out = _tool_disposition("c", [], "Abandon")
+    assert "Abandon" in out and "settled" in out.lower()
+    assert _dispositions("c") == []
+    assert pd.isna(_val("c", "decision"))
+    assert _val("c", "ready_for_disposition_update") == True  # noqa: E712
+
+
+def test_gate_rejects_sufficient_on_forgotten_O(tmp_path):
+    # bulk+surface finalized, no O started -> forgotten (O frontier); the OTHER
+    # terminal tag (Sufficient) is rejected too.
+    _setup(tmp_path); _add_candidate("c")
+    _inject("c", "bulk_relaxation", "completed")
+    ps = _inject("c", "surface_relaxation", "completed", termination_index=0)
+    out = _tool_disposition("c", [ps], "Sufficient")
+    assert "Sufficient" in out and "settled" in out.lower()
+    assert _dispositions("c") == []
+    assert _val("c", "ready_for_disposition_update") == True  # noqa: E712
+
+
+def test_gate_rejects_terminal_while_in_flight(tmp_path):
+    # Not forgotten (surface started), but a surface job is RUNNING -> in-flight;
+    # the terminal tag is rejected on the has_in_flight branch, not forgotten.
+    _setup(tmp_path); _add_candidate("c")
+    pb = _inject("c", "bulk_relaxation", "completed")
+    _inject("c", "surface_relaxation", "running", termination_index=0)
+    out = _tool_disposition("c", [pb], "Abandon")
+    assert "settled" in out.lower()
+    assert _dispositions("c") == []
+    assert pd.isna(_val("c", "decision"))
+
+
+def test_gate_allows_terminal_when_fully_settled(tmp_path):
+    # bulk+surface+O all completed, no competitive-OH gap, nothing in flight ->
+    # fully settled: a terminal tag is ALLOWED and written by the engine.
+    _setup(tmp_path); _add_candidate("c")
+    pb = _inject("c", "bulk_relaxation", "completed")
+    ps = _inject("c", "surface_relaxation", "completed", termination_index=0)
+    po = _inject("c", "O_adsorption", "completed", termination_index=0, site_index=0)
+    out = _tool_disposition("c", [pb, ps, po], "Abandon")
+    assert _val("c", "decision") == "Abandon"          # gate allowed -> engine wrote it
+    assert _dispositions("c")[-1]["Decision"] == "Abandon"
+
+
+def test_gate_failed_candidate_rejects_non_abandon(tmp_path):
+    # A failed candidate may ONLY be Abandon; an active priority is rejected.
+    _setup(tmp_path); _add_candidate("c")
+    EXPLOG.mark_candidate_failed("c")
+    out = _tool_disposition("c", [], "Medium priority")
+    assert "FAILED" in out and "Abandon" in out
+    assert _dispositions("c") == []
+    assert pd.isna(_val("c", "decision"))
+    assert _val("c", "ready_for_disposition_update") == True  # noqa: E712
+
+
+def test_gate_failed_candidate_allows_abandon(tmp_path):
+    # The same failed candidate CAN be Abandoned -> written.
+    _setup(tmp_path); _add_candidate("c")
+    EXPLOG.mark_candidate_failed("c")
+    out = _tool_disposition("c", [], "Abandon")
+    assert _val("c", "decision") == "Abandon"
+    assert _dispositions("c")[-1]["Decision"] == "Abandon"
+
+
+def test_gate_allows_active_priority_on_forgotten(tmp_path):
+    # An active priority on a forgotten candidate passes the gate and is written
+    # (the gate only blocks terminal tags / failed non-Abandon).
+    _setup(tmp_path); _add_candidate("c")
+    out = _tool_disposition("c", [], "Medium priority")
+    assert _val("c", "decision") == "Medium priority"
+
+
+def test_gate_noop_for_unknown_candidate(tmp_path):
+    # The gate's empty-row guard must not crash on an unknown candidate; the
+    # engine's own unknown-candidate handling takes over and the tool reports it.
+    _setup(tmp_path)                                   # no candidate added
+    out = T.update_disposition_info.invoke({
+        "candidate_id": "ghost", "Analysis_and_implications": "x",
+        "Analyzed_process_id": [], "Future_plan": "y", "Decision": "Abandon",
+    })
+    assert isinstance(out, str) and out                # no crash
+    assert "ghost" in out                              # names the unknown candidate
+    assert "experiment log" in out.lower()             # explains it is not logged
+    assert "try again" in out.lower()                  # gives a resolution
+    assert "Recorded" not in out                       # NOT reported as a success
+    assert "Message_ID=" in out                        # tool still registers output
+    # the guard must not fabricate a candidate row, and nothing is written:
+    assert "ghost" not in EXPLOG.relational_frame.candidates.df["candidate_id"].tolist()
+    assert _dispositions("ghost") == []
+
+
 def test_update_tool_shim_invalid_decision_lists_allowed(tmp_path):
     _setup(tmp_path)
     _add_candidate("c")

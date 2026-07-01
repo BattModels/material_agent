@@ -62,6 +62,7 @@ from src.disposition_messages import (
     format_update_disposition,
     format_wait_exit_disposition_hint,
     evaluate_wait_entry,
+    evaluate_terminal_tag_gate,
 )
 from src.forgotten_jobs import find_forgotten_jobs
 from gnome_dreams_oer_screening.vasp.magnetic_enumeration import (
@@ -197,10 +198,43 @@ def update_disposition_info(
     The disposition is recorded only once every outstanding finished result is
     cited; otherwise the returned message explains why and how to fix it.
     """
-    res = EXPLOG.update_disposition_info(
-        candidate_id, Analysis_and_implications, Analyzed_process_id, Future_plan, Decision
-    )
-    msg = format_update_disposition(candidate_id, res, var.DISPOSITION_DECISIONS)
+    # Terminal-tag gate (Part 2): a terminal Decision (Abandon/Sufficient) is only
+    # valid once the candidate is fully settled, and a FAILED candidate may only be
+    # 'Abandon'. Enforced here (not in the engine) because find_forgotten_jobs lives
+    # in the parent. On a reject we return the steer and never touch the engine, so
+    # ready_for_disposition_update stays set and the agent can retry. find_forgotten_jobs
+    # runs first so the derived 'state' column is fresh before we read it.
+    _forgotten = {
+        it["candidate_id"]
+        for it in find_forgotten_jobs(EXPLOG, var.GO_DEV_OH_THRESHOLD)
+    }
+    _cdf = EXPLOG.relational_frame.candidates.df
+    _crow = _cdf.loc[_cdf["candidate_id"] == candidate_id]
+    gate_msg = None
+    if not _crow.empty:
+        _pdf = EXPLOG.relational_frame.processes.df
+        _statuses = _pdf.loc[
+            _pdf["candidate_id"] == candidate_id, "status"
+        ].tolist()
+        gate_msg = evaluate_terminal_tag_gate(
+            decision=Decision,
+            state=(_crow["state"].iloc[0] if "state" in _crow.columns else None),
+            is_forgotten=candidate_id in _forgotten,
+            has_in_flight=any(
+                not EXPLOG.job_handler._is_terminal_process_status(s)
+                for s in _statuses
+            ),
+            terminal_decisions=var.DISPOSITION_TERMINAL_DECISIONS,
+            active_decisions=var.DISPOSITION_ACTIVE_DECISIONS,
+        )
+    if gate_msg is not None:
+        msg, status = gate_msg, "gate_rejected"
+    else:
+        res = EXPLOG.update_disposition_info(
+            candidate_id, Analysis_and_implications, Analyzed_process_id, Future_plan, Decision
+        )
+        msg = format_update_disposition(candidate_id, res, var.DISPOSITION_DECISIONS)
+        status = res.get("status")
     id = CANVAS.register_tool_output(
         tool_name="update_disposition_info",
         args={
@@ -211,10 +245,10 @@ def update_disposition_info(
             "Decision": Decision,
         },
         value=msg,
-        description=f"Disposition update for candidate {candidate_id} (status: {res.get('status')}).",
+        description=f"Disposition update for candidate {candidate_id} (status: {status}).",
         reasons={"Analysis_and_implications": Analysis_and_implications},
         parent_result_ids=[],
-        metadata={"candidate_id": candidate_id, "status": res.get("status")},
+        metadata={"candidate_id": candidate_id, "status": status},
     )
     return f"{msg}\nMessage_ID={id}. Refer to this ID for this disposition update."
 

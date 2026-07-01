@@ -17,6 +17,7 @@
 from src.disposition_messages import (
     format_get_disposition,
     format_update_disposition,
+    evaluate_terminal_tag_gate,
 )
 from src import var
 
@@ -31,6 +32,58 @@ def test_decision_vocab_partition():
     assert terminal | active == set(var.DISPOSITION_DECISIONS)
     assert terminal.isdisjoint(active)
     assert var.DISPOSITION_DEFAULT_ACTIVE in active
+
+
+# ---------------------------------------------------------------------------
+# evaluate_terminal_tag_gate (Step 2): terminal tags require a settled candidate;
+# a failed candidate may only be Abandon. Each rejection must also state a reason
+# and how to resolve it, so we assert on the message content, not just non-None.
+# ---------------------------------------------------------------------------
+
+_TERMINAL = ("Abandon", "Sufficient")
+_ACTIVE = ("Low priority", "Medium priority", "High priority")
+
+
+def _gate(decision, state, is_forgotten, has_in_flight):
+    return evaluate_terminal_tag_gate(
+        decision=decision, state=state, is_forgotten=is_forgotten,
+        has_in_flight=has_in_flight, terminal_decisions=_TERMINAL,
+        active_decisions=_ACTIVE,
+    )
+
+
+def test_gate_failed_candidate_only_abandon():
+    # failed + non-Abandon -> rejected; message names FAILED, the fix (Abandon),
+    # and the offending decision.
+    msg = _gate("Medium priority", "failed", False, False)
+    assert msg is not None
+    assert "FAILED" in msg and "Abandon" in msg
+    assert "Medium priority" in msg
+    msg2 = _gate("Sufficient", "failed", False, False)
+    assert msg2 is not None and "Abandon" in msg2 and "Sufficient" in msg2
+    # failed + Abandon -> allowed, regardless of forgotten / in-flight
+    assert _gate("Abandon", "failed", True, True) is None
+
+
+def test_gate_terminal_requires_settled():
+    # forgotten -> reject; message names the decision, the reason (not settled),
+    # and steers to an active priority.
+    msg = _gate("Abandon", "surface_relaxation", True, False)
+    assert msg is not None
+    assert "Abandon" in msg
+    assert "settled" in msg.lower()
+    assert all(a in msg for a in _ACTIVE)         # ALL active options offered
+    # in-flight -> reject
+    msg2 = _gate("Sufficient", "surface_relaxation", False, True)
+    assert msg2 is not None and "settled" in msg2.lower() and "Sufficient" in msg2
+    # fully settled -> allow (None)
+    assert _gate("Abandon", "surface_relaxation", False, False) is None
+    assert _gate("Sufficient", None, False, False) is None
+
+
+def test_gate_active_priority_always_allowed_when_not_failed():
+    assert _gate("Medium priority", "surface_relaxation", True, True) is None
+    assert _gate("Low priority", None, True, False) is None
 
 
 # ---------------------------------------------------------------------------
