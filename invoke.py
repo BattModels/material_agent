@@ -34,6 +34,8 @@ from pathlib import Path
 
 from gnome_dreams_oer_screening.explog.explog import EXPLOG
 
+from src.disposition_reconcile import reconcile_dispositions
+
 
 # =====================================================================
 # Checkpoint retention
@@ -752,6 +754,22 @@ You have a maximum of 1 hours to complete the entire study and make your final r
             # checkpointed (possibly outdated) tool list; re-write it from the
             # yaml so resumed agents see the current tool set.
             CANVAS.write("Worker_available_tools", Worker_available_tools, overwrite=True)
+
+            # Part 3: reconcile legacy dispositions against the new vocabulary +
+            # terminal-tag gate (idempotent; runs every resume). Deletes trailing
+            # invalid terminal decisions (re-flagging that work for a fresh
+            # disposition) and renames orphaned 'Investigating' -> the neutral
+            # active default. Mutating the loaded frame here persists forward via
+            # the normal checkpointing of the next node.
+
+            print("----------------------------------------------------------------")
+            print("RECONCILING LEGACY DISPOSITIONS (idempotent, runs every resume)", flush=True)
+            _recon = reconcile_dispositions(EXPLOG)
+            if _recon:
+                print(f"[reconcile] adjusted {len(_recon)} candidate disposition(s):")
+                for _cid, _info in _recon.items():
+                    print(f"  {_cid}: {_info}")
+            print("----------------------------------------------------------------")
 
             CANVAS.print()
             print(CANVAS.result_registry)

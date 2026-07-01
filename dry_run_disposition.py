@@ -36,6 +36,7 @@ import pandas as pd
 from gnome_dreams_oer_screening.explog.explog import EXPLOG
 from src import var
 from src.forgotten_jobs import find_forgotten_jobs
+from src.disposition_reconcile import reconcile_dispositions
 
 DEFAULT_RUN_DIR = Path(
     "/home/scratch3/matnis/production_run_27-05-2026_backup_11_06_2026"
@@ -121,6 +122,21 @@ def main():
     for k in ("bulk", "surface", "O", "OH"):
         if k in kinds:
             print(f"    {k:<8} {kinds[k]}")
+
+    # ---- 4) resume reconciliation preview (Part 3, dry-run -> no writes) ------
+    _hr("4) Resume reconciliation preview (delete/rename of invalid dispositions)")
+    recon = reconcile_dispositions(EXPLOG, apply=False)
+    n_deleted = sum(1 for v in recon.values() if v["deleted"])
+    n_renamed = sum(1 for v in recon.values() if v["renamed"])
+    print(f"candidates whose current disposition would change: {len(recon)}")
+    print(f"    delete trailing terminal/failed record(s) on : {n_deleted}"
+          f"  (-> re-flagged for a fresh disposition)")
+    print(f"    rename orphaned 'Investigating' -> "
+          f"'{var.DISPOSITION_DEFAULT_ACTIVE}' on : {n_renamed}")
+    for cid, info in list(recon.items())[:25]:
+        print(f"    {cid}: {info}")
+    if len(recon) > 25:
+        print(f"    (and {len(recon) - 25} more)")
 
     _hr("DONE -- no production files were modified")
     print("Next: review the backlog size above, then (if it looks right) wire")
