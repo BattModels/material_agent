@@ -197,6 +197,12 @@ def update_disposition_info(
     Call get_disposition_info(candidate_id) first to see what needs analyzing.
     The disposition is recorded only once every outstanding finished result is
     cited; otherwise the returned message explains why and how to fix it.
+
+    Decisions: Abandon and Sufficient are TERMINAL (no further compute) and are only
+    accepted once the candidate is fully SETTLED -- it has no ready or in-flight
+    pipeline work left. If it still has work to do, record an active priority
+    (Low/Medium/High priority) instead. A FAILED candidate may ONLY be Abandon. A
+    rejected Decision leaves the disposition unrecorded and explains why.
     """
     # Terminal-tag gate (Part 2): a terminal Decision (Abandon/Sufficient) is only
     # valid once the candidate is fully settled, and a FAILED candidate may only be
@@ -596,6 +602,13 @@ def query_explog(
         state (str, 'active' or 'failed'; 'failed' means the candidate is dead and should be skipped:
             either all of its bulk relaxations failed, or no valid surface could be generated from its
             relaxed bulk. Once 'failed' it stays 'failed'),
+        decision (str, the candidate's CURRENT disposition tag -- one of Abandon, Low priority,
+            Medium priority, High priority, Sufficient. "Abandon"/"Sufficient" are TERMINAL (stop, no
+            more compute); the three priorities mean "keep working, at this priority". <NA> until the
+            candidate is first dispositioned. Filter e.g. decision == "High priority" or
+            decision == "Abandon"),
+        needs_disposition_update (boolean, True when the candidate has finished results not yet
+            analyzed/dispositioned; these must be cleared before you may wait),
         --- per-stage progress counters (Int64). For each stage: started = work initiated;
             finalized = terminal/done and no longer running, FAILURES INCLUDED (so in-flight = started -
             finalized). A counter is <NA> when the candidate is NOT YET ELIGIBLE for that stage (the

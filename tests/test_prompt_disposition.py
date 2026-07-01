@@ -42,3 +42,11 @@ def test_supervisor_prompt_plans_submit_step_on_ready_work_handback():
     # On a ready-work handback the supervisor is guided to submit those jobs
     # (usually immediately, with discretion to hold off / wind down).
     assert "submit those jobs immediately" in supervisor_prompt.lower()
+
+
+def test_worker_prompt_states_the_terminal_tag_gate():
+    # The disposition workflow must mention the gate so the agent doesn't waste
+    # rejected attempts: terminal tags need a settled candidate; failed -> Abandon.
+    p = oer_agent_prompt.lower()
+    assert "may only be abandon" in p
+    assert "terminal" in p and "fully settled" in p
