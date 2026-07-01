@@ -251,58 +251,66 @@ def _forgotten_job_line(item: Dict[str, Any]) -> str:
 def format_wait_gate2_refusal(forgotten_jobs: Iterable[Dict[str, Any]] = ()) -> str:
     """Gate 2 refusal: analysis is current but the HPC queue is below its floor.
 
-    DELIBERATELY states no pending count / floor / headroom: a precise deficit is
-    a target the agent would game (submit just enough to clear the gate). Instead
-    it advises submitting a LARGE batch and, if available, lists up to 10 concrete
-    ready-but-unstarted items (from find_forgotten_jobs) to launch; otherwise it
-    points at the candidates df's per-stage progress columns.
-
-    When there are <= var.FORGOTTEN_CLOSER_SUPPRESS_ABOVE forgotten jobs it also
-    routes the worker back to the supervisor to discuss expanding submissions and
-    to ground decisions in a literature review; above that there is plainly plenty
-    of work, so that closer is dropped to keep the worker moving.
+    DELIBERATELY states no pending count / floor / headroom (a precise deficit is a
+    target the agent would game). Two paths, BOTH ending the worker's turn and
+    handing back to the supervisor (the worker never submits under its own task):
+      - Path A (ready/forgotten work exists): the worker must return to the
+        supervisor and ask for an IMMEDIATE plan step to SUBMIT the listed jobs.
+        Unconditional whenever jobs exist.
+      - Path B (no ready work): hand back to expand the study or wind down
+        (enforce_queue_floor=False).  [rewritten in Step 5]
     """
+    jobs = list(forgotten_jobs)
+
+    # Path A: ready continuation work -> hand back requesting an immediate submit step.
+    if jobs:
+        shown = jobs[:10]
+        listing = "\n".join("  - " + _forgotten_job_line(j) for j in shown)
+        extra = len(jobs) - len(shown)
+        more = (
+            f"\n  ... and {extra} more once these are queued." if extra > 0 else ""
+        )
+        return (
+            "The HPC queue is under-utilized (below its floor) and there is READY "
+            "continuation work waiting. Do NOT submit it yourself under your "
+            "current task, and do NOT wait: END YOUR TURN NOW and return to the "
+            "supervisor requesting an IMMEDIATE plan step to submit these ready "
+            "jobs. They continue candidates already started, so they are "
+            "effectively free while the cluster is under-utilized.\n\n"
+            "Ready-but-unstarted work (ask the supervisor to plan a step "
+            "submitting these):\n" + listing + more + "\n\n"
+            f"Return to the supervisor now with: \"Queue below floor; {len(jobs)} "
+            "ready continuation job(s) waiting -- please add a plan step to submit "
+            "them immediately.\" Do NOT re-call wait_for_update."
+        )
+
+    # Path B: no ready work detected -- Step 5 rewrites this into an expand/wind-down
+    # handback; the prior batch / query-columns wording is kept intact for now.
     header = (
         "The HPC queue is running low -- submit a large batch of new jobs now to "
         "keep the cluster well fed. Aim to queue many jobs (on the order of 40-50 "
         "or more), not just the bare minimum, so utilization stays high while "
         "results come in."
     )
-
-    jobs = list(forgotten_jobs)
-    if jobs:
-        shown = jobs[:10]
-        listing = "\n".join("  - " + _forgotten_job_line(j) for j in shown)
-        body = "Ready, unstarted work you can launch right now:\n" + listing
-        extra = len(jobs) - len(shown)
-        if extra > 0:
-            body += (
-                f"\n... and {extra} more forgotten job(s), which will be listed "
-                "once these 10 are taken care of."
-            )
-    else:
-        body = (
-            "No ready-but-unstarted work was detected automatically. To find "
-            "more, filter the candidates table with query_explog on the per-stage "
-            "progress columns -- n_surface_started, n_O_started, n_OH_started "
-            "(and the n_*_finalized variants): for each, <NA> means the candidate "
-            "is not yet eligible for that stage while == 0 means eligible but not "
-            "yet started (so n_O_started == 0 lists candidates whose surface "
-            "finished but no O job was launched, and n_OH_started == 0 those "
-            "ready for OH). Also revisit your reports and analyses, review the "
-            "decision notes, and consider adding new AQ-GNoME candidates."
-        )
-
-    parts = [header, body]
-    if len(jobs) <= var.FORGOTTEN_CLOSER_SUPPRESS_ABOVE:
-        parts.append(
-            "Also return to the supervisor to discuss how best to expand the "
-            "submissions, and consider literature reviews (e.g. arXiv_search) to "
-            "inform which candidates and adsorption sites are most worth pursuing "
-            "-- let both your and the supervisor's decisions be guided by all of the following: "
-            "1. you current findings, 2. your hypothesis, 3. Literature suggestions."
-        )
-    return " ".join(parts)
+    body = (
+        "No ready-but-unstarted work was detected automatically. To find "
+        "more, filter the candidates table with query_explog on the per-stage "
+        "progress columns -- n_surface_started, n_O_started, n_OH_started "
+        "(and the n_*_finalized variants): for each, <NA> means the candidate "
+        "is not yet eligible for that stage while == 0 means eligible but not "
+        "yet started (so n_O_started == 0 lists candidates whose surface "
+        "finished but no O job was launched, and n_OH_started == 0 those "
+        "ready for OH). Also revisit your reports and analyses, review the "
+        "decision notes, and consider adding new AQ-GNoME candidates."
+    )
+    closer = (
+        "Also return to the supervisor to discuss how best to expand the "
+        "submissions, and consider literature reviews (e.g. arXiv_search) to "
+        "inform which candidates and adsorption sites are most worth pursuing "
+        "-- let both your and the supervisor's decisions be guided by all of the following: "
+        "1. you current findings, 2. your hypothesis, 3. Literature suggestions."
+    )
+    return " ".join([header, body, closer])
 
 
 def format_wait_exit_disposition_hint(candidate_ids: Iterable[str]) -> str:

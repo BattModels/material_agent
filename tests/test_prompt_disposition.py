@@ -28,3 +28,17 @@ def test_worker_prompt_teaches_disposition_workflow():
 
 def test_supervisor_prompt_keeps_enforce_queue_floor_guidance():
     assert "enforce_queue_floor" in supervisor_prompt
+
+
+def test_worker_prompt_has_queue_floor_handback_rule():
+    # A refused wait due to the queue floor is a return-to-supervisor event, not a
+    # retry; the worker must not submit outside its task (Path A / Path B handback).
+    p = oer_agent_prompt.lower()
+    assert "return-to-supervisor event" in p
+    assert "not a retry" in p
+
+
+def test_supervisor_prompt_plans_submit_step_on_ready_work_handback():
+    # On a ready-work handback the supervisor is guided to submit those jobs
+    # (usually immediately, with discretion to hold off / wind down).
+    assert "submit those jobs immediately" in supervisor_prompt.lower()

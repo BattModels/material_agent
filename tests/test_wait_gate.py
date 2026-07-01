@@ -392,11 +392,15 @@ def _fitem(cid, kind, t=None, s=None):
             "site_index": s}
 
 
-def test_gate2_lists_forgotten_jobs():
+def test_gate2_path_a_hands_back_requesting_submit():
     jobs = [_fitem("matA", "bulk"), _fitem("matB", "O")]
     msg = format_wait_gate2_refusal(jobs)
-    assert "matA" in msg and "matB" in msg
-    assert "supervisor" in msg.lower()                   # small list -> closer kept
+    assert "matA" in msg and "matB" in msg               # lists the ready jobs
+    assert "supervisor" in msg.lower()                   # return to the supervisor
+    assert "end your turn" in msg.lower()                # stop, hand back
+    assert "submit" in msg.lower()                       # request a submit step
+    assert "yourself" in msg.lower()                     # do NOT submit it yourself
+    assert "large batch" not in msg.lower()              # old self-submit push gone
 
 
 def test_gate2_caps_at_ten_and_reports_remainder():
@@ -405,16 +409,16 @@ def test_gate2_caps_at_ten_and_reports_remainder():
     assert "mat0" in msg and "mat9" in msg               # first 10 shown
     assert "mat10" not in msg and "mat11" not in msg     # capped out
     assert "2 more" in msg
-    assert "once these 10 are taken care of" in msg.lower()
+    assert "once these are queued" in msg.lower()
 
 
-def test_gate2_drops_closer_when_many_forgotten():
-    # > var.FORGOTTEN_CLOSER_SUPPRESS_ABOVE (30): plenty of work -> no
-    # supervisor/literature closer, just the list + remainder.
+def test_gate2_path_a_handback_is_unconditional():
+    # Path A now ALWAYS hands the worker back to the supervisor to request a submit
+    # step, regardless of how many jobs are waiting (the old
+    # FORGOTTEN_CLOSER_SUPPRESS_ABOVE conditional is gone).
     jobs = [_fitem(f"mat{i}", "bulk") for i in range(35)]
     msg = format_wait_gate2_refusal(jobs)
-    assert "supervisor" not in msg.lower()
-    assert "literature" not in msg.lower()
+    assert "supervisor" in msg.lower()                   # handback present
     assert "25 more" in msg                              # 35 - 10 shown
 
 
