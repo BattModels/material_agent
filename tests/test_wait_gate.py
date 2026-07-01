@@ -177,13 +177,17 @@ def test_gate1_refusal_caps_long_candidate_list():
     assert "2 more" in msg
 
 
-def test_gate2_refusal_states_no_numeric_deficit_and_routes_to_supervisor():
-    # Anti-gaming: the Gate 2 message advises a LARGE batch but never states a
-    # pending count / floor / headroom the agent could barely clear.
+def test_gate2_path_b_routes_to_supervisor_and_targets_a_large_batch():
+    # Path B (no ready work): hand back to the supervisor to discuss expansion,
+    # suggesting a large batch (~40-50) as the target. Anti-gaming -> a batch
+    # TARGET is fine, but never a pending count / floor / headroom (gameable deficit).
     msg = format_wait_gate2_refusal()
-    assert "40-50" in msg                      # advise a large batch, not a deficit
     assert "supervisor" in msg.lower()         # the return-to-supervisor route
-    assert "headroom" not in msg.lower()
+    assert "expand" in msg.lower()             # discuss expansion
+    assert "large batch" in msg.lower()        # aim for a large batch
+    assert "40-50" in msg                      # a reasonable target, not a deficit
+    assert "enforce_queue_floor" in msg        # wind-down option
+    assert "headroom" not in msg.lower()       # never a gameable deficit
 
 
 def test_exit_hint_names_candidates_else_empty():
@@ -422,12 +426,21 @@ def test_gate2_path_a_handback_is_unconditional():
     assert "25 more" in msg                              # 35 - 10 shown
 
 
-def test_gate2_general_reminder_when_no_forgotten():
+def test_gate2_path_b_names_expansion_discussion_points():
     msg = format_wait_gate2_refusal([])
-    assert "n_O_started" in msg and "n_OH_started" in msg
-    assert "<NA>" in msg                                 # the eligibility semantics
+    assert "end your turn" in msg.lower()               # stop, hand back
     assert "supervisor" in msg.lower()
-    assert "literature" in msg.lower()
+    assert "candidates" in msg.lower()                  # discuss candidates for more calcs
+    assert "literature" in msg.lower()                  # ground in literature
+
+
+def test_nothing_to_wait_for_hands_back_to_discuss_expansion():
+    m = MSG_NOTHING_TO_WAIT_FOR
+    assert "end your turn" in m.lower()                 # stop polling, hand back
+    assert "supervisor" in m.lower()
+    assert "candidates" in m.lower()
+    assert "literature" in m.lower()
+    assert "large batch" in m.lower()                   # target a large batch
 
 
 def test_evaluate_forwards_forgotten_jobs_to_gate2():

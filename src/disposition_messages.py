@@ -200,9 +200,13 @@ def format_update_disposition(
 # Returned (unchanged from the original tool) when there is genuinely nothing to
 # wait for: no pending and no running work, and no analysis owed.
 MSG_NOTHING_TO_WAIT_FOR = (
-    "No pending or running jobs found in the EXPLOG. Please check the EXPLOG "
-    "and see if there is anything you can do to move the study forward, instead "
-    "of waiting for updates."
+    "Nothing is pending or running and there is nothing ready to submit. Do NOT "
+    "keep polling: END YOUR TURN and return to the supervisor to discuss how to "
+    "move the study forward and queue a large batch of new jobs (on the order of "
+    "40-50) -- which candidates, if any, warrant more calculations "
+    "(more surfaces / sites, O/OH jobs), whether to add more candidates, and how "
+    "to ground these choices in your current findings and the literature -- or "
+    "conclude the study if it is genuinely complete."
 )
 
 
@@ -284,33 +288,23 @@ def format_wait_gate2_refusal(forgotten_jobs: Iterable[Dict[str, Any]] = ()) -> 
             "them immediately.\" Do NOT re-call wait_for_update."
         )
 
-    # Path B: no ready work detected -- Step 5 rewrites this into an expand/wind-down
-    # handback; the prior batch / query-columns wording is kept intact for now.
-    header = (
-        "The HPC queue is running low -- submit a large batch of new jobs now to "
-        "keep the cluster well fed. Aim to queue many jobs (on the order of 40-50 "
-        "or more), not just the bare minimum, so utilization stays high while "
-        "results come in."
+    # Path B: no ready work -> end the turn and return to the supervisor to DISCUSS
+    # how to expand the study (or wind down). No verbatim script; the worker is told
+    # what to bring to the discussion. States no pending count / floor / headroom.
+    return (
+        "The HPC queue is under-utilized. Do NOT wait: END YOUR TURN and return to "
+        "the supervisor to discuss how best to expand the study so a large batch of "
+        "new jobs (on the order of 40-50) can be queued. Bring your current "
+        "findings, and let the discussion cover (at least): which candidates, if "
+        "any, look interesting enough to warrant more calculations (more surfaces / "
+        "terminations, more O or OH adsorption sites); whether more candidates "
+        "should be added (e.g. a fresh AQ-GNoME query); and how to ground these "
+        "choices in both your current findings and the literature (e.g. "
+        "arXiv_search). If instead the study is winding down -- new jobs could not "
+        "finish in time -- ask the supervisor to set enforce_queue_floor=False so "
+        "you may wait for and finalize the in-flight results. Do NOT re-call "
+        "wait_for_update."
     )
-    body = (
-        "No ready-but-unstarted work was detected automatically. To find "
-        "more, filter the candidates table with query_explog on the per-stage "
-        "progress columns -- n_surface_started, n_O_started, n_OH_started "
-        "(and the n_*_finalized variants): for each, <NA> means the candidate "
-        "is not yet eligible for that stage while == 0 means eligible but not "
-        "yet started (so n_O_started == 0 lists candidates whose surface "
-        "finished but no O job was launched, and n_OH_started == 0 those "
-        "ready for OH). Also revisit your reports and analyses, review the "
-        "decision notes, and consider adding new AQ-GNoME candidates."
-    )
-    closer = (
-        "Also return to the supervisor to discuss how best to expand the "
-        "submissions, and consider literature reviews (e.g. arXiv_search) to "
-        "inform which candidates and adsorption sites are most worth pursuing "
-        "-- let both your and the supervisor's decisions be guided by all of the following: "
-        "1. you current findings, 2. your hypothesis, 3. Literature suggestions."
-    )
-    return " ".join([header, body, closer])
 
 
 def format_wait_exit_disposition_hint(candidate_ids: Iterable[str]) -> str:
