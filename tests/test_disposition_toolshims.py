@@ -171,6 +171,18 @@ def test_gate_allows_terminal_when_fully_settled(tmp_path):
     assert _dispositions("c")[-1]["Decision"] == "Abandon"
 
 
+def test_gate_allows_terminal_after_O_submitted_then_failed(tmp_path):
+    # Once an O job has been SUBMITTED the candidate is no longer forgotten at O,
+    # even if that O failed -> the tool treats it as settled and the agent is free
+    # to mark it terminal (or submit more O). bulk+surface done, one O failed.
+    _setup(tmp_path); _add_candidate("c")
+    pb = _inject("c", "bulk_relaxation", "completed")
+    ps = _inject("c", "surface_relaxation", "completed", termination_index=0)
+    po = _inject("c", "O_adsorption", "failed", termination_index=0, site_index=0)
+    out = _tool_disposition("c", [pb, ps, po], "Abandon")
+    assert _val("c", "decision") == "Abandon"          # gate allowed -> engine wrote it
+
+
 def test_gate_failed_candidate_rejects_non_abandon(tmp_path):
     # A failed candidate may ONLY be Abandon; an active priority is rejected.
     _setup(tmp_path); _add_candidate("c")

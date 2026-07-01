@@ -357,6 +357,18 @@ def test_failed_bulk_candidate_is_not_forgotten(tmp_path):
     assert find_forgotten_jobs(EXPLOG, THR) == []
 
 
+def test_not_forgotten_after_O_submitted_even_if_failed(tmp_path):
+    # Once an O job is submitted the candidate is no longer 'forgotten at O',
+    # even if that O FAILED -> the agent is free to submit more O or mark the
+    # candidate terminal; a failed O does not re-trap it as ready work.
+    _setup(tmp_path)
+    _add_candidate("c")
+    _inject("c", "bulk_relaxation", "completed")
+    _inject("c", "surface_relaxation", "completed", termination_index=0)
+    _inject("c", "O_adsorption", "failed", termination_index=0, site_index=0)
+    assert find_forgotten_jobs(EXPLOG, THR) == []
+
+
 def test_norow_failed_candidate_is_excluded_from_forgotten(tmp_path):
     # A candidate whose bulk magnetic enumeration failed has NO process rows -- it would
     # otherwise be flagged forever ("start the bulk relaxation"). Marking it state='failed'
