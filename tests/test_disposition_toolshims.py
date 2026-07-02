@@ -326,17 +326,19 @@ def test_wait_refuses_when_queue_below_floor(tmp_path):
     var.enforce_queue_floor = True
     var.QUEUE_MIN_PENDING = 12        # distinctive floor; asserted via var, not a literal
     _add_candidate("matX")
-    # finished work, fully dispositioned -> Gate 1 satisfied; queue then below floor.
-    pid = _inject("matX", "surface_relaxation", "completed", termination_index=0)
+    # bulk+surface finished and dispositioned -> Gate 1 satisfied; O not started
+    # (forgotten at O) with a job pending but below the floor -> Gate 2 Path A.
+    pb = _inject("matX", "bulk_relaxation", "completed")
+    ps = _inject("matX", "surface_relaxation", "completed", termination_index=0)
     T.get_disposition_info.invoke({"candidate_id": "matX"})
     T.update_disposition_info.invoke({
         "candidate_id": "matX", "Analysis_and_implications": "s",
-        "Analyzed_process_id": [pid], "Future_plan": "f",
+        "Analyzed_process_id": [pb, ps], "Future_plan": "f",
         "Decision": "Medium priority",
     })
     _inject("matX", "surface_relaxation", "pending", termination_index=1)
-    out = T.wait_for_update.invoke({"patience": 1})        # Gate 2 fires -> refusal
+    out = T.wait_for_update.invoke({"patience": 1})        # Gate 2 fires -> Path A refusal
     assert isinstance(out, str)
-    assert "queue is running low" in out.lower()           # the Gate 2 header
     assert "matX" in out                                   # lists matX's forgotten work
-    assert "supervisor" in out.lower()                     # routes back to supervisor
+    assert "supervisor" in out.lower()                     # hands back to the supervisor
+    assert "submit" in out.lower()                         # asks for an immediate submit step
