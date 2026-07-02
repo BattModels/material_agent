@@ -187,6 +187,27 @@ def test_attach_na_for_not_found_candidate():
     assert pd.isna(out["Elements"].iloc[0])
 
 
+def test_attach_keeps_integer_columns_nullable_int_with_na_present():
+    # _lookup_df()'s HHI columns are plain int64 (matching production, where
+    # they come straight from pd.read_csv). A bare .map() would upcast the
+    # WHOLE column to float64 the moment any row is unmapped (NaN), silently
+    # contradicting the documented Int64 dtype. mp-999 isn't in the lookup,
+    # so this must trigger that path.
+    df = _candidates_df(["mp-1", "mp-999"])
+    out = attach_material_properties(df, _lookup_df(), ["average_HHI_P"])
+    assert out["average_HHI_P"].dtype == pd.Int64Dtype()
+    assert out.loc[out["candidate_id"] == "mp-1", "average_HHI_P"].iloc[0] == 2000
+    assert pd.isna(out.loc[out["candidate_id"] == "mp-999", "average_HHI_P"].iloc[0])
+
+
+def test_attach_leaves_non_integer_columns_untouched():
+    # Bandgap (float) and Crystal System (str) must not be coerced to Int64.
+    df = _candidates_df(["mp-1", "mp-999"])
+    out = attach_material_properties(df, _lookup_df(), ["Bandgap", "Crystal System"])
+    assert pd.api.types.is_float_dtype(out["Bandgap"].dtype)
+    assert out["Bandgap"].dtype != pd.Int64Dtype()
+
+
 # ---------------------------------------------------------------------------
 # apply_candidate_query (orchestration)
 # ---------------------------------------------------------------------------

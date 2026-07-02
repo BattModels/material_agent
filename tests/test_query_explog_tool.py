@@ -33,6 +33,7 @@ if not os.environ.get("RUN_SLOW_TESTS"):
 
 from gnome_dreams_oer_screening.explog.explog import EXPLOG
 from src.tools import query_explog, _STABILITY_CACHE
+from src.aq_gnome_candidate_sync import sync_reduced_formula
 
 
 def _setup(tmp_path):
@@ -133,3 +134,29 @@ def test_invalid_table_name_returns_error_message(tmp_path):
         "reason": "invalid table name should be rejected",
     })
     assert "table_name must be either 'candidates' or 'processes'" in out
+
+
+def test_invoke_py_resume_reconciliation_sequence(tmp_path):
+    # Mirrors invoke.py's Part 4 (added after the code-review finding that
+    # enter_candidate_in_log could crash on a resumed pre-feature checkpoint):
+    #   EXPLOG.job_handler._ensure_reduced_formula_column()
+    #   sync_reduced_formula(EXPLOG.relational_frame.candidates.df, _STABILITY_CACHE.candidate_lookup)
+    # Exercises the exact composition against the real EXPLOG + real
+    # _STABILITY_CACHE -- each piece is unit tested alone (test_reduced_formula.py,
+    # test_aq_gnome_candidate_sync.py), this proves they compose correctly.
+    _setup(tmp_path)
+    mid = _real_material_id()
+    _add_candidate(mid)
+    expected_formula = _STABILITY_CACHE.candidate_lookup.loc[mid, "Reduced Formula"]
+
+    # Simulate a resumed pre-feature checkpoint: the column existed (from
+    # add_candidate) but pretend it never did, as a real old checkpoint would.
+    cdf = EXPLOG.relational_frame.candidates.df
+    EXPLOG.relational_frame.candidates.df = cdf.drop(columns=["reduced_formula"])
+
+    EXPLOG.job_handler._ensure_reduced_formula_column()
+    sync_reduced_formula(EXPLOG.relational_frame.candidates.df,
+                         _STABILITY_CACHE.candidate_lookup)
+
+    cdf = EXPLOG.relational_frame.candidates.df
+    assert cdf.loc[cdf["candidate_id"] == mid, "reduced_formula"].iloc[0] == expected_formula

@@ -35,6 +35,11 @@ from pathlib import Path
 from gnome_dreams_oer_screening.explog.explog import EXPLOG
 
 from src.disposition_reconcile import reconcile_dispositions
+# _STABILITY_CACHE is already loaded by this point (src.planNexe2 -> src.tools
+# above); this import is free, just a reference to the same module-level
+# singleton -- not a second load of the AQ-GNoME database.
+from src.tools import _STABILITY_CACHE
+from src.aq_gnome_candidate_sync import sync_reduced_formula
 
 
 # =====================================================================
@@ -770,6 +775,19 @@ You have a maximum of 1 hours to complete the entire study and make your final r
                 for _cid, _info in _recon.items():
                     print(f"  {_cid}: {_info}")
             print("----------------------------------------------------------------")
+
+            # Part 4: self-heal + populate reduced_formula for every candidate
+            # (idempotent, runs every resume). Explog.add_candidate already
+            # self-heals the column's mere existence on its own -- this
+            # additionally populates real AQ-GNoME values for candidates
+            # already in the table immediately, rather than waiting for the
+            # agent's first query_explog/read_explog call. Deliberately does
+            # NOT call EXPLOG.update_log() (which also polls the live SLURM
+            # queue in production mode -- a side effect this step has no
+            # reason to trigger).
+            EXPLOG.job_handler._ensure_reduced_formula_column()
+            sync_reduced_formula(EXPLOG.relational_frame.candidates.df,
+                                 _STABILITY_CACHE.candidate_lookup)
 
             CANVAS.print()
             print(CANVAS.result_registry)
