@@ -67,7 +67,10 @@ from src.disposition_messages import (
 from src.forgotten_jobs import find_forgotten_jobs
 from src.aq_gnome_candidate_sync import (
     MATERIAL_PROPERTY_COLUMNS,
+    DECOMPOSITION_ENERGY_COLUMN,
     sync_reduced_formula,
+    compute_decomposition_energy,
+    sync_decomposition_energy,
     build_candidates_view,
 )
 from gnome_dreams_oer_screening.vasp.magnetic_enumeration import (
@@ -593,7 +596,7 @@ def query_explog(
     sort: List[SortSpec] = [],
     start_idx: Annotated[int, "Row index to start reading from (inclusive). The tool always returns up to 50 rows from this position. Use 0 for the first page, 50 for the second, etc."] = 0,
     hide_redundant_oh: Annotated[bool, "When True (default), for each OH adsorption group (same candidate, termination, and site index), only the row with the final G(OH) value is retained. Groups without any G(OH) value are kept in full. Only applies to the processes table."] = True,
-    include_material_properties: Annotated[bool, "Only affects the candidates table. When True, also returns the AQ-GNoME material-property columns (Elements, Crystal System, Bandgap, Disorder Probability, average_HHI_P, average_HHI_R, average_HHI_P_excluding_O_H, average_HHI_R_excluding_O_H, max_HHI_P, max_HHI_R), appended after the existing columns. You do NOT need to set this to True just to filter or sort by one of these columns -- e.g. filters=[{'column': 'Elements', 'op': 'contains_any', 'value': ['Ru']}] works whether or not this flag is set. The tool detects when a filter/sort references one of these columns and joins it in automatically to apply that filter/sort; this flag only controls whether the columns remain visible in the returned table afterwards. Default False, since these columns are rarely needed and make an already-wide table wider."] = False,
+    include_material_properties: Annotated[bool, "Only affects the candidates table. When True, also returns the AQ-GNoME material-property columns (Elements, Crystal System, Bandgap, Disorder Probability, average_HHI_P, average_HHI_R, average_HHI_P_excluding_O_H, average_HHI_R_excluding_O_H, max_HHI_P, max_HHI_R, and max_dG_U[1.2,2.0]_pH0 -- the Pourbaix decomposition energy), appended after the existing columns. You do NOT need to set this to True just to filter or sort by one of these columns -- e.g. filters=[{'column': 'Elements', 'op': 'contains_any', 'value': ['Ru']}] works whether or not this flag is set. The tool detects when a filter/sort references one of these columns and joins it in automatically to apply that filter/sort; this flag only controls whether the columns remain visible in the returned table afterwards. Default False, since these columns are rarely needed and make an already-wide table wider."] = False,
 ) -> str:
     """Query the experiment log (EXPLOG) with optional filter and sort criteria. Automatically
     fetches the latest job updates before returning. Returns the filtered table as a string with row index.
@@ -601,8 +604,8 @@ def query_explog(
     candidates table contains:
         candidate_id (str, MaterialID of the candidate),
         "Reduced Formula" (str, the AQ-GNoME field of the same name for this candidate -- stored
-            under this exact name, matching OER_data_analasis_v2/get_candidate_data/browse_df;
-            <NA> only in the rare case the candidate can no longer be found in the AQ-GNoME
+            under this exact name, matching OER_data_analasis_v2/browse_df; <NA> only in the
+            rare case the candidate can no longer be found in the AQ-GNoME
             database),
         reason_or_hypothesis (str, for selecting the candidate),
         notes (str, any notes you've added for the candidate),
@@ -635,8 +638,7 @@ def query_explog(
         --- material-property columns from the AQ-GNoME database (see include_material_properties
             above). Only present in the output when requested via that flag, or transiently joined and
             then filtered/sorted on when referenced by `filters`/`sort` even if the flag is False. Field
-            semantics match the AQ-GNoME dataset fields already used by OER_data_analasis_v2 and
-            get_candidate_data: ---
+            semantics match the AQ-GNoME dataset fields already used by OER_data_analasis_v2: ---
         Elements (List[str], unique chemical element symbols in the material -- use this to filter
             candidates by composition, e.g. contains_any=["Ru"] or contains_all=["Ru", "O"]),
         Crystal System (str, e.g. cubic, tetragonal, orthorhombic, hexagonal, trigonal, monoclinic,
@@ -650,7 +652,12 @@ def query_explog(
         average_HHI_P_excluding_O_H, average_HHI_R_excluding_O_H (Int64, same as above but excluding O
             and H from the average),
         max_HHI_P, max_HHI_R (Int64, the single highest-HHI element in the material, production/reserve
-            respectively)
+            respectively),
+        max_dG_U[1.2,2.0]_pH0 (Float64, maximum (worst-case) Pourbaix decomposition energy in eV/atom
+            across pH=0 and U in [1.2, 2.0] V vs SHE, using mixed GGA/GGA(+U)/r2SCAN stability data with
+            the solid filter enabled. A value of 0.0 eV/atom means the material is the most stable known
+            phase under these conditions; larger positive values indicate increasing tendency to
+            decompose into more stable phases)
     processes table contains:
         process_id (str, unique id for each process),
         candidate_id (str, MaterialID of the candidate this process belongs to),
@@ -684,6 +691,14 @@ def query_explog(
         # checkpoint. Mutates EXPLOG's own frame in place (not a copy) so
         # the fix persists.
         sync_reduced_formula(cdf, _STABILITY_CACHE.candidate_lookup)
+        # Reconcile the persisted decomposition-energy column too, but only
+        # for candidates still missing a value (it's an H5PY read per
+        # candidate, unlike Reduced Formula's cheap lookup -- see
+        # sync_decomposition_energy). Also mutates EXPLOG's own frame in
+        # place.
+        sync_decomposition_energy(cdf, _STABILITY_CACHE.candidate_lookup,
+                                  _STABILITY_CACHE.dh,
+                                  _STABILITY_CACHE.decomposition_criteria)
         # Drops agent-internal columns (study_obj, disposition_record,
         # ready_for_disposition_update -- the agent-visible disposition
         # columns are `decision` and `needs_disposition_update`), then joins
@@ -691,6 +706,9 @@ def query_explog(
         # include_material_properties above) only when that flag is True or
         # filters/sort reference one of them, applies filters/sort via
         # df_query, then drops those columns again unless the flag was True.
+        # max_dG_U[1.2,2.0]_pH0 (Pourbaix decomposition energy) follows the
+        # same show/hide contract, but it's already a persisted column by
+        # this point (synced above), so no join is needed for it here.
         filteredDF = build_candidates_view(
             cdf.copy(), filters, sort, include_material_properties,
             _STABILITY_CACHE.candidate_lookup,
@@ -764,6 +782,10 @@ def read_explog(
     #     pickle.dump(EXPLOG, f)
     sync_reduced_formula(EXPLOG.relational_frame.candidates.df,
                          _STABILITY_CACHE.candidate_lookup)
+    sync_decomposition_energy(EXPLOG.relational_frame.candidates.df,
+                              _STABILITY_CACHE.candidate_lookup,
+                              _STABILITY_CACHE.dh,
+                              _STABILITY_CACHE.decomposition_criteria)
     cadidate_row_df = EXPLOG.relational_frame.candidates[candidate_id].df
     # Hide the agent-internal columns (see query_explog): study_obj,
     # disposition_record (read via get_disposition_info), ready_for_disposition_update.
@@ -891,6 +913,16 @@ def enter_candidate_in_log(
         return f"Error: MaterialId {MaterialId} not found in the AQ-GNoME database."
 
     reduced_formula = _STABILITY_CACHE.candidate_lookup.loc[MaterialId, "Reduced Formula"]
+    # Computed once, here, rather than lazily on every query_explog call: an
+    # H5PY read per candidate, so persisting it at entry time (like
+    # reduced_formula) avoids repeating that work for every future query.
+    _decomp_row = compute_decomposition_energy(
+        pd.DataFrame({"candidate_id": [MaterialId]}),
+        _STABILITY_CACHE.candidate_lookup,
+        _STABILITY_CACHE.dh,
+        _STABILITY_CACHE.decomposition_criteria,
+    )
+    decomposition_energy = _decomp_row[DECOMPOSITION_ENERGY_COLUMN].iloc[0]
     atoms = _STABILITY_CACHE.afdb.get_atoms_material_id(MaterialId, _STABILITY_CACHE.df)
     
     CANVAS.write(f"{MaterialId}_OER_catalyst_study_atoms", atoms, 
@@ -906,7 +938,8 @@ def enter_candidate_in_log(
                          reason_or_hypothesis=reason_or_hypothesis,
                          notes=note,
                          study_obj=catalyst_study,
-                         reduced_formula=reduced_formula)
+                         reduced_formula=reduced_formula,
+                         decomposition_energy=decomposition_energy)
     
     # save EXPLOG into a pickle file under WORKING_DIRECTORY for record and future reference
     # with open(os.path.join(var.my_WORKING_DIRECTORY, "EXPLOG.pkl"), "wb") as f:
@@ -1464,9 +1497,13 @@ class _StabilityCache:
         # src/aq_gnome_candidate_sync.py). Built once here, keeping only the
         # columns those call sites need, so they can reference it directly
         # instead of paying the .df property's full self._df.copy() on every
-        # query_explog/read_explog call.
+        # query_explog/read_explog call. mixed_pbx_save_id/gga_only_pbx_save_id
+        # are for compute_decomposition_energy (they identify which H5PY
+        # decomposition-energy grid belongs to each MaterialId; the grids
+        # themselves aren't precomputed here -- see self.decomposition_criteria).
         self.candidate_lookup = self._df[
             ["MaterialId", "Reduced Formula"] + MATERIAL_PROPERTY_COLUMNS
+            + ["mixed_pbx_save_id", "gga_only_pbx_save_id"]
         ].set_index("MaterialId")
         print(f"  [4/5] Done in {time.time() - _t:.1f}s.", flush=True)
 
@@ -1474,6 +1511,15 @@ class _StabilityCache:
         _t = time.time()
         self.afdb = atoms_from_db(None)
         print(f"  [5/5] Done in {time.time() - _t:.1f}s.", flush=True)
+
+        # Built once (cheap: just sets up numpy grid indices), reused by
+        # every query_explog(include_material_properties=True) call for
+        # compute_decomposition_energy -- decomposition_threshold=10**5
+        # means "don't filter, just compute the value" (mirrors the
+        # now-deactivated get_candidate_data tool's exact pattern).
+        self.decomposition_criteria = Stability_Criteria(
+            pHs=self.PHS, Us=self.US, decomposition_threshold=10**5
+        )
 
     @property
     def df(self) -> pd.DataFrame:

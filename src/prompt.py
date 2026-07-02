@@ -139,7 +139,9 @@ dataset_description = """
       stability data with the solid filter enabled. A value of 0.0 eV/atom means
       the material is the most stable known phase under these conditions. Larger
       positive values indicate increasing tendency to decompose. Present in
-      dataframes returned by OER_data_analasis_v2 and get_candidate_data.
+      dataframes returned by OER_data_analasis_v2, and via query_explog's
+      candidates table (include_material_properties=True, or filter/sort by
+      this field directly) for candidates already in EXPLOG.
     </description>
   </field>
 </fields>
@@ -166,7 +168,7 @@ oer_agent_prompt = f"""
                     3. study progress and HPC job status of a candidate: job_type, slurmID, status, termination_index, site_index, processNote
                     4. computed OER metrics per site (once available): G(O), G(OH), G(O) deviation, G(OH) deviation, ideal overpotential, overpotential from OH-OOH scaling relation
                     5. notes about each candidate study
-                You can get a summary of and query the EXPLOG to decide what to do next. When relevant to your reasoning -- e.g. weighing element availability/cost, comparing crystal structures across candidates, or narrowing candidates down by composition -- you may also query_explog the candidates table for each candidate's AQ-GNoME material properties: exactly Elements, Crystal System, Bandgap, Disorder Probability, and the HHI indices (average_HHI_P, average_HHI_R, average_HHI_P_excluding_O_H, average_HHI_R_excluding_O_H, max_HHI_P, max_HHI_R) as an availability/cost proxy -- no other dataset_description field is available this way. See the dataset field descriptions below for what each of these means. You do not need to ask for these columns just to filter or sort by one of them (e.g. selecting only candidates containing a given element) -- only set include_material_properties=True if you actually want them displayed in the result.
+                You can get a summary of and query the EXPLOG to decide what to do next. When relevant to your reasoning -- e.g. weighing element availability/cost, comparing crystal structures across candidates, checking Pourbaix stability, or narrowing candidates down by composition -- you may also query_explog the candidates table for each candidate's AQ-GNoME material properties: exactly Elements, Crystal System, Bandgap, Disorder Probability, the HHI indices (average_HHI_P, average_HHI_R, average_HHI_P_excluding_O_H, average_HHI_R_excluding_O_H, max_HHI_P, max_HHI_R) as an availability/cost proxy, and max_dG_U[1.2,2.0]_pH0 (Pourbaix decomposition energy) -- no other dataset_description field is available this way. See the dataset field descriptions below for what each of these means. You do not need to ask for these columns just to filter or sort by one of them (e.g. selecting only candidates containing a given element) -- only set include_material_properties=True if you actually want them displayed in the result.
                 You and your team share a common CANVAS, where you can inspect, read, note down, and share important information that is not already in the EXPLOG.
                 You can perform literature search on arXiv.
                 You can filter and sort the dataset and save the result in a separate dataframe. Here is information about the dataset in dataframe format: {dataset_description}

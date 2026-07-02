@@ -61,7 +61,6 @@ class myStep(BaseModel):
         description=f"Agent to perform the step. Should be one of {members}."
     )
     required_tools: List[Literal[
-                            "inspect_explog",
                             "inspect_my_canvas",
                             "write_my_canvas",
                             "read_my_canvas",
@@ -79,7 +78,6 @@ class myStep(BaseModel):
                             "update_disposition_info",
                             # "math_expression_tool",
                             # "extract_numeric_from_tool_output",
-                            "get_candidate_data",
                             "write_report",
                             "search_artifacts",
                             ""
@@ -296,7 +294,6 @@ def _fingerprint(x):
 
 POLLING_TOOLS = {
     "query_explog",
-    "inspect_explog",
     "read_explog",
     "extract_df",
     "OER_data_analasis_v2",
@@ -688,7 +685,6 @@ def supervisor_chain_node(state, config, agent=None, name=None):
         if isinstance(agent_response.action, Plan):
             for step in agent_response.action.steps:
                 ToolList = [
-                    "inspect_explog",
                     "inspect_my_canvas",
                     "write_my_canvas",
                     "read_my_canvas",
@@ -707,7 +703,6 @@ def supervisor_chain_node(state, config, agent=None, name=None):
                     # "math_expression_tool",
                     # "extract_numeric_from_tool_output",
                     "write_report",
-                    "get_candidate_data",
                     "search_artifacts",
                     ""
                 ]
@@ -1035,7 +1030,6 @@ def create_planning_graph(config: dict) -> StateGraph:
     supervisor_tools = [
         inspect_my_canvas,
         read_my_canvas,
-        inspect_explog,
         query_explog,
         ]
     
@@ -1089,7 +1083,6 @@ def create_planning_graph(config: dict) -> StateGraph:
 
     
     oer_tools = [
-        inspect_explog,
         inspect_my_canvas,
         write_my_canvas,
         read_my_canvas,
@@ -1109,7 +1102,6 @@ def create_planning_graph(config: dict) -> StateGraph:
         update_disposition_info,
         # math_expression_tool,
         # extract_numeric_from_tool_output,
-        get_candidate_data,
         search_artifacts,
         ]
     # oer_agent = create_react_agent(workerllm, tools=oer_tools,

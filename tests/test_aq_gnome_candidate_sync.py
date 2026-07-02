@@ -45,6 +45,22 @@
 #     (rather than inline code in tools.py) is what lets a fast test prove
 #     "reduced_formula is always visible, internal columns never are" without
 #     importing src.tools.
+#
+#   DECOMPOSITION_ENERGY_COLUMN: like "Reduced Formula", this is a PERSISTED
+#     EXPLOG column (not a MATERIAL_PROPERTY_COLUMNS-style transient join) --
+#     computed once at add_candidate time and reconciled on resume, since
+#     (unlike the other material properties) computing it is an H5PY read per
+#     candidate, not a cheap in-memory lookup. apply_candidate_query only
+#     drops it from the OUTPUT when the flag is False; it never joins or
+#     computes it (that's sync_decomposition_energy's job, called by the
+#     caller before this function runs, same division of labor as
+#     sync_reduced_formula/build_candidates_view).
+#
+#   sync_decomposition_energy(cdf, pbx_lookup_df, dh, sc) -> None
+#     Mutates cdf's DECOMPOSITION_ENERGY_COLUMN in place. Self-heals (creates
+#     the column if missing) and fills ONLY rows currently <NA> -- the
+#     opposite of sync_reduced_formula's unconditional-overwrite, because
+#     recomputing an already-known value here means a wasted H5PY read.
 
 import sys
 from pathlib import Path
@@ -58,12 +74,46 @@ from src.utils import Filter, SortSpec
 from src.aq_gnome_candidate_sync import (
     MATERIAL_PROPERTY_COLUMNS,
     INTERNAL_CANDIDATE_COLUMNS,
+    DECOMPOSITION_ENERGY_COLUMN,
     sync_reduced_formula,
     columns_needed_for_query,
     attach_material_properties,
+    compute_decomposition_energy,
+    sync_decomposition_energy,
     apply_candidate_query,
     build_candidates_view,
 )
+
+
+# Lightweight fakes for the AQ-GNoME reader/criteria objects
+# compute_decomposition_energy needs (dh.mixed_results/gga_results.read_id(id),
+# sc.max_dG_in_region(decom_G), sc.col_name). Deliberately NOT importing the
+# real aq_gnome.Stability_Criteria here -- importing it alone (no database
+# load) still costs ~10s, transitively pulling in pymatgen/torch/matplotlib,
+# which would tax this file's "fast" guarantee for every test, not just the
+# ones that need it.
+class _FakeReader:
+    def __init__(self, values_by_id):
+        self._values_by_id = values_by_id
+
+    def read_id(self, id_):
+        return self._values_by_id[id_]
+
+
+class _FakeDataHandler:
+    def __init__(self, mixed_values_by_id=None, gga_values_by_id=None):
+        self.mixed_results = _FakeReader(mixed_values_by_id or {})
+        self.gga_results = _FakeReader(gga_values_by_id or {})
+
+
+class _FakeStabilityCriteria:
+    col_name = DECOMPOSITION_ENERGY_COLUMN
+
+    def max_dG_in_region(self, decom_G):
+        # The fake reader already returns the "region max" scalar directly,
+        # so this just passes it through -- real Stability_Criteria's grid
+        # indexing is pre-existing, tested-elsewhere code, not under test here.
+        return decom_G
 
 
 def _lookup_df():
@@ -324,3 +374,159 @@ def test_build_candidates_view_does_not_mutate_input():
     original_cols = list(cdf.columns)
     build_candidates_view(cdf, [], [], True, _lookup_df())
     assert list(cdf.columns) == original_cols
+
+
+# ---------------------------------------------------------------------------
+# compute_decomposition_energy -- replaces get_candidate_data's per-ID
+# decomposition-energy lookup (now deactivated as a tool). Mirrors its exact
+# algorithm: prefer mixed (GGA/GGA(+U)/r2SCAN) results, fall back to GGA-only
+# when mixed_pbx_save_id == "Not computed", floor at 0.0.
+# ---------------------------------------------------------------------------
+
+def _pbx_lookup_df():
+    return pd.DataFrame(
+        {
+            "mixed_pbx_save_id": ["mixed-1", "Not computed"],
+            "gga_only_pbx_save_id": ["gga-1", "gga-2"],
+        },
+        index=pd.Index(["mp-1", "mp-2"], name="MaterialId"),
+    )
+
+
+def test_compute_decomposition_energy_uses_mixed_when_available():
+    df = _candidates_df(["mp-1"])
+    dh = _FakeDataHandler(mixed_values_by_id={"mixed-1": 0.42})
+    out = compute_decomposition_energy(df, _pbx_lookup_df(), dh, _FakeStabilityCriteria())
+    assert out[DECOMPOSITION_ENERGY_COLUMN].iloc[0] == 0.42
+
+
+def test_compute_decomposition_energy_falls_back_to_gga_when_mixed_not_computed():
+    df = _candidates_df(["mp-2"])
+    dh = _FakeDataHandler(gga_values_by_id={"gga-2": 0.13})
+    out = compute_decomposition_energy(df, _pbx_lookup_df(), dh, _FakeStabilityCriteria())
+    assert out[DECOMPOSITION_ENERGY_COLUMN].iloc[0] == 0.13
+
+
+def test_compute_decomposition_energy_clamps_negative_to_zero():
+    df = _candidates_df(["mp-1"])
+    dh = _FakeDataHandler(mixed_values_by_id={"mixed-1": -0.7})
+    out = compute_decomposition_energy(df, _pbx_lookup_df(), dh, _FakeStabilityCriteria())
+    assert out[DECOMPOSITION_ENERGY_COLUMN].iloc[0] == 0.0
+
+
+def test_compute_decomposition_energy_na_for_not_found_candidate():
+    df = _candidates_df(["mp-999"])
+    dh = _FakeDataHandler()
+    out = compute_decomposition_energy(df, _pbx_lookup_df(), dh, _FakeStabilityCriteria())
+    assert pd.isna(out[DECOMPOSITION_ENERGY_COLUMN].iloc[0])
+
+
+def test_compute_decomposition_energy_does_not_mutate_input():
+    df = _candidates_df(["mp-1"])
+    original_cols = list(df.columns)
+    dh = _FakeDataHandler(mixed_values_by_id={"mixed-1": 0.1})
+    compute_decomposition_energy(df, _pbx_lookup_df(), dh, _FakeStabilityCriteria())
+    assert list(df.columns) == original_cols
+
+
+# ---------------------------------------------------------------------------
+# sync_decomposition_energy -- unlike sync_reduced_formula's unconditional
+# overwrite, this fills ONLY rows currently <NA> (recomputing an already-known
+# value would waste an H5PY read for no benefit, since AQ-GNoME data is
+# static within a run).
+# ---------------------------------------------------------------------------
+
+def test_sync_decomposition_energy_creates_column_if_missing():
+    cdf = _candidates_df(["mp-1"])
+    assert DECOMPOSITION_ENERGY_COLUMN not in cdf.columns
+    dh = _FakeDataHandler(mixed_values_by_id={"mixed-1": 0.42})
+    sync_decomposition_energy(cdf, _pbx_lookup_df(), dh, _FakeStabilityCriteria())
+    assert DECOMPOSITION_ENERGY_COLUMN in cdf.columns
+    assert cdf[DECOMPOSITION_ENERGY_COLUMN].iloc[0] == 0.42
+
+
+def test_sync_decomposition_energy_fills_only_missing_rows():
+    cdf = _candidates_df(["mp-1", "mp-2"])
+    cdf[DECOMPOSITION_ENERGY_COLUMN] = pd.array([0.99, pd.NA], dtype="Float64")
+    # Only mp-2's lookup is provided; if mp-1 were recomputed this would
+    # KeyError on "mixed-1", proving the already-filled row was skipped.
+    dh = _FakeDataHandler(gga_values_by_id={"gga-2": 0.05})
+    sync_decomposition_energy(cdf, _pbx_lookup_df(), dh, _FakeStabilityCriteria())
+    assert cdf.loc[cdf["candidate_id"] == "mp-1", DECOMPOSITION_ENERGY_COLUMN].iloc[0] == 0.99
+    assert cdf.loc[cdf["candidate_id"] == "mp-2", DECOMPOSITION_ENERGY_COLUMN].iloc[0] == 0.05
+
+
+def test_sync_decomposition_energy_noop_when_nothing_missing():
+    cdf = _candidates_df(["mp-1"])
+    cdf[DECOMPOSITION_ENERGY_COLUMN] = pd.array([0.99], dtype="Float64")
+    dh = _FakeDataHandler()  # empty -- would KeyError if anything were (re)computed
+    sync_decomposition_energy(cdf, _pbx_lookup_df(), dh, _FakeStabilityCriteria())
+    assert cdf[DECOMPOSITION_ENERGY_COLUMN].iloc[0] == 0.99
+
+
+def test_sync_decomposition_energy_na_for_candidate_not_in_lookup():
+    cdf = _candidates_df(["mp-999"])
+    dh = _FakeDataHandler()
+    sync_decomposition_energy(cdf, _pbx_lookup_df(), dh, _FakeStabilityCriteria())
+    assert pd.isna(cdf[DECOMPOSITION_ENERGY_COLUMN].iloc[0])
+
+
+def test_sync_decomposition_energy_empty_frame_no_raise():
+    cdf = _candidates_df([])
+    dh = _FakeDataHandler()
+    sync_decomposition_energy(cdf, _pbx_lookup_df(), dh, _FakeStabilityCriteria())
+    assert DECOMPOSITION_ENERGY_COLUMN in cdf.columns
+    assert len(cdf) == 0
+
+
+# ---------------------------------------------------------------------------
+# apply_candidate_query / build_candidates_view -- decomposition energy is a
+# PERSISTED column (like "Reduced Formula"), not a MATERIAL_PROPERTY_COLUMNS-
+# style transient join: when it's already present on the input df (as it will
+# be after sync_decomposition_energy has run), these functions only decide
+# whether to keep or drop it based on the flag -- no join step, and filtering/
+# sorting on it works through plain df_query with no special-casing at all.
+# ---------------------------------------------------------------------------
+
+def _candidates_df_with_decomp(ids, values):
+    df = _candidates_df(ids)
+    df[DECOMPOSITION_ENERGY_COLUMN] = pd.array(values, dtype="Float64")
+    return df
+
+
+def test_flag_true_keeps_decomposition_energy_already_on_df():
+    df = _candidates_df_with_decomp(["mp-1"], [0.42])
+    out = apply_candidate_query(df, [], [], True, _lookup_df())
+    assert DECOMPOSITION_ENERGY_COLUMN in out.columns
+    assert out[DECOMPOSITION_ENERGY_COLUMN].iloc[0] == 0.42
+
+
+def test_flag_false_drops_decomposition_energy_already_on_df():
+    df = _candidates_df_with_decomp(["mp-1"], [0.42])
+    out = apply_candidate_query(df, [], [], False, _lookup_df())
+    assert DECOMPOSITION_ENERGY_COLUMN not in out.columns
+
+
+def test_flag_false_drop_is_safe_when_column_absent():
+    # apply_candidate_query must not assume the column is always present
+    # (e.g. a candidate predating this feature, not yet reconciled).
+    df = _candidates_df(["mp-1"])
+    out = apply_candidate_query(df, [], [], False, _lookup_df())
+    assert DECOMPOSITION_ENERGY_COLUMN not in out.columns
+
+
+def test_filter_on_decomposition_energy_works_without_flag_no_join_needed():
+    df = _candidates_df_with_decomp(["mp-1", "mp-2"], [0.42, 0.05])
+    filters = [Filter(column=DECOMPOSITION_ENERGY_COLUMN, op="lt", value=0.1)]
+    out = apply_candidate_query(df, filters, [], False, _lookup_df())
+    assert list(out["candidate_id"]) == ["mp-2"]
+    # Filtered fine with no pbx_lookup_df/dh/sc passed at all; flag False -> dropped after.
+    assert DECOMPOSITION_ENERGY_COLUMN not in out.columns
+
+
+def test_build_candidates_view_keeps_decomposition_energy_when_flagged():
+    cdf = _raw_candidates_df(["mp-1"])
+    cdf[DECOMPOSITION_ENERGY_COLUMN] = pd.array([0.42], dtype="Float64")
+    out = build_candidates_view(cdf, [], [], True, _lookup_df())
+    assert DECOMPOSITION_ENERGY_COLUMN in out.columns
+    assert out[DECOMPOSITION_ENERGY_COLUMN].iloc[0] == 0.42

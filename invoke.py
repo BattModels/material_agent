@@ -39,7 +39,7 @@ from src.disposition_reconcile import reconcile_dispositions
 # above); this import is free, just a reference to the same module-level
 # singleton -- not a second load of the AQ-GNoME database.
 from src.tools import _STABILITY_CACHE
-from src.aq_gnome_candidate_sync import sync_reduced_formula
+from src.aq_gnome_candidate_sync import sync_reduced_formula, sync_decomposition_energy
 
 
 # =====================================================================
@@ -776,18 +776,31 @@ You have a maximum of 1 hours to complete the entire study and make your final r
                     print(f"  {_cid}: {_info}")
             print("----------------------------------------------------------------")
 
-            # Part 4: self-heal + populate reduced_formula for every candidate
-            # (idempotent, runs every resume). Explog.add_candidate already
-            # self-heals the column's mere existence on its own -- this
-            # additionally populates real AQ-GNoME values for candidates
-            # already in the table immediately, rather than waiting for the
-            # agent's first query_explog/read_explog call. Deliberately does
-            # NOT call EXPLOG.update_log() (which also polls the live SLURM
-            # queue in production mode -- a side effect this step has no
-            # reason to trigger).
+            # Part 4: self-heal + populate reduced_formula / decomposition
+            # energy for every candidate (idempotent, runs every resume).
+            # Explog.add_candidate already self-heals both columns' mere
+            # existence on its own -- this additionally populates real
+            # AQ-GNoME values for candidates already in the table
+            # immediately, rather than waiting for the agent's first
+            # query_explog/read_explog call. Deliberately does NOT call
+            # EXPLOG.update_log() (which also polls the live SLURM queue in
+            # production mode -- a side effect this step has no reason to
+            # trigger). sync_decomposition_energy only fills candidates
+            # still missing a value (an H5PY read per candidate, unlike
+            # reduced_formula's cheap lookup), so it never redoes work for
+            # candidates that already have one.
+
+            print('----------------------------------------------------------------')
+            print('RECONCILING REDUCED FORMULA AND DECOMPOSITION ENERGY (idempotent, runs every resume)', flush=True)
             EXPLOG.job_handler._ensure_reduced_formula_column()
+            EXPLOG.job_handler._ensure_decomposition_energy_column()
             sync_reduced_formula(EXPLOG.relational_frame.candidates.df,
                                  _STABILITY_CACHE.candidate_lookup)
+            sync_decomposition_energy(EXPLOG.relational_frame.candidates.df,
+                                      _STABILITY_CACHE.candidate_lookup,
+                                      _STABILITY_CACHE.dh,
+                                      _STABILITY_CACHE.decomposition_criteria)
+            print('----------------------------------------------------------------')
 
             CANVAS.print()
             print(CANVAS.result_registry)
