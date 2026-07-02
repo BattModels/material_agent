@@ -5,11 +5,12 @@
 # cost). src/tools.py wires this module's functions to the real EXPLOG and
 # _STABILITY_CACHE.
 #
-# Part 1 -- reduced_formula reconciliation:
+# Part 1 -- "Reduced Formula" reconciliation:
 #   sync_reduced_formula refreshes the candidates table's persisted
-#   reduced_formula column from the AQ-GNoME database, healing candidates
-#   entered before this feature existed (or resumed from a pre-feature
-#   checkpoint).
+#   "Reduced Formula" column (named to match AQ-GNoME's own field name
+#   exactly, for consistency with OER_data_analasis_v2/get_candidate_data/
+#   browse_df) from the AQ-GNoME database, healing candidates entered before
+#   this feature existed (or resumed from a pre-feature checkpoint).
 #
 # Part 2 -- optional material-property enrichment for query_explog:
 #   apply_candidate_query joins HHI / disorder / bandgap / crystal-system /
@@ -27,7 +28,7 @@ from src.utils import Filter, SortSpec, df_query
 # AQ-GNoME columns Part 2 can surface, using their exact source names (see
 # `dataset_description` in src/prompt.py, already in the OER agent's system
 # prompt, for field semantics). "Reduced Formula" is intentionally excluded:
-# it is the separately persisted `reduced_formula` EXPLOG column (Part 1),
+# it is the separately persisted "Reduced Formula" EXPLOG column (Part 1),
 # always present regardless of this flag.
 MATERIAL_PROPERTY_COLUMNS: List[str] = [
     "Elements",
@@ -44,21 +45,23 @@ MATERIAL_PROPERTY_COLUMNS: List[str] = [
 
 
 def sync_reduced_formula(cdf: pd.DataFrame, lookup_df: pd.DataFrame) -> None:
-    """Refresh cdf's reduced_formula column in place from
-    lookup_df["Reduced Formula"] (lookup_df indexed by MaterialId).
+    """Refresh cdf's "Reduced Formula" column in place from
+    lookup_df["Reduced Formula"] (lookup_df indexed by MaterialId). Source
+    and destination share the same column name -- both match AQ-GNoME's own
+    field name exactly, for consistency across the whole repo.
 
     Self-heals (creates the column if entirely missing) and unconditionally
     overwrites every row from the lookup -- cheap given candidate counts are
     small, and simpler/more robust than only-fill-if-missing. A candidate_id
     not found in lookup_df gets <NA>.
     """
-    if "reduced_formula" not in cdf.columns:
-        cdf["reduced_formula"] = pd.Series(
+    if "Reduced Formula" not in cdf.columns:
+        cdf["Reduced Formula"] = pd.Series(
             [pd.NA] * len(cdf), index=cdf.index, dtype="string"
         )
     if len(cdf) == 0:
         return
-    cdf["reduced_formula"] = (
+    cdf["Reduced Formula"] = (
         cdf["candidate_id"].map(lookup_df["Reduced Formula"]).astype("string")
     )
 
@@ -149,7 +152,7 @@ def build_candidates_view(
     Does NOT call sync_reduced_formula -- that mutates the real EXPLOG frame
     in place (a side effect callers must trigger separately, before this
     function runs) and is a distinct concern from building a display view.
-    reduced_formula itself is never touched here: it isn't in
+    "Reduced Formula" itself is never touched here: it isn't in
     INTERNAL_CANDIDATE_COLUMNS or MATERIAL_PROPERTY_COLUMNS, so it always
     survives both the internal-column drop and Part 2's join/drop.
     """

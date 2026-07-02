@@ -600,8 +600,10 @@ def query_explog(
 
     candidates table contains:
         candidate_id (str, MaterialID of the candidate),
-        reduced_formula (str, the AQ-GNoME "Reduced Formula" for this candidate; <NA> only in the
-            rare case the candidate can no longer be found in the AQ-GNoME database),
+        "Reduced Formula" (str, the AQ-GNoME field of the same name for this candidate -- stored
+            under this exact name, matching OER_data_analasis_v2/get_candidate_data/browse_df;
+            <NA> only in the rare case the candidate can no longer be found in the AQ-GNoME
+            database),
         reason_or_hypothesis (str, for selecting the candidate),
         notes (str, any notes you've added for the candidate),
         G(O) deviation (Float64, deviation of best available G(O) from ideal 2.46 eV),
@@ -676,10 +678,11 @@ def query_explog(
 
     if table_name == 'candidates':
         cdf = EXPLOG.relational_frame.candidates.df
-        # Reconcile the persisted reduced_formula column against the AQ-GNoME
-        # database before display: self-heals candidates entered before this
-        # column existed, or resumed from a pre-feature checkpoint. Mutates
-        # EXPLOG's own frame in place (not a copy) so the fix persists.
+        # Reconcile the persisted "Reduced Formula" column against the
+        # AQ-GNoME database before display: self-heals candidates entered
+        # before this column existed, or resumed from a pre-feature
+        # checkpoint. Mutates EXPLOG's own frame in place (not a copy) so
+        # the fix persists.
         sync_reduced_formula(cdf, _STABILITY_CACHE.candidate_lookup)
         # Drops agent-internal columns (study_obj, disposition_record,
         # ready_for_disposition_update -- the agent-visible disposition
@@ -750,10 +753,10 @@ def read_explog(
     Three OH jobs are run per site to find the global minimum. Only the global minimum row
     (G(OH) populated) is shown once it is available.
 
-    Candidate information always includes reduced_formula (the AQ-GNoME "Reduced Formula" for this
-    candidate). For the full material-property columns (Elements, Crystal System, Bandgap, Disorder
-    Probability, HHI indices) available for filtering/sorting across candidates, use query_explog with
-    table_name='candidates' instead.
+    Candidate information always includes "Reduced Formula" (the AQ-GNoME field of the same name
+    for this candidate). For the full material-property columns (Elements, Crystal System,
+    Bandgap, Disorder Probability, HHI indices) available for filtering/sorting across candidates,
+    use query_explog with table_name='candidates' instead.
     """
     _ = EXPLOG.update_log() # get the latest updates from the job handler and update the relational frame accordingly
     # save EXPLOG into a pickle file under WORKING_DIRECTORY for record and future reference

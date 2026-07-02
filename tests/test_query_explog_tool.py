@@ -61,7 +61,7 @@ def test_candidates_table_always_shows_reduced_formula_never_internal_columns(tm
             "reason": "check reduced_formula visibility",
             "include_material_properties": flag,
         })
-        assert "reduced_formula" in out
+        assert "Reduced Formula" in out
         for internal_col in ("study_obj", "disposition_record", "ready_for_disposition_update"):
             assert internal_col not in out
 
@@ -152,11 +152,11 @@ def test_invoke_py_resume_reconciliation_sequence(tmp_path):
     # Simulate a resumed pre-feature checkpoint: the column existed (from
     # add_candidate) but pretend it never did, as a real old checkpoint would.
     cdf = EXPLOG.relational_frame.candidates.df
-    EXPLOG.relational_frame.candidates.df = cdf.drop(columns=["reduced_formula"])
+    EXPLOG.relational_frame.candidates.df = cdf.drop(columns=["Reduced Formula"])
 
     EXPLOG.job_handler._ensure_reduced_formula_column()
     sync_reduced_formula(EXPLOG.relational_frame.candidates.df,
                          _STABILITY_CACHE.candidate_lookup)
 
     cdf = EXPLOG.relational_frame.candidates.df
-    assert cdf.loc[cdf["candidate_id"] == mid, "reduced_formula"].iloc[0] == expected_formula
+    assert cdf.loc[cdf["candidate_id"] == mid, "Reduced Formula"].iloc[0] == expected_formula

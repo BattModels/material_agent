@@ -12,7 +12,7 @@
 #     separately persisted EXPLOG column (Part 1), always present.
 #
 #   sync_reduced_formula(cdf, lookup_df) -> None
-#     Mutates cdf's "reduced_formula" column in place from
+#     Mutates cdf's "Reduced Formula" column in place from
 #     lookup_df["Reduced Formula"] (indexed by MaterialId). Self-heals (creates
 #     the column if missing) and unconditionally refreshes every row; a
 #     candidate_id absent from lookup_df gets <NA>.
@@ -99,35 +99,35 @@ def _candidates_df(ids):
 def test_sync_fills_matching_candidates():
     cdf = _candidates_df(["mp-1", "mp-2"])
     sync_reduced_formula(cdf, _lookup_df())
-    assert cdf.loc[cdf["candidate_id"] == "mp-1", "reduced_formula"].iloc[0] == "RuO2"
-    assert cdf.loc[cdf["candidate_id"] == "mp-2", "reduced_formula"].iloc[0] == "IrO2"
+    assert cdf.loc[cdf["candidate_id"] == "mp-1", "Reduced Formula"].iloc[0] == "RuO2"
+    assert cdf.loc[cdf["candidate_id"] == "mp-2", "Reduced Formula"].iloc[0] == "IrO2"
 
 
 def test_sync_leaves_na_for_not_found_candidate():
     cdf = _candidates_df(["mp-1", "mp-999"])
     sync_reduced_formula(cdf, _lookup_df())
-    assert pd.isna(cdf.loc[cdf["candidate_id"] == "mp-999", "reduced_formula"].iloc[0])
+    assert pd.isna(cdf.loc[cdf["candidate_id"] == "mp-999", "Reduced Formula"].iloc[0])
 
 
 def test_sync_creates_column_if_missing():
     cdf = _candidates_df(["mp-1"])
-    assert "reduced_formula" not in cdf.columns
+    assert "Reduced Formula" not in cdf.columns
     sync_reduced_formula(cdf, _lookup_df())
-    assert "reduced_formula" in cdf.columns
-    assert cdf["reduced_formula"].iloc[0] == "RuO2"
+    assert "Reduced Formula" in cdf.columns
+    assert cdf["Reduced Formula"].iloc[0] == "RuO2"
 
 
 def test_sync_overwrites_stale_value():
     cdf = _candidates_df(["mp-1"])
-    cdf["reduced_formula"] = "WrongFormula"
+    cdf["Reduced Formula"] = "WrongFormula"
     sync_reduced_formula(cdf, _lookup_df())
-    assert cdf["reduced_formula"].iloc[0] == "RuO2"
+    assert cdf["Reduced Formula"].iloc[0] == "RuO2"
 
 
 def test_sync_empty_frame_no_raise():
     cdf = _candidates_df([])
     sync_reduced_formula(cdf, _lookup_df())
-    assert "reduced_formula" in cdf.columns
+    assert "Reduced Formula" in cdf.columns
     assert len(cdf) == 0
 
 
@@ -288,7 +288,7 @@ def test_not_found_candidate_kept_with_na_properties_when_flag_true():
 
 def _raw_candidates_df(ids):
     df = _candidates_df(ids)
-    df["reduced_formula"] = ["RuO2", "IrO2"][: len(ids)]
+    df["Reduced Formula"] = ["RuO2", "IrO2"][: len(ids)]
     df["study_obj"] = [object() for _ in ids]
     df["disposition_record"] = [[] for _ in ids]
     df["ready_for_disposition_update"] = [False for _ in ids]
@@ -305,8 +305,8 @@ def test_internal_columns_never_visible():
 def test_reduced_formula_always_visible_regardless_of_flag():
     for flag in (False, True):
         out = build_candidates_view(_raw_candidates_df(["mp-1", "mp-2"]), [], [], flag, _lookup_df())
-        assert "reduced_formula" in out.columns
-        assert list(out["reduced_formula"]) == ["RuO2", "IrO2"]
+        assert "Reduced Formula" in out.columns
+        assert list(out["Reduced Formula"]) == ["RuO2", "IrO2"]
 
 
 def test_reduced_formula_survives_material_property_filtering():
@@ -316,7 +316,7 @@ def test_reduced_formula_survives_material_property_filtering():
     filters = [Filter(column="Elements", op="contains_any", value=["Ir"])]
     out = build_candidates_view(_raw_candidates_df(["mp-1", "mp-2"]), filters, [], False, _lookup_df())
     assert list(out["candidate_id"]) == ["mp-2"]
-    assert list(out["reduced_formula"]) == ["IrO2"]
+    assert list(out["Reduced Formula"]) == ["IrO2"]
 
 
 def test_build_candidates_view_does_not_mutate_input():
