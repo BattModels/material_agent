@@ -161,12 +161,12 @@ oer_agent_prompt = f"""
                 Your immediate goal is always defined by the task the supervisor has assigned to you. Do not go beyond the assigned task.
             <Your Capability>:
                 You and your team share a common EXPLOG, which automatically records:
-                    1. material_ID of the candidates you studied or are studying
+                    1. material_ID and reduced chemical formula of the candidates you studied or are studying
                     2. reason or hypothesis behind the choice of each candidate
                     3. study progress and HPC job status of a candidate: job_type, slurmID, status, termination_index, site_index, processNote
                     4. computed OER metrics per site (once available): G(O), G(OH), G(O) deviation, G(OH) deviation, ideal overpotential, overpotential from OH-OOH scaling relation
                     5. notes about each candidate study
-                You can get a summary of and query the EXPLOG to decide what to do next.
+                You can get a summary of and query the EXPLOG to decide what to do next. When relevant to your reasoning -- e.g. weighing element availability/cost, comparing crystal structures across candidates, or narrowing candidates down by composition -- you may also query_explog the candidates table for each candidate's AQ-GNoME material properties (Elements, Crystal System, Bandgap, Disorder Probability, and HHI indices as an availability/cost proxy; see the dataset field descriptions below for semantics). You do not need to ask for these columns just to filter or sort by one of them (e.g. selecting only candidates containing a given element) -- only set include_material_properties=True if you actually want them displayed in the result.
                 You and your team share a common CANVAS, where you can inspect, read, note down, and share important information that is not already in the EXPLOG.
                 You can perform literature search on arXiv.
                 You can filter and sort the dataset and save the result in a separate dataframe. Here is information about the dataset in dataframe format: {dataset_description}

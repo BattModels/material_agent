@@ -65,6 +65,11 @@ from src.disposition_messages import (
     evaluate_terminal_tag_gate,
 )
 from src.forgotten_jobs import find_forgotten_jobs
+from src.aq_gnome_candidate_sync import (
+    MATERIAL_PROPERTY_COLUMNS,
+    sync_reduced_formula,
+    build_candidates_view,
+)
 from gnome_dreams_oer_screening.vasp.magnetic_enumeration import (
     count_magnetic_sites_from_formula,
     MagneticEnumerationError,
@@ -588,12 +593,15 @@ def query_explog(
     sort: List[SortSpec] = [],
     start_idx: Annotated[int, "Row index to start reading from (inclusive). The tool always returns up to 50 rows from this position. Use 0 for the first page, 50 for the second, etc."] = 0,
     hide_redundant_oh: Annotated[bool, "When True (default), for each OH adsorption group (same candidate, termination, and site index), only the row with the final G(OH) value is retained. Groups without any G(OH) value are kept in full. Only applies to the processes table."] = True,
+    include_material_properties: Annotated[bool, "Only affects the candidates table. When True, also returns the AQ-GNoME material-property columns (Elements, Crystal System, Bandgap, Disorder Probability, average_HHI_P, average_HHI_R, average_HHI_P_excluding_O_H, average_HHI_R_excluding_O_H, max_HHI_P, max_HHI_R), appended after the existing columns. You do NOT need to set this to True just to filter or sort by one of these columns -- e.g. filters=[{'column': 'Elements', 'op': 'contains_any', 'value': ['Ru']}] works whether or not this flag is set. The tool detects when a filter/sort references one of these columns and joins it in automatically to apply that filter/sort; this flag only controls whether the columns remain visible in the returned table afterwards. Default False, since these columns are rarely needed and make an already-wide table wider."] = False,
 ) -> str:
     """Query the experiment log (EXPLOG) with optional filter and sort criteria. Automatically
     fetches the latest job updates before returning. Returns the filtered table as a string with row index.
 
     candidates table contains:
         candidate_id (str, MaterialID of the candidate),
+        reduced_formula (str, the AQ-GNoME "Reduced Formula" for this candidate; <NA> only in the
+            rare case the candidate can no longer be found in the AQ-GNoME database),
         reason_or_hypothesis (str, for selecting the candidate),
         notes (str, any notes you've added for the candidate),
         G(O) deviation (Float64, deviation of best available G(O) from ideal 2.46 eV),
@@ -622,6 +630,25 @@ def query_explog(
         n_O_started, n_O_finalized (per adsorption site; one DFT job each),
         n_OH_started, n_OH_finalized (per adsorption SITE, NOT per sub-job: each OH site runs 3 sub-jobs
             that collapse to one unit; finalized counts sites whose 3 OH sub-jobs are all terminal)
+        --- material-property columns from the AQ-GNoME database (see include_material_properties
+            above). Only present in the output when requested via that flag, or transiently joined and
+            then filtered/sorted on when referenced by `filters`/`sort` even if the flag is False. Field
+            semantics match the AQ-GNoME dataset fields already used by OER_data_analasis_v2 and
+            get_candidate_data: ---
+        Elements (List[str], unique chemical element symbols in the material -- use this to filter
+            candidates by composition, e.g. contains_any=["Ru"] or contains_all=["Ru", "O"]),
+        Crystal System (str, e.g. cubic, tetragonal, orthorhombic, hexagonal, trigonal, monoclinic,
+            triclinic),
+        Bandgap (Float64, PBE+U-level bandgap in eV; NaN if not available),
+        Disorder Probability (Float64, predicted probability of crystallographic substitutional
+            disorder, 0 = 0% to 1 = 100%),
+        average_HHI_P, average_HHI_R (Int64, average Herfindahl-Hirschman Index across all elements in
+            the material, for production/reserve concentration respectively -- higher means more
+            geographically concentrated supply, a proxy for availability/cost risk),
+        average_HHI_P_excluding_O_H, average_HHI_R_excluding_O_H (Int64, same as above but excluding O
+            and H from the average),
+        max_HHI_P, max_HHI_R (Int64, the single highest-HHI element in the material, production/reserve
+            respectively)
     processes table contains:
         process_id (str, unique id for each process),
         candidate_id (str, MaterialID of the candidate this process belongs to),
@@ -648,24 +675,29 @@ def query_explog(
     print("processes df dtype:\n", EXPLOG.relational_frame.processes.df.dtypes)
 
     if table_name == 'candidates':
-        df = EXPLOG.relational_frame.candidates.df.copy()
-        # drop columns the agent must not see directly: study_obj (complex
-        # objects), disposition_record (raw list-of-dicts; read via
-        # get_disposition_info) and ready_for_disposition_update (internal
-        # write-lock). The agent-visible disposition columns are `decision` and
-        # `needs_disposition_update`.
-        df = df.drop(
-            columns=["study_obj", "disposition_record",
-                     "ready_for_disposition_update"],
-            errors="ignore",
+        cdf = EXPLOG.relational_frame.candidates.df
+        # Reconcile the persisted reduced_formula column against the AQ-GNoME
+        # database before display: self-heals candidates entered before this
+        # column existed, or resumed from a pre-feature checkpoint. Mutates
+        # EXPLOG's own frame in place (not a copy) so the fix persists.
+        sync_reduced_formula(cdf, _STABILITY_CACHE.candidate_lookup)
+        # Drops agent-internal columns (study_obj, disposition_record,
+        # ready_for_disposition_update -- the agent-visible disposition
+        # columns are `decision` and `needs_disposition_update`), then joins
+        # in the AQ-GNoME material-property columns (see
+        # include_material_properties above) only when that flag is True or
+        # filters/sort reference one of them, applies filters/sort via
+        # df_query, then drops those columns again unless the flag was True.
+        filteredDF = build_candidates_view(
+            cdf.copy(), filters, sort, include_material_properties,
+            _STABILITY_CACHE.candidate_lookup,
         )
     elif table_name == 'processes':
         df = EXPLOG.relational_frame.processes.df.copy()
         df = df.drop(columns=["VASP_dir"]) # drop the "VASP_dir" column since it contains file directory strings that are not easy to display in a dataframe format
+        filteredDF = df_query(df, filters, sort)
     else:
         return "table_name must be either 'candidates' or 'processes'"
-
-    filteredDF = df_query(df, filters, sort)
 
     if hide_redundant_oh and table_name == 'processes':
         filteredDF = _drop_redundant_oh_rows(filteredDF)
@@ -717,11 +749,18 @@ def read_explog(
 
     Three OH jobs are run per site to find the global minimum. Only the global minimum row
     (G(OH) populated) is shown once it is available.
+
+    Candidate information always includes reduced_formula (the AQ-GNoME "Reduced Formula" for this
+    candidate). For the full material-property columns (Elements, Crystal System, Bandgap, Disorder
+    Probability, HHI indices) available for filtering/sorting across candidates, use query_explog with
+    table_name='candidates' instead.
     """
     _ = EXPLOG.update_log() # get the latest updates from the job handler and update the relational frame accordingly
     # save EXPLOG into a pickle file under WORKING_DIRECTORY for record and future reference
     # with open(os.path.join(var.my_WORKING_DIRECTORY, "EXPLOG.pkl"), "wb") as f:
     #     pickle.dump(EXPLOG, f)
+    sync_reduced_formula(EXPLOG.relational_frame.candidates.df,
+                         _STABILITY_CACHE.candidate_lookup)
     cadidate_row_df = EXPLOG.relational_frame.candidates[candidate_id].df
     # Hide the agent-internal columns (see query_explog): study_obj,
     # disposition_record (read via get_disposition_info), ready_for_disposition_update.
@@ -845,9 +884,10 @@ def enter_candidate_in_log(
             if art is None:
                 return f"Error: Reference ID {ref} not found in CANVAS."
 
-    if MaterialId not in _STABILITY_CACHE.df['MaterialId'].values:
+    if MaterialId not in _STABILITY_CACHE.candidate_lookup.index:
         return f"Error: MaterialId {MaterialId} not found in the AQ-GNoME database."
 
+    reduced_formula = _STABILITY_CACHE.candidate_lookup.loc[MaterialId, "Reduced Formula"]
     atoms = _STABILITY_CACHE.afdb.get_atoms_material_id(MaterialId, _STABILITY_CACHE.df)
     
     CANVAS.write(f"{MaterialId}_OER_catalyst_study_atoms", atoms, 
@@ -862,7 +902,8 @@ def enter_candidate_in_log(
     EXPLOG.add_candidate(candidate_id=MaterialId,
                          reason_or_hypothesis=reason_or_hypothesis,
                          notes=note,
-                         study_obj=catalyst_study)
+                         study_obj=catalyst_study,
+                         reduced_formula=reduced_formula)
     
     # save EXPLOG into a pickle file under WORKING_DIRECTORY for record and future reference
     # with open(os.path.join(var.my_WORKING_DIRECTORY, "EXPLOG.pkl"), "wb") as f:
@@ -1415,6 +1456,15 @@ class _StabilityCache:
         print("  [4/5] Snapshotting filtered dataframe...", flush=True)
         _t = time.time()
         self._df = self.dh.get_df()
+        # MaterialId-indexed lookup for EXPLOG's reduced_formula sync and
+        # query_explog's material-property enrichment (see
+        # src/aq_gnome_candidate_sync.py). Built once here, keeping only the
+        # columns those call sites need, so they can reference it directly
+        # instead of paying the .df property's full self._df.copy() on every
+        # query_explog/read_explog call.
+        self.candidate_lookup = self._df[
+            ["MaterialId", "Reduced Formula"] + MATERIAL_PROPERTY_COLUMNS
+        ].set_index("MaterialId")
         print(f"  [4/5] Done in {time.time() - _t:.1f}s.", flush=True)
 
         print("  [5/5] Opening ASE atoms database...", flush=True)
