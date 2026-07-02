@@ -67,9 +67,8 @@ from src.disposition_messages import (
 from src.forgotten_jobs import find_forgotten_jobs
 from src.aq_gnome_candidate_sync import (
     MATERIAL_PROPERTY_COLUMNS,
-    DECOMPOSITION_ENERGY_COLUMN,
     sync_reduced_formula,
-    compute_decomposition_energy,
+    _decomposition_energy_from_row,
     sync_decomposition_energy,
     build_candidates_view,
 )
@@ -772,9 +771,10 @@ def read_explog(
     (G(OH) populated) is shown once it is available.
 
     Candidate information always includes "Reduced Formula" (the AQ-GNoME field of the same name
-    for this candidate). For the full material-property columns (Elements, Crystal System,
-    Bandgap, Disorder Probability, HHI indices) available for filtering/sorting across candidates,
-    use query_explog with table_name='candidates' instead.
+    for this candidate) and max_dG_U[1.2,2.0]_pH0 (Pourbaix decomposition energy). For the full
+    material-property columns (Elements, Crystal System, Bandgap, Disorder Probability, HHI
+    indices) available for filtering/sorting across candidates, use query_explog with
+    table_name='candidates' instead.
     """
     _ = EXPLOG.update_log() # get the latest updates from the job handler and update the relational frame accordingly
     # save EXPLOG into a pickle file under WORKING_DIRECTORY for record and future reference
@@ -912,17 +912,16 @@ def enter_candidate_in_log(
     if MaterialId not in _STABILITY_CACHE.candidate_lookup.index:
         return f"Error: MaterialId {MaterialId} not found in the AQ-GNoME database."
 
-    reduced_formula = _STABILITY_CACHE.candidate_lookup.loc[MaterialId, "Reduced Formula"]
+    # One candidate_lookup fetch, shared by both fields below (rather than a
+    # second lookup buried inside a decomposition-energy-specific call).
+    _candidate_row = _STABILITY_CACHE.candidate_lookup.loc[MaterialId]
+    reduced_formula = _candidate_row["Reduced Formula"]
     # Computed once, here, rather than lazily on every query_explog call: an
     # H5PY read per candidate, so persisting it at entry time (like
     # reduced_formula) avoids repeating that work for every future query.
-    _decomp_row = compute_decomposition_energy(
-        pd.DataFrame({"candidate_id": [MaterialId]}),
-        _STABILITY_CACHE.candidate_lookup,
-        _STABILITY_CACHE.dh,
-        _STABILITY_CACHE.decomposition_criteria,
+    decomposition_energy = _decomposition_energy_from_row(
+        _candidate_row, _STABILITY_CACHE.dh, _STABILITY_CACHE.decomposition_criteria,
     )
-    decomposition_energy = _decomp_row[DECOMPOSITION_ENERGY_COLUMN].iloc[0]
     atoms = _STABILITY_CACHE.afdb.get_atoms_material_id(MaterialId, _STABILITY_CACHE.df)
     
     CANVAS.write(f"{MaterialId}_OER_catalyst_study_atoms", atoms, 

@@ -17,13 +17,21 @@
 #   elements columns onto the candidates table on demand -- either because
 #   include_material_properties=True was passed, or because a filter/sort
 #   references one of them (in which case the columns are dropped again
-#   after filtering, since the agent didn't ask to see them). The Pourbaix
-#   decomposition energy (DECOMPOSITION_ENERGY_COLUMN) follows the same
-#   on-demand contract but needs a separate code path: it isn't a static
-#   column, it's computed per candidate from H5PY decomposition-energy-grid
-#   data (compute_decomposition_energy, mirroring the now-deactivated
-#   get_candidate_data tool's exact algorithm) -- so apply_candidate_query
-#   only computes it when the caller supplies pbx_lookup_df/dh/sc.
+#   after filtering, since the agent didn't ask to see them).
+#
+# Part 3 -- decomposition-energy reconciliation (DECOMPOSITION_ENERGY_COLUMN):
+#   Unlike Part 2's columns, this one is NOT joined on demand -- it's a
+#   PERSISTED EXPLOG column, same as Part 1's "Reduced Formula". compute_decomposition_energy
+#   does the actual per-candidate work (an H5PY decomposition-energy-grid
+#   read, mirroring the now-deactivated get_candidate_data tool's exact
+#   algorithm); sync_decomposition_energy calls it to backfill ONLY rows
+#   currently <NA> (never unconditionally, unlike sync_reduced_formula,
+#   since recomputing an already-known value would waste a real file read).
+#   apply_candidate_query never computes this column at all -- if it's
+#   already present (because sync_decomposition_energy ran first, on the
+#   real EXPLOG frame, before this function is called), apply_candidate_query
+#   just decides whether to keep or drop it based on include_material_properties,
+#   same as Part 2's columns.
 
 from typing import Iterable, List
 
@@ -116,41 +124,56 @@ def attach_material_properties(
     return out
 
 
-def compute_decomposition_energy(
-    df: pd.DataFrame, pbx_lookup_df: pd.DataFrame, dh, sc
-) -> pd.DataFrame:
-    """Compute DECOMPOSITION_ENERGY_COLUMN for each row in df, by
-    candidate_id -> pbx_lookup_df's MaterialId-indexed mixed_pbx_save_id /
-    gga_only_pbx_save_id. Mirrors the now-deactivated get_candidate_data
-    tool's exact per-row algorithm: prefer mixed (GGA/GGA(+U)/r2SCAN)
-    results, fall back to GGA-only when mixed_pbx_save_id == "Not computed",
-    floor at 0.0 (a material can't be "more stable than most stable").
+def _decomposition_energy_from_row(row: pd.Series, dh, sc) -> float:
+    """Compute one candidate's decomposition energy from a pbx_lookup_df row
+    the caller already has in hand (mixed_pbx_save_id / gga_only_pbx_save_id).
+    Shared by compute_decomposition_energy (which fetches the row per
+    candidate_id) and any caller that already fetched the row for another
+    reason (e.g. enter_candidate_in_log, which also reads "Reduced Formula"
+    off the same row -- fetching it once avoids a second lookup).
+
+    Mirrors the now-deactivated get_candidate_data tool's exact per-row
+    algorithm: prefer mixed (GGA/GGA(+U)/r2SCAN) results, fall back to
+    GGA-only when mixed_pbx_save_id == "Not computed", floor at 0.0 (a
+    material can't be "more stable than most stable").
 
     dh: a Data_Handler-like object (dh.mixed_results / dh.gga_results, each
         with .read_id(id) -> decomposition-energy grid).
     sc: a Stability_Criteria-like object (.max_dG_in_region(decom_G) -> float).
-
-    Computed per row rather than for the whole AQ-GNoME database, so cost is
-    bounded by len(df) (EXPLOG's candidate count, typically small) rather
-    than the full screened universe -- unlike the other material properties,
-    this isn't a cheap static lookup; each row is an H5PY read. A
-    candidate_id not found in pbx_lookup_df gets <NA>.
     """
-    out = df.copy()
-    values = []
-    for cid in out["candidate_id"]:
+    mixed_id = row["mixed_pbx_save_id"]
+    if mixed_id != "Not computed":
+        decom_G = dh.mixed_results.read_id(mixed_id)
+    else:
+        decom_G = dh.gga_results.read_id(row["gga_only_pbx_save_id"])
+    return max(0.0, sc.max_dG_in_region(decom_G))
+
+
+def compute_decomposition_energy(
+    candidate_ids: Iterable[str], pbx_lookup_df: pd.DataFrame, dh, sc
+) -> pd.Series:
+    """Compute decomposition energy for each of `candidate_ids`, by
+    candidate_id -> pbx_lookup_df's MaterialId-indexed row (see
+    _decomposition_energy_from_row). Returns a Series indexed by
+    candidate_id, named DECOMPOSITION_ENERGY_COLUMN -- not a DataFrame, so
+    callers who only want the values (sync_decomposition_energy,
+    enter_candidate_in_log) don't pay for copying/carrying columns nobody
+    asked for.
+
+    Computed per candidate rather than for the whole AQ-GNoME database, so
+    cost is bounded by len(candidate_ids) (EXPLOG's candidate count,
+    typically small) rather than the full screened universe -- unlike the
+    other material properties, this isn't a cheap static lookup; each
+    candidate is an H5PY read. A candidate_id not found in pbx_lookup_df
+    gets <NA>.
+    """
+    values = {}
+    for cid in candidate_ids:
         if cid not in pbx_lookup_df.index:
-            values.append(pd.NA)
+            values[cid] = pd.NA
             continue
-        row = pbx_lookup_df.loc[cid]
-        mixed_id = row["mixed_pbx_save_id"]
-        if mixed_id != "Not computed":
-            decom_G = dh.mixed_results.read_id(mixed_id)
-        else:
-            decom_G = dh.gga_results.read_id(row["gga_only_pbx_save_id"])
-        values.append(max(0.0, sc.max_dG_in_region(decom_G)))
-    out[sc.col_name] = values
-    return out
+        values[cid] = _decomposition_energy_from_row(pbx_lookup_df.loc[cid], dh, sc)
+    return pd.Series(values, name=DECOMPOSITION_ENERGY_COLUMN)
 
 
 def sync_decomposition_energy(
@@ -175,8 +198,9 @@ def sync_decomposition_energy(
     missing_mask = cdf[DECOMPOSITION_ENERGY_COLUMN].isna()
     if not missing_mask.any():
         return
-    computed = compute_decomposition_energy(cdf.loc[missing_mask], pbx_lookup_df, dh, sc)
-    cdf.loc[missing_mask, DECOMPOSITION_ENERGY_COLUMN] = computed[DECOMPOSITION_ENERGY_COLUMN].values
+    missing_ids = cdf.loc[missing_mask, "candidate_id"]
+    computed = compute_decomposition_energy(missing_ids, pbx_lookup_df, dh, sc)
+    cdf.loc[missing_mask, DECOMPOSITION_ENERGY_COLUMN] = computed.reindex(missing_ids.values).values
 
 
 def apply_candidate_query(

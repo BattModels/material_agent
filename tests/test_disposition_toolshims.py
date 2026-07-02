@@ -284,6 +284,37 @@ def test_disposition_tools_in_mystep_required_tools_literal():
 
 
 # ===========================================================================
+# Deactivated tools (inspect_explog, get_candidate_data) actually absent.
+# Functions themselves remain importable (T.inspect_explog, T.get_candidate_data
+# still exist -- deactivated, not deleted); these check they're gone from the
+# 3 module-level registration surfaces that don't require constructing a real
+# agent graph to inspect. NOT covered here (would need to call
+# P.create_planning_graph(config), which needs a real LLM config): the
+# oer_tools/supervisor_tools lists and the inline ToolList inside
+# supervisor_chain_node -- those are local variables inside that function, not
+# independently inspectable. If those ever drift from the 3 lists checked
+# below, nothing here would catch it.
+# ===========================================================================
+
+def test_deactivated_tools_absent_from_yaml():
+    d = yaml.safe_load(open("config/oer_available_tools.yaml"))["OER_Agent"]
+    assert "inspect_explog" not in d
+    assert "get_candidate_data" not in d
+
+
+def test_deactivated_tools_absent_from_mystep_required_tools_literal():
+    ann = P.myStep.model_fields["required_tools"].annotation   # List[Literal[...]]
+    literal_values = get_args(get_args(ann)[0])
+    assert "inspect_explog" not in literal_values
+    assert "get_candidate_data" not in literal_values
+
+
+def test_deactivated_tools_absent_from_polling_tools():
+    assert "inspect_explog" not in P.POLLING_TOOLS
+    assert "get_candidate_data" not in P.POLLING_TOOLS
+
+
+# ===========================================================================
 # The per-task enforce_queue_floor flag contract (myStep field + bridge fallback)
 # ===========================================================================
 

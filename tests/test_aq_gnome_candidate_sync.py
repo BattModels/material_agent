@@ -107,6 +107,20 @@ class _FakeDataHandler:
 
 
 class _FakeStabilityCriteria:
+    # INTENTIONAL hardcoding: real aq_gnome.Stability_Criteria generates
+    # col_name dynamically from (pHs, Us), and DECOMPOSITION_ENERGY_COLUMN
+    # ("max_dG_U[1.2,2.0]_pH0") is only correct because this repo currently
+    # restricts the whole workflow to that one fixed acidic-OER stability
+    # window (_StabilityCache.PHS=0, US=[1.2,2.0] in src/tools.py). This fake
+    # hardcodes the same equality, so it CANNOT catch a real divergence
+    # between the two -- that's covered instead by a real (slow-tier)
+    # assertion against the actual aq_gnome.Stability_Criteria in
+    # tests/test_query_explog_tool.py::test_decomposition_energy_column_name_matches_stability_criteria.
+    # If that test ever fails, it means PHS/US changed: update
+    # DECOMPOSITION_ENERGY_COLUMN (src/aq_gnome_candidate_sync.py) to match,
+    # and audit every other place hardcoding "max_dG_U[1.2,2.0]_pH0" (tools.py
+    # docstrings, config/oer_available_tools.yaml, prompt.py) -- the repo
+    # will need updating in more than one place to support a different window.
     col_name = DECOMPOSITION_ENERGY_COLUMN
 
     def max_dG_in_region(self, decom_G):
@@ -394,39 +408,46 @@ def _pbx_lookup_df():
 
 
 def test_compute_decomposition_energy_uses_mixed_when_available():
-    df = _candidates_df(["mp-1"])
     dh = _FakeDataHandler(mixed_values_by_id={"mixed-1": 0.42})
-    out = compute_decomposition_energy(df, _pbx_lookup_df(), dh, _FakeStabilityCriteria())
-    assert out[DECOMPOSITION_ENERGY_COLUMN].iloc[0] == 0.42
+    out = compute_decomposition_energy(["mp-1"], _pbx_lookup_df(), dh, _FakeStabilityCriteria())
+    assert out["mp-1"] == 0.42
 
 
 def test_compute_decomposition_energy_falls_back_to_gga_when_mixed_not_computed():
-    df = _candidates_df(["mp-2"])
     dh = _FakeDataHandler(gga_values_by_id={"gga-2": 0.13})
-    out = compute_decomposition_energy(df, _pbx_lookup_df(), dh, _FakeStabilityCriteria())
-    assert out[DECOMPOSITION_ENERGY_COLUMN].iloc[0] == 0.13
+    out = compute_decomposition_energy(["mp-2"], _pbx_lookup_df(), dh, _FakeStabilityCriteria())
+    assert out["mp-2"] == 0.13
 
 
 def test_compute_decomposition_energy_clamps_negative_to_zero():
-    df = _candidates_df(["mp-1"])
     dh = _FakeDataHandler(mixed_values_by_id={"mixed-1": -0.7})
-    out = compute_decomposition_energy(df, _pbx_lookup_df(), dh, _FakeStabilityCriteria())
-    assert out[DECOMPOSITION_ENERGY_COLUMN].iloc[0] == 0.0
+    out = compute_decomposition_energy(["mp-1"], _pbx_lookup_df(), dh, _FakeStabilityCriteria())
+    assert out["mp-1"] == 0.0
 
 
 def test_compute_decomposition_energy_na_for_not_found_candidate():
-    df = _candidates_df(["mp-999"])
     dh = _FakeDataHandler()
-    out = compute_decomposition_energy(df, _pbx_lookup_df(), dh, _FakeStabilityCriteria())
-    assert pd.isna(out[DECOMPOSITION_ENERGY_COLUMN].iloc[0])
+    out = compute_decomposition_energy(["mp-999"], _pbx_lookup_df(), dh, _FakeStabilityCriteria())
+    assert pd.isna(out["mp-999"])
 
 
-def test_compute_decomposition_energy_does_not_mutate_input():
-    df = _candidates_df(["mp-1"])
-    original_cols = list(df.columns)
+def test_compute_decomposition_energy_returns_series_named_for_the_column():
+    # Returns a Series of values (indexed by candidate_id), not a DataFrame --
+    # callers that already have a row in hand (e.g. enter_candidate_in_log)
+    # shouldn't have to pay for a copied DataFrame of columns they don't need.
     dh = _FakeDataHandler(mixed_values_by_id={"mixed-1": 0.1})
-    compute_decomposition_energy(df, _pbx_lookup_df(), dh, _FakeStabilityCriteria())
-    assert list(df.columns) == original_cols
+    out = compute_decomposition_energy(["mp-1"], _pbx_lookup_df(), dh, _FakeStabilityCriteria())
+    assert isinstance(out, pd.Series)
+    assert out.name == DECOMPOSITION_ENERGY_COLUMN
+    assert list(out.index) == ["mp-1"]
+
+
+def test_compute_decomposition_energy_multiple_ids_preserve_order():
+    dh = _FakeDataHandler(mixed_values_by_id={"mixed-1": 0.42}, gga_values_by_id={"gga-2": 0.13})
+    out = compute_decomposition_energy(["mp-2", "mp-1"], _pbx_lookup_df(), dh, _FakeStabilityCriteria())
+    assert list(out.index) == ["mp-2", "mp-1"]
+    assert out["mp-2"] == 0.13
+    assert out["mp-1"] == 0.42
 
 
 # ---------------------------------------------------------------------------
