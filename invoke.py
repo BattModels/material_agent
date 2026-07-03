@@ -543,6 +543,7 @@ You have a maximum of 1 hours to complete the entire study and make your final r
 
     timeTravelToXFrameBefore = 0
     overwrite = False
+    replay_handback = False
     if len(sys.argv) > 1 and sys.argv[1] == "ow":
         print()
         print("####################")
@@ -574,8 +575,16 @@ You have a maximum of 1 hours to complete the entire study and make your final r
             print(f"# Time traveling {timeTravelToXFrameBefore} frames back")
             print("############################################################")
             print()
+        elif sys.argv[1] in ("replay", "rh"):
+            replay_handback = True
+            print()
+            print("############################################################")
+            print("# Replay handback: revert to the last worker->supervisor")
+            print("# handover and re-prompt the supervisor with the new directive")
+            print("############################################################")
+            print()
         else:
-            assert False, "Invalid argument. Use 'ow' for overwrite or a number for time travel or leave blank to resume."
+            assert False, "Invalid argument. Use 'ow' for overwrite, a number for time travel, 'replay' to replay the last worker->supervisor handback, or leave blank to resume."
     else:
         print()
         print("############")
@@ -699,6 +708,48 @@ You have a maximum of 1 hours to complete the entire study and make your final r
         else:
             history = list(graph.get_state_history(llm_config))
             # print(history)
+
+            # --- Replay handback -------------------------------------------------
+            # get_state_history() is reverse-chronological: history[0] is the
+            # NEWEST checkpoint (this is exactly why `timeTravelToXFrameBefore`
+            # indexes it as "N frames back" above). So enumerating forward walks
+            # newest -> oldest, and the FIRST next == ('Supervisor',) match is the
+            # MOST RECENT worker->supervisor handover -- the disregarded one, since
+            # the head is already past it. (A reverse loop would find the oldest
+            # handover, which is wrong.) We fork from that boundary so the
+            # supervisor re-runs that decision. var.wait_handback is a process
+            # global (never checkpointed), so a bare revert would NOT re-raise it --
+            # we force it on just before graph.stream below, and the supervisor
+            # re-derives the queue-floor path from the hydrated EXPLOG.
+            if replay_handback:
+                handover_idx = None
+                for _i, _s in enumerate(history):
+                    if tuple(_s.next) == ("Supervisor",):
+                        handover_idx = _i
+                        break
+                assert handover_idx is not None, (
+                    "replay: no worker->supervisor handover found (no checkpoint "
+                    "with next == ('Supervisor',)) in this run's history."
+                )
+                _hs = history[handover_idx]
+                _ps = _hs.values.get("past_steps", [])
+                _tag = (_ps[-1].step[:120] if _ps else "")
+                _t = _hs.values.get("time")
+                _t_str = f"{_t:.0f}s" if isinstance(_t, (int, float)) else str(_t)
+                print()
+                print("##################################################################")
+                print("# REPLAY HANDBACK: reverting to the last worker->supervisor       #")
+                print("# handover; the supervisor will be re-prompted with the directive #")
+                print("##################################################################")
+                print(f"# chosen frame index  : {handover_idx}  (history[0] = newest)")
+                print(f"# frame .next         : {tuple(_hs.next)}")
+                print(f"# elapsed at frame    : {_t_str}")
+                print(f"# last worker summary  : {_tag}")
+                print("# (Ctrl-C now if this is NOT the handback you meant to replay.)")
+                print("##################################################################")
+                print()
+                timeTravelToXFrameBefore = handover_idx
+
             snap = history[timeTravelToXFrameBefore]
             # print("\n\n\n")
             # print(snap)
@@ -822,6 +873,21 @@ You have a maximum of 1 hours to complete the entire study and make your final r
             print("########################################################################################################")
             
         # assert False
+        # Replay handback: raise the (non-checkpointed) handback flag so the
+        # supervisor node consumes it this turn and injects the queue-floor
+        # directive. Safe/self-correcting: if the hydrated EXPLOG is not actually
+        # in a handback state, classify_wait_handback returns None and nothing is
+        # injected. Only set on the explicit `replay` arg -- a normal resume leaves
+        # it False, so this whole feature is inert unless invoked.
+        if replay_handback:
+            var.wait_handback = True
+            print()
+            print("################################################################")
+            print("# REPLAY HANDBACK: var.wait_handback = True -> supervisor will  #")
+            print("# re-derive the queue-floor path and inject the directive.      #")
+            print("################################################################")
+            print()
+
         # durability="sync": the checkpoint (parent round OR inner tool-level)
         # is committed to sqlite BEFORE execution continues, so a hard kill at
         # any point is resumable from the last completed step.
