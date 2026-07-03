@@ -750,6 +750,41 @@ You have a maximum of 1 hours to complete the entire study and make your final r
                 print()
                 timeTravelToXFrameBefore = handover_idx
 
+                # Clear any COMPLETED inner react-loop for the supervisor task that
+                # already ran from this handover. Re-running the supervisor from X
+                # re-uses the SAME deterministic task id -> if its Supervisor:<task_id>
+                # subgraph is already finished, agent.stream yields nothing and
+                # supervisor_chain_node crashes (UnboundLocalError at line ~713). We
+                # look up the task id(s) that produced writes FROM X (i.e. the
+                # supervisor that ran) and drop only their inner namespace. Targeted
+                # + idempotent: deletes nothing if the supervisor never ran here, and
+                # also stops these ~hundreds-of-MB react-loop snapshots from
+                # accumulating in the (already huge) checkpoint db on every replay.
+                _x_ckpt_id = _hs.config["configurable"]["checkpoint_id"]
+                _sup_name = _hs.next[0] if _hs.next else "Supervisor"
+                _stale_task_ids = [
+                    r[0] for r in checkpointer.conn.execute(
+                        "SELECT DISTINCT task_id FROM writes "
+                        "WHERE checkpoint_ns='' AND checkpoint_id=?",
+                        (_x_ckpt_id,),
+                    ).fetchall()
+                ]
+                _del_ck = _del_w = 0
+                for _tid in _stale_task_ids:
+                    _prefix = f"{_sup_name}:{_tid}"
+                    _del_ck += checkpointer.conn.execute(
+                        "DELETE FROM checkpoints WHERE checkpoint_ns LIKE ? || '%'",
+                        (_prefix,),
+                    ).rowcount
+                    _del_w += checkpointer.conn.execute(
+                        "DELETE FROM writes WHERE checkpoint_ns LIKE ? || '%'",
+                        (_prefix,),
+                    ).rowcount
+                checkpointer.conn.commit()
+                print(f"# cleared stale supervisor subgraph for task(s) {_stale_task_ids}:")
+                print(f"#   deleted {_del_ck} checkpoint row(s) + {_del_w} write row(s)")
+                print()
+
             snap = history[timeTravelToXFrameBefore]
             # print("\n\n\n")
             # print(snap)
