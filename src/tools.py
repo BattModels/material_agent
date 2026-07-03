@@ -62,6 +62,7 @@ from src.disposition_messages import (
     format_update_disposition,
     format_wait_exit_disposition_hint,
     evaluate_wait_entry,
+    classify_wait_handback,
     evaluate_terminal_tag_gate,
 )
 from src.forgotten_jobs import find_forgotten_jobs
@@ -287,7 +288,9 @@ def wait_for_update(
     #   Gate 2 (iff var.enforce_queue_floor and var.QUEUE_MIN_PENDING > 0): keep
     #           the HPC queue at/above its pending floor.
     # Either refusal -- or the legacy "nothing to wait for" message -- short-circuits.
-    gate_msg = evaluate_wait_entry(
+    # Inputs computed once and shared with classify_wait_handback (avoids calling
+    # find_forgotten_jobs twice) so the message and the handback path agree.
+    _gate_inputs = dict(
         candidates_need_disposition=EXPLOG.candidates_needing_disposition(),
         pending_count=EXPLOG.job_handler.count_pending(),
         has_running=("running" in statusList),
@@ -295,6 +298,14 @@ def wait_for_update(
         queue_min_pending=var.QUEUE_MIN_PENDING,
         forgotten_jobs=find_forgotten_jobs(EXPLOG, var.GO_DEV_OH_THRESHOLD),
     )
+    gate_msg = evaluate_wait_entry(**_gate_inputs)
+    # Raise the one-shot supervisor-handback flag whenever this refusal is one the
+    # SUPERVISOR must resolve (queue floor / idle -> classify returns a path). A
+    # Gate 1 disposition backlog (path None) is the worker's own job and does NOT
+    # set it. supervisor_chain_node consumes-and-clears the flag next turn and
+    # re-derives the path from live EXPLOG for the directive it injects.
+    if classify_wait_handback(**_gate_inputs) is not None:
+        var.wait_handback = True
     if gate_msg is not None:
         return gate_msg
 

@@ -373,3 +373,35 @@ def test_wait_refuses_when_queue_below_floor(tmp_path):
     assert "matX" in out                                   # lists matX's forgotten work
     assert "supervisor" in out.lower()                     # hands back to the supervisor
     assert "submit" in out.lower()                         # asks for an immediate submit step
+
+
+def test_wait_sets_handback_flag_on_queue_floor(tmp_path):
+    # A queue-floor (Path A/B) refusal must raise the one-shot supervisor-handback
+    # flag so supervisor_chain_node injects a directive on its next turn.
+    _setup(tmp_path)
+    var.enforce_queue_floor = True
+    var.QUEUE_MIN_PENDING = 12
+    var.wait_handback = False
+    _add_candidate("matX")
+    pb = _inject("matX", "bulk_relaxation", "completed")
+    ps = _inject("matX", "surface_relaxation", "completed", termination_index=0)
+    T.get_disposition_info.invoke({"candidate_id": "matX"})
+    T.update_disposition_info.invoke({
+        "candidate_id": "matX", "Analysis_and_implications": "s",
+        "Analyzed_process_id": [pb, ps], "Future_plan": "f",
+        "Decision": "Medium priority",
+    })
+    _inject("matX", "surface_relaxation", "pending", termination_index=1)
+    T.wait_for_update.invoke({"patience": 1})              # Gate 2 -> Path A refusal
+    assert var.wait_handback is True
+
+
+def test_wait_leaves_handback_flag_false_on_disposition_backlog(tmp_path):
+    # A Gate 1 disposition backlog is the worker's own job, not a supervisor
+    # handback -> the flag must stay False (classify_wait_handback returns None).
+    _setup(tmp_path)
+    var.wait_handback = False
+    _add_candidate("matX")
+    _inject("matX", "surface_relaxation", "completed", termination_index=7)
+    T.wait_for_update.invoke({"patience": 1})              # Gate 1 -> refusal
+    assert var.wait_handback is False

@@ -37,6 +37,8 @@ from pydantic import model_validator
 
 from src.tools import *
 from src.prompt import dft_agent_prompt,hpc_agent_prompt,supervisor_prompt, oer_agent_prompt, boss_prompt
+from src.disposition_messages import classify_wait_handback, format_supervisor_handback_directive
+from src.forgotten_jobs import find_forgotten_jobs
 from src import var
 from src.myCANVAS import CANVAS
 from src.live_visualizer import LiveVisualizer
@@ -82,7 +84,7 @@ class myStep(BaseModel):
                             "search_artifacts",
                             ""
                 ]] = Field(f"must-use tools for this step, should be a subset of the tools available to the agent. read the CANVAS with key Worker_available_tools to see more details about each tools.")
-    enforce_queue_floor: bool = Field(True, description="Whether the worker must keep the HPC queue stocked with ready work before it may wait for current jobs to finish. Keep True to ensure maximum HPC utilization (generally desirable): if the queue falls below the floor while HPC resources are free and the worker has no more ready work to submit, the worker returns to the supervisor to discuss expanding the study, rather than being allowed to pause and wait. Set False only when winding the study down -- when the remaining time is too short for newly-submitted jobs to finish, or when further submissions would no longer meaningfully advance the study -- so the worker may instead wait for and finalize the in-flight results.")
+    enforce_queue_floor: bool = Field(True, description="Whether the worker must keep the HPC queue stocked with ready work before it may wait for current jobs to finish. Keep True to ensure maximum HPC utilization (generally desirable): if the queue falls below the floor while HPC resources are free and the worker has no more ready work to submit, the worker returns to the supervisor to discuss expanding the study, rather than being allowed to pause and wait. Set False only when genuinely winding the study down -- when the remaining time is too short for newly-submitted jobs to finish -- so the worker may instead wait for and finalize the in-flight results.")
 
 class myPastStep(BaseModel):
     """Step in the plan."""
@@ -653,9 +655,37 @@ def supervisor_chain_node(state, config, agent=None, name=None):
         Please inspect and extract related information from CANVAS and EXPLOG, then update the plan accordingly. 
         Only choose <NoChange> if you want the first step of the current plan to be removed, and the second step to be executed next without any change.
         Otherwise choose <Plan> and rewrite the plan with the steps you want, and the first step of the plan you just wrote will be executed.
-        Or if you think the overall goal is finished, you can choose <Response> and write a draft final answer for the boss review. 
+        Or if you think the overall goal is finished, you can choose <Response> and write a draft final answer for the boss review.
         """
-    
+
+    # --- Queue-floor handback -------------------------------------------------
+    # wait_for_update raises var.wait_handback when it refuses on a queue-floor
+    # (Path A/B) or idle handback -- a situation only the supervisor can resolve.
+    # Consume-and-clear it here (one-shot) and inject a path-specific directive so
+    # the handback is ACTED on instead of reaching the supervisor only as ignorable
+    # worker prose. The path is re-derived from live EXPLOG (self-correcting: if the
+    # queue refilled since the worker's turn, classify returns None and nothing is
+    # injected). Uses only the pure gate -- never the real wait tool, whose loop
+    # sleeps regardless of patience.
+    if getattr(var, "wait_handback", False):
+        var.wait_handback = False
+        _hb_forgotten = find_forgotten_jobs(EXPLOG, var.GO_DEV_OH_THRESHOLD)
+        _hb_status = EXPLOG.relational_frame.processes.df["status"].tolist()
+        _hb_path = classify_wait_handback(
+            candidates_need_disposition=EXPLOG.candidates_needing_disposition(),
+            pending_count=EXPLOG.job_handler.count_pending(),
+            has_running=("running" in _hb_status),
+            enforce_queue_floor=getattr(var, "enforce_queue_floor", True),
+            queue_min_pending=var.QUEUE_MIN_PENDING,
+            forgotten_jobs=_hb_forgotten,
+        )
+        if _hb_path is not None:
+            supervisorMessage = (
+                supervisorMessage
+                + "\n\n"
+                + format_supervisor_handback_directive(_hb_path, _hb_forgotten)
+            )
+
     old_supervisorMessage = supervisorMessage
     sup_good = False
     sup_good_patient = 3
