@@ -27,6 +27,16 @@ QUEUE_MIN_PENDING = 15
 # initial value is just the pre-first-turn fallback, NOT a config knob.
 enforce_queue_floor = True
 
+# Runtime one-shot handback flag: wait_for_update raises this to True whenever it
+# refuses on a queue-floor (Path A/B) or idle handback -- i.e. a situation the
+# worker must return to the SUPERVISOR to resolve (submit ready work, or expand /
+# wind down). NOT set for a Gate 1 disposition backlog (the worker clears that
+# itself). supervisor_chain_node consumes-and-clears it while building its prompt,
+# re-derives the path (classify_wait_handback) from live EXPLOG, and injects the
+# matching directive. Process-global (same mechanism as enforce_queue_floor); a
+# handback the supervisor never consumed is simply re-signalled next round.
+wait_handback = False
+
 # The fixed Decision vocabulary for a candidate disposition (single-valued).
 # Two TERMINAL tags (no further compute) bracket three ACTIVE priority levels:
 #   Abandon         -> terminal: stop, unpromising

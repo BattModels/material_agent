@@ -21,6 +21,7 @@ from gnome_dreams_oer_screening.explog.explog import EXPLOG
 from src.forgotten_jobs import find_forgotten_jobs
 from src.disposition_messages import (
     MSG_NOTHING_TO_WAIT_FOR,
+    classify_wait_handback,
     evaluate_wait_entry,
     format_wait_exit_disposition_hint,
     format_wait_gate1_refusal,
@@ -269,6 +270,108 @@ def test_evaluate_nothing_in_flight_but_forgotten_work_lists_it():
                               queue_min_pending=15, forgotten_jobs=jobs)
     assert msg == format_wait_gate2_refusal(jobs)
     assert "matZ" in msg
+
+
+# ===========================================================================
+# Supervisor handback path: classify_wait_handback (the flag wait_for_update
+# raises, re-derived at supervisor time). Kept in lock-step with
+# evaluate_wait_entry: a NON-Gate-1 refusal <=> a non-None path; proceed/Gate-1
+# <=> None. "submit_ready" (Path A) vs "expand" (Path B / idle).
+# ===========================================================================
+
+_HB_JOBS = [{"candidate_id": "matZ", "kind": "bulk",
+             "termination_index": None, "site_index": None}]
+
+
+def test_classify_gate1_backlog_is_not_a_handback():
+    # A disposition backlog is the worker's own job, not a supervisor handback.
+    path = classify_wait_handback(candidates_need_disposition=["matA"], pending_count=0,
+                                  has_running=False, enforce_queue_floor=True,
+                                  queue_min_pending=15, forgotten_jobs=_HB_JOBS)
+    assert path is None
+
+
+def test_classify_gate2_with_ready_work_is_submit_ready():
+    # Queue below floor AND ready work -> Path A (plan an immediate submit step).
+    path = classify_wait_handback(candidates_need_disposition=[], pending_count=5,
+                                  has_running=True, enforce_queue_floor=True,
+                                  queue_min_pending=15, forgotten_jobs=_HB_JOBS)
+    assert path == "submit_ready"
+
+
+def test_classify_gate2_without_ready_work_is_expand():
+    # Queue below floor, work in flight but NOTHING ready to submit -> Path B.
+    path = classify_wait_handback(candidates_need_disposition=[], pending_count=5,
+                                  has_running=True, enforce_queue_floor=True,
+                                  queue_min_pending=15, forgotten_jobs=[])
+    assert path == "expand"
+
+
+def test_classify_idle_no_work_is_expand():
+    # Nothing pending/running and nothing ready -> idle handback -> Path B.
+    path = classify_wait_handback(candidates_need_disposition=[], pending_count=0,
+                                  has_running=False, enforce_queue_floor=True,
+                                  queue_min_pending=15, forgotten_jobs=[])
+    assert path == "expand"
+
+
+def test_classify_idle_with_ready_work_is_submit_ready():
+    # Idle but detectable ready work + floor armed -> Path A (surface the work).
+    path = classify_wait_handback(candidates_need_disposition=[], pending_count=0,
+                                  has_running=False, enforce_queue_floor=True,
+                                  queue_min_pending=15, forgotten_jobs=_HB_JOBS)
+    assert path == "submit_ready"
+
+
+def test_classify_idle_is_expand_even_with_floor_off():
+    # A genuinely idle worker still hands back (expand/conclude) even if the floor
+    # is disarmed -- the idle branch does not depend on gate2_armed.
+    path = classify_wait_handback(candidates_need_disposition=[], pending_count=0,
+                                  has_running=False, enforce_queue_floor=False,
+                                  queue_min_pending=15, forgotten_jobs=[])
+    assert path == "expand"
+
+
+def test_classify_proceeds_none_when_queue_healthy():
+    # Analysis current, queue at/above floor, work pending -> proceed, no handback.
+    path = classify_wait_handback(candidates_need_disposition=[], pending_count=20,
+                                  has_running=False, enforce_queue_floor=True,
+                                  queue_min_pending=15, forgotten_jobs=_HB_JOBS)
+    assert path is None
+
+
+def test_classify_none_when_floor_off_and_work_in_flight():
+    # Floor disarmed with work in flight -> proceed to wait, not a handback.
+    path = classify_wait_handback(candidates_need_disposition=[], pending_count=2,
+                                  has_running=True, enforce_queue_floor=False,
+                                  queue_min_pending=15, forgotten_jobs=_HB_JOBS)
+    assert path is None
+
+
+def test_classify_parity_with_evaluate_wait_entry():
+    # Lock-step invariant across a grid: non-None path <=> a NON-Gate-1 refusal;
+    # None <=> Gate-1 refusal OR proceed (None). Guards the two fns drifting apart.
+    grid = [
+        (["matA"], 0, False, True, 15, _HB_JOBS),   # gate1
+        ([], 5, True, True, 15, _HB_JOBS),          # gate2 + jobs
+        ([], 5, True, True, 15, []),                # gate2 no jobs
+        ([], 0, False, True, 15, []),               # idle no jobs
+        ([], 0, False, True, 15, _HB_JOBS),         # idle + jobs
+        ([], 0, False, False, 15, []),              # idle floor-off
+        ([], 20, False, True, 15, _HB_JOBS),        # healthy queue -> proceed
+        ([], 2, True, False, 15, _HB_JOBS),         # floor off, in flight -> proceed
+    ]
+    for need, pending, running, floor, floor_min, jobs in grid:
+        kw = dict(candidates_need_disposition=need, pending_count=pending,
+                  has_running=running, enforce_queue_floor=floor,
+                  queue_min_pending=floor_min, forgotten_jobs=jobs)
+        msg = evaluate_wait_entry(**kw)
+        path = classify_wait_handback(**kw)
+        is_gate1 = bool(need)
+        if msg is None or is_gate1:
+            assert path is None, (kw, msg, path)
+        else:
+            assert path in ("submit_ready", "expand"), (kw, msg, path)
 
 
 # ===========================================================================

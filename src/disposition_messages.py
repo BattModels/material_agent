@@ -8,7 +8,7 @@ These turn the STRUCTURED result of ``EXPLOG.get_disposition_info`` /
 plus the tiny stdlib-only ``src.var`` config module (never ``src.tools``).
 """
 
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Optional
 
 from src import var
 
@@ -307,6 +307,68 @@ def format_wait_gate2_refusal(forgotten_jobs: Iterable[Dict[str, Any]] = ()) -> 
     )
 
 
+def format_supervisor_handback_directive(
+    path: str, forgotten_jobs: Iterable[Dict[str, Any]] = ()
+) -> str:
+    """SUPERVISOR-facing directive injected into the supervisor prompt when a
+    worker handed back off the queue floor (``path`` from classify_wait_handback).
+
+    Unlike ``format_wait_gate2_refusal`` -- addressed to the worker, telling it to
+    end its turn -- this tells the SUPERVISOR which plan step to make, so the
+    handback is acted on rather than discounted as worker prose:
+
+      - ``"submit_ready"`` (Path A): ready continuation work exists -> plan an
+        IMMEDIATE submit step for it (it is effectively free while the cluster is
+        under-utilized); the jobs are listed so the supervisor can scope the step.
+        Keep the floor armed unless genuinely winding down.
+      - ``"expand"`` (Path B / idle): no ready work -> plan a step that opens a
+        DISCUSSION with the OER_agent (which alone can explore the current results
+        and search the literature) covering four minimum points (results,
+        literature, which active candidates to push further, whether to add more);
+        or, only if genuinely winding down, disarm the floor to finalize in-flight
+        work.
+    """
+    if path == "submit_ready":
+        jobs = list(forgotten_jobs)
+        shown = jobs[:10]
+        listing = "\n".join("  - " + _forgotten_job_line(j) for j in shown)
+        extra = len(jobs) - len(shown)
+        more = f"\n  ... and {extra} more." if extra > 0 else ""
+        return (
+            "HANDBACK -- QUEUE FLOOR: a worker returned to you because the HPC "
+            f"queue fell below its floor while {len(jobs)} READY continuation "
+            "job(s) are waiting. This work continues candidates already started "
+            "and the HPC is under-utilized, so submitting work for these "
+            "candidates is effectively free. Add a plan step now that SUBMITS "
+            "these ready jobs; do NOT set enforce_queue_floor=False unless the "
+            "study is genuinely winding down (the remaining time is too short for "
+            "newly-submitted jobs to finish).\n"
+            "Ready work to submit:\n" + listing + more
+        )
+
+    # path == "expand" (also the idle "nothing to wait for" handback)
+    return (
+        "HANDBACK -- QUEUE FLOOR: a worker returned to you because the HPC queue "
+        "is under-utilized and there is no ready continuation work left to submit. "
+        "Plan a step that opens a DISCUSSION with the OER_agent on how best to "
+        "expand the study (or whether to wind it down) -- not a hand-off for it to "
+        "decide alone, and not a decision you make alone: the OER_agent is the "
+        "only agent that can explore the current results directly and search the "
+        "literature (arXiv), so its input is essential while the direction is "
+        "settled together. The discussion must cover, at a minimum, these four "
+        "points: (1) review the current results of the active candidates; (2) "
+        "consult the literature (e.g. arXiv_search) for relevant guidance; (3) "
+        "decide which active candidates, if any, are interesting enough to explore "
+        "further (more surfaces / terminations, more O or OH adsorption sites); "
+        "and (4) whether more candidates should be added (e.g. a fresh AQ-GNoME "
+        "query) if that is the best course of action. Only if the study is "
+        "genuinely winding down (the remaining time is too short for "
+        "newly-submitted jobs to finish) set enforce_queue_floor=False on the next "
+        "step so the worker may instead wait for and finalize the in-flight "
+        "results, or conclude the study if it is genuinely complete."
+    )
+
+
 def format_wait_exit_disposition_hint(candidate_ids: Iterable[str]) -> str:
     """Trailing line for a wait EXIT: the candidates whose work just finalized.
 
@@ -370,6 +432,53 @@ def evaluate_wait_entry(
 
     if gate2_armed:
         return format_wait_gate2_refusal(jobs)
+    return None
+
+
+def classify_wait_handback(
+    *,
+    candidates_need_disposition: List[str],
+    pending_count: int,
+    has_running: bool,
+    enforce_queue_floor: bool,
+    queue_min_pending: int,
+    forgotten_jobs: Iterable[Dict[str, Any]] = (),
+) -> Optional[str]:
+    """Classify a wait_for_update refusal into the SUPERVISOR handback path it
+    warrants -- the path token behind the directive the supervisor injects, as
+    opposed to ``evaluate_wait_entry``'s worker-facing message.
+
+      - ``None``           -> not a supervisor handback: a Gate 1 disposition
+                              backlog (the worker clears it itself) or "proceed
+                              to wait" (queue healthy).
+      - ``"submit_ready"`` -> Path A: queue below its floor AND ready continuation
+                              work exists -> the supervisor should plan an
+                              immediate submit step.
+      - ``"expand"``       -> Path B: queue below its floor with no ready work, OR
+                              nothing in flight at all (idle) -> the supervisor
+                              should expand the study or wind it down.
+
+    Kept in lock-step with ``evaluate_wait_entry`` (same precedence + off-switches)
+    so the flag the wait tool raises and the path the supervisor re-derives from
+    live EXPLOG never disagree.
+    """
+    if candidates_need_disposition:
+        return None
+
+    jobs = list(forgotten_jobs)
+    gate2_armed = (
+        enforce_queue_floor
+        and queue_min_pending > 0
+        and pending_count < queue_min_pending
+    )
+
+    if pending_count == 0 and not has_running:
+        if gate2_armed and jobs:
+            return "submit_ready"
+        return "expand"
+
+    if gate2_armed:
+        return "submit_ready" if jobs else "expand"
     return None
 
 
