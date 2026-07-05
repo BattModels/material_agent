@@ -1147,10 +1147,15 @@ corrected required_quantities.
 class judge():
     def __init__(self):
         config = var.OTHER_GLOBAL_VARIABLES
-        if 'opus' in config['ANTHROPIC_MODEL']:
-            self.llm = ChatAnthropic(model=config['ANTHROPIC_MODEL'], api_key=config['ANTHROPIC_API_KEY']).with_structured_output(judgeResponse, include_raw=True)
+        # Newest models deprecate `temperature` (Anthropic returns HTTP 400
+        # "temperature is deprecated for this model" — seen on opus-4.x and
+        # sonnet-5). Build those without temperature; older models keep
+        # temperature=0.0 for deterministic judging.
+        _model = config['ANTHROPIC_MODEL']
+        if 'opus' in _model or 'sonnet-5' in _model:
+            self.llm = ChatAnthropic(model=_model, api_key=config['ANTHROPIC_API_KEY']).with_structured_output(judgeResponse, include_raw=True)
         else:
-            self.llm = ChatAnthropic(model=config['ANTHROPIC_MODEL'], api_key=config['ANTHROPIC_API_KEY'],temperature=0.0).with_structured_output(judgeResponse, include_raw=True)
+            self.llm = ChatAnthropic(model=_model, api_key=config['ANTHROPIC_API_KEY'],temperature=0.0).with_structured_output(judgeResponse, include_raw=True)
     
     def invoke(self, input):
         with open(f"{var.my_WORKING_DIRECTORY}/judge_status.txt", "r") as f:
@@ -1167,23 +1172,47 @@ class judge():
             with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
                 f.write(f"Judge Agent is processing!!!!!\n")
         
+        def _extract_fields(raw_out):
+            # Prefer langchain's parsed structured object when present.
+            parsed = raw_out.get('parsed') if isinstance(raw_out, dict) else None
+            if parsed is not None:
+                d = parsed.model_dump() if hasattr(parsed, 'model_dump') else (
+                    parsed if isinstance(parsed, dict) else {})
+                if 'verdict' in d and 'reasoning' in d:
+                    return d
+            # Fall back to scanning the raw tool-use content blocks. The
+            # tool_use block is NOT always first — verbose/newer models
+            # (e.g. sonnet-5) may emit a leading text block — so search for
+            # the block carrying an `input` dict rather than assuming [0].
+            try:
+                content = raw_out['raw'].content
+            except Exception:
+                content = None
+            if isinstance(content, list):
+                for b in content:
+                    if isinstance(b, dict) and isinstance(b.get('input'), dict):
+                        return b['input']
+            elif isinstance(content, dict) and isinstance(content.get('input'), dict):
+                return content['input']
+            return {}
+
         agent_response = {}
+        token_usage = {}
         patient = 3
-        while 'verdict' not in agent_response or 'reasoning' not in agent_response:
-        # print(input)    
-            patient -= 1
+        for _attempt in range(patient):
             agent_response_raw = self.llm.invoke(input)
-            # print(agent_response_raw)
-            agent_response = agent_response_raw['raw'].content[0]['input']
-            # 'input_tokens': 2102, 'output_tokens': 393, '
-            token_usage = agent_response_raw['raw'].usage_metadata
-            # print(token_usage)
-            if patient <= 0:
-                print(agent_response)
-                print("Judge Agent failed to give a valid response after 3 attempts. Exiting.")
-                exit()
-        
-        outStr = f"Judge's verdict: {agent_response['verdict']}\nJudge's reasoning: {agent_response['reasoning']}\nJudge's token usage: input_tokens: {token_usage['input_tokens']}, output_tokens: {token_usage['output_tokens']}"
+            token_usage = agent_response_raw['raw'].usage_metadata or {}
+            agent_response = _extract_fields(agent_response_raw)
+            # Accept as soon as a valid response is obtained (do NOT discard a
+            # valid response just because it came on the last allowed attempt).
+            if 'verdict' in agent_response and 'reasoning' in agent_response:
+                break
+        else:
+            print(agent_response)
+            print("Judge Agent failed to give a valid response after 3 attempts. Exiting.")
+            exit()
+
+        outStr = f"Judge's verdict: {agent_response['verdict']}\nJudge's reasoning: {agent_response['reasoning']}\nJudge's token usage: input_tokens: {token_usage.get('input_tokens')}, output_tokens: {token_usage.get('output_tokens')}"
         print(outStr)
         if var.my_SAVE_DIALOGUE:
             with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:

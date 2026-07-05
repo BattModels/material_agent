@@ -1763,14 +1763,19 @@ def get_ase_atoms_property(
 def init_structure_data_for_none_adsorption_calculations(
     reasons: Annotated[
         Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-3 sentences "
-        "covering: "
-        "(a) THE ROLE THIS PARAMETER plays in the study described in "
-        "`context` (e.g. 'being varied now', 'fixed at converged value from "
-        "prior convergence test', 'inherited from upstream tool', "
-        "'held fixed by design while a sub-study is in progress'); "
-        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
-        "supports it, and the expected effect on the output. "
+        "Per-parameter rationale — ONE entry per key listed below. For EACH "
+        "parameter write 2-3 SPECIFIC sentences covering: "
+        "(a) ROLE: the part this parameter plays in the study named in `context` "
+        "(e.g. 'being varied now', 'fixed at the value converged in <name the "
+        "study / result_id>', 'inherited from an upstream tool output', 'held by "
+        "design while a sub-study runs'); "
+        "(b) WHY THIS VALUE: how it was chosen and the evidence for it. If it "
+        "comes from an upstream result, NAME that result and confirm it was "
+        "characterized under the SAME conditions this call uses; if it is a "
+        "deliberate design choice, give the physical justification. Generic "
+        "phrases such as 'standard value' or 'typical setting' with no study-"
+        "specific reason are NOT acceptable. Your `context` is automatically "
+        "prepended to every rationale, so it is read together with what you write. "
         "The keys must include: 'element', 'lattice', 'a', 'b', 'c'.",
     ],
     element: Annotated[str, "Element symbol"],
@@ -1821,14 +1826,19 @@ def init_structure_data_for_none_adsorption_calculations(
 def generateSurface_and_getPossibleSite(
     reasons: Annotated[
         Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-3 sentences "
-        "covering: "
-        "(a) THE ROLE THIS PARAMETER plays in the study described in "
-        "`context` (e.g. 'being varied now', 'fixed at converged value from "
-        "prior convergence test', 'inherited from upstream tool', "
-        "'held fixed by design while a sub-study is in progress'); "
-        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
-        "supports it, and the expected effect on the output. "
+        "Per-parameter rationale — ONE entry per key listed below. For EACH "
+        "parameter write 2-3 SPECIFIC sentences covering: "
+        "(a) ROLE: the part this parameter plays in the study named in `context` "
+        "(e.g. 'being varied now', 'fixed at the value converged in <name the "
+        "study / result_id>', 'inherited from an upstream tool output', 'held by "
+        "design while a sub-study runs'); "
+        "(b) WHY THIS VALUE: how it was chosen and the evidence for it. If it "
+        "comes from an upstream result, NAME that result and confirm it was "
+        "characterized under the SAME conditions this call uses; if it is a "
+        "deliberate design choice, give the physical justification. Generic "
+        "phrases such as 'standard value' or 'typical setting' with no study-"
+        "specific reason are NOT acceptable. Your `context` is automatically "
+        "prepended to every rationale, so it is read together with what you write. "
         "The keys must include: 'species', 'crystal_structures', 'facets',"
         "'supercell_dim_xy', 'supercell_dim_z', 'n_fixed_layers', 'vacuum',"
         "and 'surfaceFilename'.",
@@ -1969,14 +1979,19 @@ def generateSurface_and_getPossibleSite(
 def generate_myAdsorbate(
     reasons: Annotated[
         Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-3 sentences "
-        "covering: "
-        "(a) THE ROLE THIS PARAMETER plays in the study described in "
-        "`context` (e.g. 'being varied now', 'fixed at converged value from "
-        "prior convergence test', 'inherited from upstream tool', "
-        "'held fixed by design while a sub-study is in progress'); "
-        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
-        "supports it, and the expected effect on the output. "
+        "Per-parameter rationale — ONE entry per key listed below. For EACH "
+        "parameter write 2-3 SPECIFIC sentences covering: "
+        "(a) ROLE: the part this parameter plays in the study named in `context` "
+        "(e.g. 'being varied now', 'fixed at the value converged in <name the "
+        "study / result_id>', 'inherited from an upstream tool output', 'held by "
+        "design while a sub-study runs'); "
+        "(b) WHY THIS VALUE: how it was chosen and the evidence for it. If it "
+        "comes from an upstream result, NAME that result and confirm it was "
+        "characterized under the SAME conditions this call uses; if it is a "
+        "deliberate design choice, give the physical justification. Generic "
+        "phrases such as 'standard value' or 'typical setting' with no study-"
+        "specific reason are NOT acceptable. Your `context` is automatically "
+        "prepended to every rationale, so it is read together with what you write. "
         "The keys must include: 'symbols', 'positions', 'vaccum', 'AdsorbateFileName'.",
     ],
     symbols: Annotated[str, "Element symbols of the adsorbate (Do not use any delimiters)"],
@@ -2025,14 +2040,19 @@ def generate_myAdsorbate(
 def add_myAdsorbate(
     reasons: Annotated[
         Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-3 sentences "
-        "covering: "
-        "(a) THE ROLE THIS PARAMETER plays in the study described in "
-        "`context` (e.g. 'being varied now', 'fixed at converged value from "
-        "prior convergence test', 'inherited from upstream tool', "
-        "'held fixed by design while a sub-study is in progress'); "
-        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
-        "supports it, and the expected effect on the output. "
+        "Per-parameter rationale — ONE entry per key listed below. For EACH "
+        "parameter write 2-3 SPECIFIC sentences covering: "
+        "(a) ROLE: the part this parameter plays in the study named in `context` "
+        "(e.g. 'being varied now', 'fixed at the value converged in <name the "
+        "study / result_id>', 'inherited from an upstream tool output', 'held by "
+        "design while a sub-study runs'); "
+        "(b) WHY THIS VALUE: how it was chosen and the evidence for it. If it "
+        "comes from an upstream result, NAME that result and confirm it was "
+        "characterized under the SAME conditions this call uses; if it is a "
+        "deliberate design choice, give the physical justification. Generic "
+        "phrases such as 'standard value' or 'typical setting' with no study-"
+        "specific reason are NOT acceptable. Your `context` is automatically "
+        "prepended to every rationale, so it is read together with what you write. "
         "The keys must include: 'mySurfacePath', 'adsorbatePath', 'mySites', "
         "'rotations', 'surfaceWithAdsorbateFileName'.",
     ],
@@ -2137,14 +2157,19 @@ def add_myAdsorbate(
 def write_QE_script_w_ASE(
     reasons: Annotated[
         Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-3 sentences "
-        "covering: "
-        "(a) THE ROLE THIS PARAMETER plays in the study described in "
-        "`context` (e.g. 'being varied now', 'fixed at converged value from "
-        "prior convergence test', 'inherited from upstream tool', "
-        "'held fixed by design while a sub-study is in progress'); "
-        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
-        "supports it, and the expected effect on the output. "
+        "Per-parameter rationale — ONE entry per key listed below. For EACH "
+        "parameter write 2-3 SPECIFIC sentences covering: "
+        "(a) ROLE: the part this parameter plays in the study named in `context` "
+        "(e.g. 'being varied now', 'fixed at the value converged in <name the "
+        "study / result_id>', 'inherited from an upstream tool output', 'held by "
+        "design while a sub-study runs'); "
+        "(b) WHY THIS VALUE: how it was chosen and the evidence for it. If it "
+        "comes from an upstream result, NAME that result and confirm it was "
+        "characterized under the SAME conditions this call uses; if it is a "
+        "deliberate design choice, give the physical justification. Generic "
+        "phrases such as 'standard value' or 'typical setting' with no study-"
+        "specific reason are NOT acceptable. Your `context` is automatically "
+        "prepended to every rationale, so it is read together with what you write. "
         "The keys must include: 'listofElements', 'ppfiles', 'filename',"
         "'inputAtomsDir', 'ensembleCalculation', 'calculation', 'restart_mode', 'prefix', "
         "'disk_io', 'ibrav', 'ecutwfc', 'ecutrho', "
@@ -2171,8 +2196,17 @@ def write_QE_script_w_ASE(
     electron_maxstep: Annotated[int, "Maximum number of SCF iterations"],
     kspacing: Annotated[float, "K-point spacing (in Angstrom^-1). Lower value means more k-points and better accuracy."],
     input_dft: Annotated[Literal['LDA', 'PBE', 'BEEF-vdW'], "DFT functional. You'll be told which functional to use"],
-    ecutwfc_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of ecutwfc value was generated. Accepts either an 8-char id (referencing a past tool output) or `<8-char-id>.<param_name>` (referencing a specific input parameter of a past tool call — useful when this value should match a value used as input to an earlier call; call `list_referenceable_inputs` to see available param names). If not provided (left empty), you can only play around and see the effect of input parameter settings to output result of this tool, but you cannot use the output directly to calculate the final result."],
-    kspacing_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of kspacing value was generated. Accepts either an 8-char id (referencing a past tool output) or `<8-char-id>.<param_name>` (referencing a specific input parameter of a past tool call — useful when this value should match a value used as input to an earlier call; call `list_referenceable_inputs` to see available param names). If not provided (left empty), you can only play around and see the effect of input parameter settings to output result of this tool, but you cannot use the output directly to calculate the final result."],
+    ecutwfc_ref: Annotated[str, "Optional source_result_id for ecutwfc (8-char id, or "
+        "`<8-char-id>.<param_name>`; see `list_referenceable_inputs`). The referenced "
+        "convergence must have been performed under conditions comparable to THIS run — e.g. a "
+        "cutoff converged for this system/functional; do not reuse a value converged under "
+        "clearly different conditions. If left empty the output is exploratory only and cannot "
+        "feed a final result."],
+    kspacing_ref: Annotated[str, "Optional source_result_id for kspacing (8-char id, or "
+        "`<8-char-id>.<param_name>`; see `list_referenceable_inputs`). The referenced kspacing "
+        "convergence must have been characterized under conditions comparable to this run (e.g. "
+        "a kspacing converged at a LOW ecutwfc should not be reused at a much higher ecutwfc). "
+        "If left empty the output is exploratory only and cannot feed a final result."],
     context: Annotated[
         str,
         "1-2 sentence describing which study or exploration this tool call "
@@ -2764,14 +2798,19 @@ def find_pseudopotential(element: str) -> str:
 def generate_convergence_test(
     reasons: Annotated[
         Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-3 sentences "
-        "covering: "
-        "(a) THE ROLE THIS PARAMETER plays in the study described in "
-        "`context` (e.g. 'being varied now', 'fixed at converged value from "
-        "prior convergence test', 'inherited from upstream tool', "
-        "'held fixed by design while a sub-study is in progress'); "
-        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
-        "supports it, and the expected effect on the output. "
+        "Per-parameter rationale — ONE entry per key listed below. For EACH "
+        "parameter write 2-3 SPECIFIC sentences covering: "
+        "(a) ROLE: the part this parameter plays in the study named in `context` "
+        "(e.g. 'being varied now', 'fixed at the value converged in <name the "
+        "study / result_id>', 'inherited from an upstream tool output', 'held by "
+        "design while a sub-study runs'); "
+        "(b) WHY THIS VALUE: how it was chosen and the evidence for it. If it "
+        "comes from an upstream result, NAME that result and confirm it was "
+        "characterized under the SAME conditions this call uses; if it is a "
+        "deliberate design choice, give the physical justification. Generic "
+        "phrases such as 'standard value' or 'typical setting' with no study-"
+        "specific reason are NOT acceptable. Your `context` is automatically "
+        "prepended to every rationale, so it is read together with what you write. "
         "The keys must include: 'input_file_name', 'varying_parameter_name', 'varying_parameter_values'.",
     ],
     input_file_name: Annotated[str, "Name of the template quantum espresso input file. The template's QE parameters (ecutwfc, kspacing, smearing, etc.) are inherited by every generated job; only the parameter named in `varying_parameter_name` is replaced per job."],
@@ -2853,6 +2892,10 @@ def generate_convergence_test(
     DFT parameters inherited from the template, and kpoints
     recomputed per-job from each structure's cell using the
     template's kspacing.
+
+    The swept values in `varying_parameter_values` must form a GENUINE sweep: two or
+    more DISTINCT values spanning under-converged to well-converged. A list of
+    identical values (e.g. [80, 80, 80]) is not a convergence test.
 
     reference_id in the output ties with: generated convergence-test job list, list[str]
     '''
@@ -3523,14 +3566,19 @@ def generate_convergence_test(
 def generate_eos_test(
     reasons: Annotated[
         Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-3 sentences "
-        "covering: "
-        "(a) THE ROLE THIS PARAMETER plays in the study described in "
-        "`context` (e.g. 'being varied now', 'fixed at converged value from "
-        "prior convergence test', 'inherited from upstream tool', "
-        "'held fixed by design while a sub-study is in progress'); "
-        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
-        "supports it, and the expected effect on the output. "
+        "Per-parameter rationale — ONE entry per key listed below. For EACH "
+        "parameter write 2-3 SPECIFIC sentences covering: "
+        "(a) ROLE: the part this parameter plays in the study named in `context` "
+        "(e.g. 'being varied now', 'fixed at the value converged in <name the "
+        "study / result_id>', 'inherited from an upstream tool output', 'held by "
+        "design while a sub-study runs'); "
+        "(b) WHY THIS VALUE: how it was chosen and the evidence for it. If it "
+        "comes from an upstream result, NAME that result and confirm it was "
+        "characterized under the SAME conditions this call uses; if it is a "
+        "deliberate design choice, give the physical justification. Generic "
+        "phrases such as 'standard value' or 'typical setting' with no study-"
+        "specific reason are NOT acceptable. Your `context` is automatically "
+        "prepended to every rationale, so it is read together with what you write. "
         "The keys must include: 'input_file_name', "
         # "'kspacing', 'ecutwfc', "
         "'stepSize'.",
@@ -3875,14 +3923,19 @@ def get_convergence_suggestions(
 def find_optimal_parameter(
     reasons: Annotated[
         Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-3 sentences "
-        "covering: "
-        "(a) THE ROLE THIS PARAMETER plays in the study described in "
-        "`context` (e.g. 'being varied now', 'fixed at converged value from "
-        "prior convergence test', 'inherited from upstream tool', "
-        "'held fixed by design while a sub-study is in progress'); "
-        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
-        "supports it, and the expected effect on the output. "
+        "Per-parameter rationale — ONE entry per key listed below. For EACH "
+        "parameter write 2-3 SPECIFIC sentences covering: "
+        "(a) ROLE: the part this parameter plays in the study named in `context` "
+        "(e.g. 'being varied now', 'fixed at the value converged in <name the "
+        "study / result_id>', 'inherited from an upstream tool output', 'held by "
+        "design while a sub-study runs'); "
+        "(b) WHY THIS VALUE: how it was chosen and the evidence for it. If it "
+        "comes from an upstream result, NAME that result and confirm it was "
+        "characterized under the SAME conditions this call uses; if it is a "
+        "deliberate design choice, give the physical justification. Generic "
+        "phrases such as 'standard value' or 'typical setting' with no study-"
+        "specific reason are NOT acceptable. Your `context` is automatically "
+        "prepended to every rationale, so it is read together with what you write. "
         "The keys must include: 'sweeping_parameter', 'filename', 'parameters',"
         "'reference_file', 'threshold', 'comparison_mode'.",
     ],
@@ -3895,8 +3948,15 @@ def find_optimal_parameter(
         List[Tuple[float, str]],
         "List of (parameter_value, source_result_id) pairs. Each parameter_value is the swept value used in the corresponding filename. Aligned by index with `filename_w_ref`. Each source_result_id accepts an 8-char id to reference the output, or `<8-char-id>.<param_name>` to reference an input parameter of a past tool call (see `list_referenceable_inputs`).",
     ],
-    reference_file: Annotated[str, "Among the list of files, the reference_file filename corresponding to the most expensive / most accurate reference calculation."],
-    threshold: Annotated[float, "Maximum allowed absolute energy difference in eV from the reference energy (interpreted per the `comparison_mode` you choose: absolute total-energy diff in eV, or per-atom energy diff in eV/atom). typically 1e-3 or 0.001 eV or 0.001 eV/atom"],
+    reference_file: Annotated[str, "The reference file: it MUST be the MOST accurate / most "
+        "expensive calculation in the list (e.g. the highest ecutwfc). Everything is compared "
+        "against it, so using the cheapest / lowest-accuracy file as the reference inverts the "
+        "test. It is one of the entries in `filename_w_ref`."],
+    threshold: Annotated[float, "Maximum allowed energy difference from the reference, per "
+        "`comparison_mode` (absolute eV, or per-atom eV/atom). It is a convergence criterion, "
+        "so it is SMALL: typically 1e-3 (0.001), occasionally up to ~1e-2. Values far larger "
+        "(e.g. 0.1-0.5 eV/atom) are not meaningful convergence thresholds and require an "
+        "explicit, evidence-based justification; unjustified, such a value is an error."],
     comparison_mode: Annotated[
         Literal["absolute", "per_atom"],
         "How to measure each file's energy difference from the reference. "
@@ -3918,6 +3978,15 @@ def find_optimal_parameter(
     settings, and you want to find the cheapest setting of `sweeping_parameter`
     that still matches the reference within `threshold`. Run this once per
     parameter you want to optimize.
+
+    Correct-usage contract (a reviewer may check parameters against these):
+      * `reference_file` is the MOST accurate/expensive point in the list (not the
+        cheapest); every other file is compared against it.
+      * The candidate list MAY legitimately include deliberately atypical values
+        (e.g. a very low ecutwfc) to map the convergence curve — valid *candidates*,
+        not valid *references*, and their presence is not an error.
+      * Combine files from several prior batches ONLY when every file used identical
+        settings except `sweeping_parameter`, so the energies are comparable.
 
     Use this tool when each data point's convergence quantity is the
     energy read directly from a single .pwo file (the typical case for
@@ -4128,14 +4197,19 @@ def _walk_to_axis_source(
 def find_optimal_parameter_from_derived(
     reasons: Annotated[
         Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-3 sentences "
-        "covering: "
-        "(a) THE ROLE THIS PARAMETER plays in the study described in "
-        "`context` (e.g. 'being varied now', 'fixed at converged value from "
-        "prior convergence test', 'inherited from upstream tool', "
-        "'held fixed by design while a sub-study is in progress'); "
-        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
-        "supports it, and the expected effect on the output. "
+        "Per-parameter rationale — ONE entry per key listed below. For EACH "
+        "parameter write 2-3 SPECIFIC sentences covering: "
+        "(a) ROLE: the part this parameter plays in the study named in `context` "
+        "(e.g. 'being varied now', 'fixed at the value converged in <name the "
+        "study / result_id>', 'inherited from an upstream tool output', 'held by "
+        "design while a sub-study runs'); "
+        "(b) WHY THIS VALUE: how it was chosen and the evidence for it. If it "
+        "comes from an upstream result, NAME that result and confirm it was "
+        "characterized under the SAME conditions this call uses; if it is a "
+        "deliberate design choice, give the physical justification. Generic "
+        "phrases such as 'standard value' or 'typical setting' with no study-"
+        "specific reason are NOT acceptable. Your `context` is automatically "
+        "prepended to every rationale, so it is read together with what you write. "
         "The keys must include: 'sweeping_parameter', 'data_points', "
         "'axis_values', 'reference_ref', 'threshold'.",
     ],
@@ -4175,10 +4249,10 @@ def find_optimal_parameter_from_derived(
     ],
     reference_ref: Annotated[
         str,
-        "The quantity_ref (from `data_points_w_refs`) treated as the "
-        "most accurate reference (typically the most expensive / most "
-        "converged calculation). Must equal exactly one of the "
-        "second-element values of `data_points_w_refs`.",
+        "The reference data point (a quantity_ref from `data_points_w_refs`): it MUST be "
+        "the MOST-converged point on the axis (e.g. the thickest slab / highest ecutwfc). "
+        "Using the least-converged point (e.g. the thinnest slab) as the reference inverts "
+        "the test. Must equal exactly one of the second-element values of `data_points_w_refs`.",
     ],
     threshold: Annotated[
         float,
@@ -4187,8 +4261,9 @@ def find_optimal_parameter_from_derived(
         "derived quantity itself (e.g. eV for adsorption energy). The "
         "tool always compares in absolute terms — if you want a "
         "per-atom or otherwise normalized comparison, compute the "
-        "normalized quantity upstream before feeding it in here.",
-        "typically threshold = 0.001 or 1e-3 eV."
+        "normalized quantity upstream before feeding it in here. "
+        "Typically ~1e-3 eV for energies, though a coarser tolerance can be "
+        "appropriate for a derived quantity if justified."
     ],
     context: Annotated[
         str,
@@ -4203,6 +4278,14 @@ def find_optimal_parameter_from_derived(
     find the cheapest value of `sweeping_parameter` whose DERIVED
     convergence quantity, data_points, is within `threshold` of the reference data
     point's quantity.
+
+    Correct-usage contract (a reviewer may check parameters against these):
+      * `reference_ref` is the MOST-converged data point on the axis (e.g. the
+        thickest slab / highest cutoff), not the least-converged; every other point
+        is compared against it.
+      * Each `data_points` value must be a DERIVED quantity actually computed for
+        that axis value (e.g. an adsorption energy from `calculate_formation_E`),
+        consistently across all points — not hand-entered or mismatched.
 
     Use this tool for multi-step / derived-quantity convergence tests:
     cases where each data point's converging quantity is not the energy
@@ -4466,14 +4549,19 @@ def find_optimal_parameter_from_derived(
 def calculate_formation_E(
     reasons: Annotated[
         Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-3 sentences "
-        "covering: "
-        "(a) THE ROLE THIS PARAMETER plays in the study described in "
-        "`context` (e.g. 'being varied now', 'fixed at converged value from "
-        "prior convergence test', 'inherited from upstream tool', "
-        "'held fixed by design while a sub-study is in progress'); "
-        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
-        "supports it, and the expected effect on the output. "
+        "Per-parameter rationale — ONE entry per key listed below. For EACH "
+        "parameter write 2-3 SPECIFIC sentences covering: "
+        "(a) ROLE: the part this parameter plays in the study named in `context` "
+        "(e.g. 'being varied now', 'fixed at the value converged in <name the "
+        "study / result_id>', 'inherited from an upstream tool output', 'held by "
+        "design while a sub-study runs'); "
+        "(b) WHY THIS VALUE: how it was chosen and the evidence for it. If it "
+        "comes from an upstream result, NAME that result and confirm it was "
+        "characterized under the SAME conditions this call uses; if it is a "
+        "deliberate design choice, give the physical justification. Generic "
+        "phrases such as 'standard value' or 'typical setting' with no study-"
+        "specific reason are NOT acceptable. Your `context` is automatically "
+        "prepended to every rationale, so it is read together with what you write. "
         "The keys must include: 'slabFilePath', 'adsorbateFilePath', "
         "'systemFilePath'.",
     ],
@@ -4511,6 +4599,12 @@ def calculate_formation_E(
     calculate the formation energy of the adsorbate on the slab.
     Be careful that all calculations must be done with the same parameter settings
     for energies to be comparable.
+
+    The three files must be the consistent set for ONE system, each pointing at the
+    RIGHT calculation: `slabFilePath` = clean slab, `adsorbateFilePath` = the isolated
+    adsorbate reference, `systemFilePath` = the slab WITH the adsorbate (not the bare
+    slab again). Pointing systemFilePath at the clean slab (or otherwise mismatched
+    files) yields a meaningless energy and is an error.
 
     All three filename arguments require a source_result_id; the formation
     energy is a high-stakes value and provenance is mandatory.
@@ -4594,14 +4688,19 @@ def calculate_formation_E(
 def calculate_lc(
     reasons: Annotated[
         Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-3 sentences "
-        "covering: "
-        "(a) THE ROLE THIS PARAMETER plays in the study described in "
-        "`context` (e.g. 'being varied now', 'fixed at converged value from "
-        "prior convergence test', 'inherited from upstream tool', "
-        "'held fixed by design while a sub-study is in progress'); "
-        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
-        "supports it, and the expected effect on the output. "
+        "Per-parameter rationale — ONE entry per key listed below. For EACH "
+        "parameter write 2-3 SPECIFIC sentences covering: "
+        "(a) ROLE: the part this parameter plays in the study named in `context` "
+        "(e.g. 'being varied now', 'fixed at the value converged in <name the "
+        "study / result_id>', 'inherited from an upstream tool output', 'held by "
+        "design while a sub-study runs'); "
+        "(b) WHY THIS VALUE: how it was chosen and the evidence for it. If it "
+        "comes from an upstream result, NAME that result and confirm it was "
+        "characterized under the SAME conditions this call uses; if it is a "
+        "deliberate design choice, give the physical justification. Generic "
+        "phrases such as 'standard value' or 'typical setting' with no study-"
+        "specific reason are NOT acceptable. Your `context` is automatically "
+        "prepended to every rationale, so it is read together with what you write. "
         "The keys must include: 'jobFilenames'.",
     ],
     jobFilenames_w_ref: Annotated[
@@ -4701,14 +4800,19 @@ def calculate_lc(
 def analyze_BEEF_result(
     reasons: Annotated[
         Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-3 sentences "
-        "covering: "
-        "(a) THE ROLE THIS PARAMETER plays in the study described in "
-        "`context` (e.g. 'being varied now', 'fixed at converged value from "
-        "prior convergence test', 'inherited from upstream tool', "
-        "'held fixed by design while a sub-study is in progress'); "
-        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
-        "supports it, and the expected effect on the output. "
+        "Per-parameter rationale — ONE entry per key listed below. For EACH "
+        "parameter write 2-3 SPECIFIC sentences covering: "
+        "(a) ROLE: the part this parameter plays in the study named in `context` "
+        "(e.g. 'being varied now', 'fixed at the value converged in <name the "
+        "study / result_id>', 'inherited from an upstream tool output', 'held by "
+        "design while a sub-study runs'); "
+        "(b) WHY THIS VALUE: how it was chosen and the evidence for it. If it "
+        "comes from an upstream result, NAME that result and confirm it was "
+        "characterized under the SAME conditions this call uses; if it is a "
+        "deliberate design choice, give the physical justification. Generic "
+        "phrases such as 'standard value' or 'typical setting' with no study-"
+        "specific reason are NOT acceptable. Your `context` is automatically "
+        "prepended to every rationale, so it is read together with what you write. "
         "The keys must include: 'slabFilePath', 'adsorbateFilePath', "
         "'systemFilePath'.",
     ],
@@ -4746,6 +4850,11 @@ def analyze_BEEF_result(
     adsorbate, and surface-with-adsorbate. Return the mean and standard
     deviation of the adsorption energy. Be careful that all calculations
     must be done with the same parameter settings for energies to be comparable.
+
+    Every one of the three inputs MUST be a BEEF-vdW ENSEMBLE calculation (each
+    produces an ensemble of energies); the reported standard deviation comes from
+    that ensemble. Plain single-functional SCF/relax outputs contain no ensemble and
+    cannot yield an uncertainty — supplying non-ensemble outputs here is invalid.
 
     All three filename arguments require a source_result_id; the BEEF
     ensemble values are high-stakes and provenance is mandatory.
@@ -5316,14 +5425,19 @@ def submit_and_monitor_job(
 def read_energy_from_output(
     reasons: Annotated[
         Dict[str, str],
-        "Per-parameter rationale. For each parameter, write 2-3 sentences "
-        "covering: "
-        "(a) THE ROLE THIS PARAMETER plays in the study described in "
-        "`context` (e.g. 'being varied now', 'fixed at converged value from "
-        "prior convergence test', 'inherited from upstream tool', "
-        "'held fixed by design while a sub-study is in progress'); "
-        "(b) WHY THIS SPECIFIC VALUE: how it was chosen, what evidence "
-        "supports it, and the expected effect on the output. "
+        "Per-parameter rationale — ONE entry per key listed below. For EACH "
+        "parameter write 2-3 SPECIFIC sentences covering: "
+        "(a) ROLE: the part this parameter plays in the study named in `context` "
+        "(e.g. 'being varied now', 'fixed at the value converged in <name the "
+        "study / result_id>', 'inherited from an upstream tool output', 'held by "
+        "design while a sub-study runs'); "
+        "(b) WHY THIS VALUE: how it was chosen and the evidence for it. If it "
+        "comes from an upstream result, NAME that result and confirm it was "
+        "characterized under the SAME conditions this call uses; if it is a "
+        "deliberate design choice, give the physical justification. Generic "
+        "phrases such as 'standard value' or 'typical setting' with no study-"
+        "specific reason are NOT acceptable. Your `context` is automatically "
+        "prepended to every rationale, so it is read together with what you write. "
         "The keys must include: 'jobFilenames'.",
     ],
     jobFilenames_w_ref: Annotated[

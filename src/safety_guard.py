@@ -54,6 +54,8 @@ import re
 import time
 import pickle
 from typing import Any, Dict, List, Optional, Literal, Set, Annotated, Tuple
+import inspect
+import typing
 import os
 import numpy as np
 
@@ -1366,6 +1368,92 @@ def _normalize_to_list_pair(
 # LLM judge calls
 # =========================================================
 
+# --- Live tool docstring / annotation feed (P2.3) ---------------------------
+#
+# The per-parameter and claim-coherence judges are grounded with the producing
+# tool's actual docstring and the annotation of the parameter under review.
+# We obtain these by a LAZY import of src.tools (a top-level import would form a
+# cycle: tools.py imports guard_* from this module). Everything is best-effort:
+# any failure returns None and the judge simply runs without the doc, exactly as
+# before.
+
+_TOOLNAME_ALIASES = {
+    # artifact tool_name -> module attribute (function) name, where they differ
+    "init_structure_data": "init_structure_data_for_none_adsorption_calculations",
+}
+
+
+def _get_tool_func(tool_name: str):
+    """Resolve a registered artifact `tool_name` to its underlying function."""
+    try:
+        import src.tools as _tools_mod
+    except Exception as e:                                    # noqa: BLE001
+        _dbg(f"_get_tool_func: import src.tools failed: {e}")
+        return None
+    attr = _TOOLNAME_ALIASES.get(tool_name, tool_name)
+    obj = getattr(_tools_mod, attr, None)
+    if obj is None:
+        return None
+    # @tool-decorated tools expose the raw function as `.func`; plain functions
+    # are used directly.
+    return getattr(obj, "func", None) or obj
+
+
+def _lookup_tool_docstring(tool_name: str) -> Optional[str]:
+    """The producing tool's function docstring, stripped, or None."""
+    fn = _get_tool_func(tool_name)
+    if fn is None:
+        return None
+    try:
+        doc = inspect.getdoc(fn)
+    except Exception:                                         # noqa: BLE001
+        return None
+    doc = (doc or "").strip()
+    return doc or None
+
+
+def _lookup_tool_param_doc(tool_name: str, arg_name: str) -> Optional[str]:
+    """Annotation text for the arg under review, joining the value-param and any
+    matching ref-param variants (`<arg>`, `<arg>_w_ref`, `<arg>_w_refs`,
+    `<arg>_ref`) so that source-requirement guidance (e.g. `ecutwfc_ref`) is
+    surfaced alongside the value doc. Returns a labeled multi-line string, or
+    None."""
+    fn = _get_tool_func(tool_name)
+    if fn is None:
+        return None
+    try:
+        hints = typing.get_type_hints(fn, include_extras=True)
+    except Exception:                                         # noqa: BLE001
+        return None
+    lines: List[str] = []
+    for cand in (arg_name, arg_name + "_w_ref", arg_name + "_w_refs", arg_name + "_ref"):
+        t = hints.get(cand)
+        meta = getattr(t, "__metadata__", ())
+        strs = [m for m in meta if isinstance(m, str)]
+        if strs:
+            text = " ".join(strs).strip()
+            label = arg_name if cand == arg_name else f"{arg_name} (source requirement, via {cand})"
+            lines.append(f"  - {label}: {text}")
+    return "\n".join(lines) if lines else None
+
+
+def _tool_usage_block(tool_name: str, parameter_name: str) -> str:
+    """Formatted 'Tool's documented usage' section for a judge prompt, or ''."""
+    doc = _lookup_tool_docstring(tool_name)
+    pdoc = _lookup_tool_param_doc(tool_name, parameter_name)
+    if not doc and not pdoc:
+        return ""
+    parts = [
+        "Tool's documented usage (for reference — the producing tool documents "
+        "the following; use it to judge whether this parameter was set correctly):"
+    ]
+    if doc:
+        parts.append(f"  docstring:\n  \"\"\"\n{doc}\n  \"\"\"")
+    if pdoc:
+        parts.append(f"  annotation of the parameter under review:\n{pdoc}")
+    return "\n".join(parts) + "\n"
+
+
 def _call_param_judge_llm(
     *,
     tool_name: str,
@@ -1406,6 +1494,8 @@ def _call_param_judge_llm(
     else:
         source_block = json.dumps(source_artifact_summary, indent=2, default=str)
 
+    tool_usage = _tool_usage_block(tool_name, parameter_name)
+
     prompt = f"""
 You are verifying whether one tool parameter was set correctly in a scientific
 agent workflow.
@@ -1414,6 +1504,7 @@ Artifact overview:
   produced by tool:                 {tool_name}
   artifact result description:      {result_description}
 
+{tool_usage}
 Parameter under review:
   name:  {parameter_name}
   value: {repr(parameter_value)}
@@ -1641,7 +1732,11 @@ def _call_claim_coherence_judge(
         ", ".join(claim_varied_parameters)
         if claim_varied_parameters else "(none — not a sweep)"
     )
-    if source_tool_description and source_tool_description.strip():
+    _live_doc = _lookup_tool_docstring(source_tool_name)
+    if _live_doc:
+        tool_doc_text = _live_doc
+        tool_doc_provenance = "(from the tool's live docstring)"
+    elif source_tool_description and source_tool_description.strip():
         tool_doc_text = source_tool_description.strip()
         tool_doc_provenance = (
             "(from the catalogued worker tool description)"
