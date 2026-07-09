@@ -1878,8 +1878,8 @@ def init_structure_data_for_none_adsorption_calculations(
     os.makedirs(WORKING_DIRECTORY, exist_ok=True)
     atoms = bulk(element, lattice, a=a, b=b, c=c, cubic=True)
 
-    saveDir = os.path.join(WORKING_DIRECTORY, f"{element}-{lattice}.xyz")
-    write(saveDir, atoms)
+    # ---- In-tool gate: run after the structure is validated (bulk) and BEFORE
+    # writing the structure file.
     merged_reasons = _merge_context(context, reasons)
     _args = {
         "element": element,
@@ -1891,10 +1891,13 @@ def init_structure_data_for_none_adsorption_calculations(
     _desc = "Path of the saved initial structure data file."
     _pblock, _pmd = _param_gate(
         "init_structure_data", _args, merged_reasons, context, _desc,
-        value=f"{element}-{lattice}.xyz", varied_parameters=[],
+        varied_parameters=[],
     )
     if _pblock:
         return _pblock
+
+    saveDir = os.path.join(WORKING_DIRECTORY, f"{element}-{lattice}.xyz")
+    write(saveDir, atoms)
     result_id = CANVAS.register_tool_output(
         tool_name="init_structure_data",
         args=_args,
@@ -1968,6 +1971,42 @@ def generateSurface_and_getPossibleSite(
             if not ok:
                 return msg
 
+    # ---- In-tool gate: run right after the deterministic provenance checks and
+    # BEFORE any file I/O (generate_surface_structures writes the slab to disk).
+    param_sources: Dict[str, Any] = {}
+    if supercell_dim_z_ref:
+        param_sources["supercell_dim_z"] = supercell_dim_z_ref
+    if n_fixed_layers_ref:
+        param_sources["n_fixed_layers"] = n_fixed_layers_ref
+    if vacuum_ref:
+        param_sources["vacuum"] = vacuum_ref
+    if supercell_dim_z_ref != "" and n_fixed_layers_ref != "" and vacuum_ref != "":
+        parent_result_ids = [supercell_dim_z_ref, n_fixed_layers_ref, vacuum_ref]
+    else:
+        parent_result_ids = []
+    common_args = {
+        "species": species,
+        "crystal_structures": crystal_structures,
+        "facets": facets,
+        "supercell_dim_xy": supercell_dim_xy,
+        "supercell_dim_z": supercell_dim_z,
+        "n_fixed_layers": n_fixed_layers,
+        "vacuum": vacuum,
+        "surfaceFilename": surfaceFilename,
+    }
+    merged_reasons = _merge_context(context, reasons)
+    _desc = (
+        f"Clean {species}{facets} slab surface and its possible adsorption sites "
+        f"(vacuum={vacuum}, supercell_dim_z={supercell_dim_z}, "
+        f"n_fixed_layers={n_fixed_layers}).")
+    _pblock, _pmd = _param_gate(
+        "generateSurface_and_getPossibleSite", common_args, merged_reasons,
+        context, _desc, param_sources=param_sources,
+        parent_result_ids=parent_result_ids, varied_parameters=[],
+    )
+    if _pblock:
+        return _pblock
+
     a_dict = {'Pt': 3.92}
     supercell_dim = [supercell_dim_xy[0], supercell_dim_xy[1], supercell_dim_z]
     surface_dict = generate_surface_structures(
@@ -2000,47 +2039,6 @@ def generateSurface_and_getPossibleSite(
 
     mySites_copy = copy.deepcopy(mySites)
     mySites_str = output_capture.getvalue()
-
-    # Build provenance dict only for refs that were provided.
-    param_sources: Dict[str, Any] = {}
-    if supercell_dim_z_ref:
-        param_sources["supercell_dim_z"] = supercell_dim_z_ref
-    if n_fixed_layers_ref:
-        param_sources["n_fixed_layers"] = n_fixed_layers_ref
-    if vacuum_ref:
-        param_sources["vacuum"] = vacuum_ref
-
-    if supercell_dim_z_ref != "" and n_fixed_layers_ref != "" and vacuum_ref != "":
-        parent_result_ids = [supercell_dim_z_ref, n_fixed_layers_ref, vacuum_ref]
-    else:
-        parent_result_ids = []
-
-    common_args = {
-        "species": species,
-        "crystal_structures": crystal_structures,
-        "facets": facets,
-        "supercell_dim_xy": supercell_dim_xy,
-        "supercell_dim_z": supercell_dim_z,
-        "n_fixed_layers": n_fixed_layers,
-        "vacuum": vacuum,
-        "surfaceFilename": surfaceFilename,
-    }
-
-    merged_reasons = _merge_context(context, reasons)
-
-    # Per-parameter gate — run ONCE before the per-site registrations (args are
-    # constant across the loop); sequence: value-check -> per-param -> register.
-    _desc = (
-        f"Clean {species}{facets} slab surface and its possible adsorption sites "
-        f"(vacuum={vacuum}, supercell_dim_z={supercell_dim_z}, "
-        f"n_fixed_layers={n_fixed_layers}).")
-    _pblock, _pmd = _param_gate(
-        "generateSurface_and_getPossibleSite", common_args, merged_reasons,
-        context, _desc, param_sources=param_sources,
-        parent_result_ids=parent_result_ids, varied_parameters=[],
-    )
-    if _pblock:
-        return _pblock
 
     ids = {}
     for k, v in mySites.items():
@@ -2120,10 +2118,8 @@ def generate_myAdsorbate(
 
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
 
-    os.makedirs(os.path.join(WORKING_DIRECTORY, "adsorbates"), exist_ok=True)
-    tmpAtoms = Atoms(symbols=symbols, positions=positions)
-    tmpAtoms.center(vacuum=vaccum)
-    write(os.path.join(WORKING_DIRECTORY, "adsorbates", f"{AdsorbateFileName}"), tmpAtoms)
+    # ---- In-tool gate: run right after the deterministic checks and BEFORE any
+    # file I/O (creating/writing the adsorbate structure).
     merged_reasons = _merge_context(context, reasons)
     _args = {
         "symbols": symbols,
@@ -2134,10 +2130,15 @@ def generate_myAdsorbate(
     _desc = "Path of the saved adsorbate structure file in traj format."
     _pblock, _pmd = _param_gate(
         "generate_myAdsorbate", _args, merged_reasons, context, _desc,
-        value=f"adsorbates/{AdsorbateFileName}", varied_parameters=[],
+        varied_parameters=[],
     )
     if _pblock:
         return _pblock
+
+    os.makedirs(os.path.join(WORKING_DIRECTORY, "adsorbates"), exist_ok=True)
+    tmpAtoms = Atoms(symbols=symbols, positions=positions)
+    tmpAtoms.center(vacuum=vaccum)
+    write(os.path.join(WORKING_DIRECTORY, "adsorbates", f"{AdsorbateFileName}"), tmpAtoms)
     id = CANVAS.register_tool_output(
         tool_name="generate_myAdsorbate",
         args=_args,
@@ -2203,6 +2204,7 @@ def add_myAdsorbate(
             if not ok:
                 return msg
 
+
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     DirOfInterests = WORKING_DIRECTORY.split('/')[-1]
 
@@ -2221,6 +2223,30 @@ def add_myAdsorbate(
         return f"Invalid input atoms directory: {adsorbatePath}. make sure to supply either absolute path, or relative path starting with './{DirOfInterests}'. Please check the path in canvas and try again."
 
     myAdsorbate = read(adsorbatePath)
+    
+    # ---- In-tool gate: run after the inputs are read/normalized and BEFORE the
+    # combined structure is computed and written. `_args` uses the normalized paths,
+    # matching the pre-gate registered behavior.
+    param_sources: Dict[str, Any] = {}
+    if mySites_ref:
+        param_sources["mySites"] = mySites_ref
+    parent_result_ids = [mySites_ref] if mySites_ref != "" else []
+    merged_reasons = _merge_context(context, reasons)
+    _args = {
+        "mySurfacePath": mySurfacePath,
+        "adsorbatePath": adsorbatePath,
+        "mySites": mySites,
+        "rotations": rotations,
+        "surfaceWithAdsorbateFileName": surfaceWithAdsorbateFileName,
+    }
+    _desc = "Path of the saved surface with adsorbate structure file in traj format."
+    _pblock, _pmd = _param_gate(
+        "add_myAdsorbate", _args, merged_reasons, context, _desc,
+        param_sources=param_sources, parent_result_ids=parent_result_ids,
+        varied_parameters=[],
+    )
+    if _pblock:
+        return _pblock
 
     for oneSites, oneRotation in zip([mySites], [rotations]):
         print(oneSites, oneRotation)
@@ -2237,32 +2263,7 @@ def add_myAdsorbate(
     write(absPath, mySurface)
     relaPath = absPath.split(f'{DirOfInterests}/')[-1]
 
-    param_sources: Dict[str, Any] = {}
-    if mySites_ref:
-        param_sources["mySites"] = mySites_ref
-
-    if mySites_ref != "":
-        parent_result_ids = [mySites_ref]
-    else:
-        parent_result_ids = []
-
     outStr = f"Surface with adsorbate saved at {relaPath}."
-    merged_reasons = _merge_context(context, reasons)
-    _args = {
-        "mySurfacePath": mySurfacePath,
-        "adsorbatePath": adsorbatePath,
-        "mySites": mySites,
-        "rotations": rotations,
-        "surfaceWithAdsorbateFileName": surfaceWithAdsorbateFileName,
-    }
-    _desc = "Path of the saved surface with adsorbate structure file in traj format."
-    _pblock, _pmd = _param_gate(
-        "add_myAdsorbate", _args, merged_reasons, context, _desc,
-        param_sources=param_sources, parent_result_ids=parent_result_ids,
-        value=relaPath, varied_parameters=[],
-    )
-    if _pblock:
-        return _pblock
     id = CANVAS.register_tool_output(
         tool_name="add_myAdsorbate",
         args=_args,
@@ -2383,6 +2384,7 @@ def write_QE_script_w_ASE(
     ppfiles = [pseudo for pseudo, _ in ppfiles_w_ref]
     ppfilesID = [ref for _, ref in ppfiles_w_ref]
 
+
     pseudopotentials = {}
     for element, pseudo in zip(listofElements, ppfiles):
         if not os.path.exists(os.path.join("/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/all_lda_pbe_UPF", pseudo)):
@@ -2406,6 +2408,60 @@ def write_QE_script_w_ASE(
         else:
             raise ValueError(f"Invalid input atoms directory: {tmpinputAtomsDir}. make sure to supply either absolute path, or relative path starting with './{DirOfInterests}'. Please check the path in canvas and try again.")
 
+    # ---- In-tool gate: run after the input structure is read + convergence-checked
+    # and BEFORE the QE script is written. NOTE: `inputAtomsDir` has been mutated by
+    # the read block above (path-joined + .pwo), so register the ORIGINAL
+    # agent-submitted name via `tmpinputAtomsDir` — that is what inputAtomsDir_ref
+    # points at (a mutated value would fail value-match against its source).
+    param_sources: Dict[str, Any] = {
+        "inputAtomsDir": inputAtomsDir_ref,
+        "ppfiles": ppfilesID,
+    }
+    if ecutwfc_ref:
+        param_sources["ecutwfc"] = ecutwfc_ref
+    if kspacing_ref:
+        param_sources["kspacing"] = kspacing_ref
+    parent_result_ids = [inputAtomsDir_ref, *ppfilesID]
+    if ecutwfc_ref:
+        parent_result_ids.append(ecutwfc_ref)
+    if kspacing_ref:
+        parent_result_ids.append(kspacing_ref)
+    merged_reasons = _merge_context(context, reasons)
+    _args = {
+        "listofElements": listofElements,
+        "ppfiles": ppfiles,
+        "filename": filename,
+        "inputAtomsDir": tmpinputAtomsDir,
+        "ensembleCalculation": ensembleCalculation,
+        "calculation": calculation,
+        "restart_mode": restart_mode,
+        "prefix": prefix,
+        "disk_io": disk_io,
+        "ibrav": ibrav,
+        "ecutwfc": ecutwfc,
+        "ecutrho": ecutrho,
+        "kspacing": kspacing,
+        "occupations": occupations,
+        "smearing": smearing,
+        "degauss": degauss,
+        "conv_thr": conv_thr,
+        "electron_maxstep": electron_maxstep,
+        "input_dft": input_dft,
+        "additional_input": additional_input,
+    }
+    _desc = f"Path of the saved Quantum Espresso input script, with atomic structures read in from {tmpinputAtomsDir}. If {tmpinputAtomsDir} ends with pwi, it is OKAY, the tool automatically reads the output structure."
+    # A template (ready_to_run_job=False) carries placeholder DFT knobs that a
+    # downstream convergence sweep will vary, so route those to the sweep-point
+    # (R2) rule instead of demanding upstream provenance (R1).
+    _varied = [] if ready_to_run_job else ["ecutwfc", "kspacing"]
+    _pblock, _pmd = _param_gate(
+        "write_QE_script_w_ASE", _args, merged_reasons, context, _desc,
+        param_sources=param_sources, parent_result_ids=parent_result_ids,
+        varied_parameters=_varied,
+    )
+    if _pblock:
+        return _pblock
+    
     filenameWDir = os.path.join(WORKING_DIRECTORY, filename)
 
     kpoints = [
@@ -2442,60 +2498,6 @@ def write_QE_script_w_ASE(
           format='espresso-in',
           pseudopotentials=pseudopotentials,
           kpts=tuple(kpoints))
-
-    # Build provenance.
-    param_sources: Dict[str, Any] = {
-        "inputAtomsDir": inputAtomsDir_ref,
-        "ppfiles": ppfilesID,
-    }
-    if ecutwfc_ref:
-        param_sources["ecutwfc"] = ecutwfc_ref
-    if kspacing_ref:
-        param_sources["kspacing"] = kspacing_ref
-
-
-    parent_result_ids = [inputAtomsDir_ref, *ppfilesID]
-    if ecutwfc_ref:
-        parent_result_ids.append(ecutwfc_ref)
-    if kspacing_ref:
-        parent_result_ids.append(kspacing_ref)
-
-    merged_reasons = _merge_context(context, reasons)
-
-    _args = {
-        "listofElements": listofElements,
-        "ppfiles": ppfiles,
-        "filename": filename,
-        "inputAtomsDir": tmpinputAtomsDir,
-        "ensembleCalculation": ensembleCalculation,
-        "calculation": calculation,
-        "restart_mode": restart_mode,
-        "prefix": prefix,
-        "disk_io": disk_io,
-        "ibrav": ibrav,
-        "ecutwfc": ecutwfc,
-        "ecutrho": ecutrho,
-        "kspacing": kspacing,
-        "occupations": occupations,
-        "smearing": smearing,
-        "degauss": degauss,
-        "conv_thr": conv_thr,
-        "electron_maxstep": electron_maxstep,
-        "input_dft": input_dft,
-        "additional_input": additional_input,
-    }
-    _desc = "Path of the saved Quantum Espresso input script."
-    # A template (ready_to_run_job=False) carries placeholder DFT knobs that a
-    # downstream convergence sweep will vary, so route those to the sweep-point
-    # (R2) rule instead of demanding upstream provenance (R1).
-    _varied = [] if ready_to_run_job else ["ecutwfc", "kspacing"]
-    _pblock, _pmd = _param_gate(
-        "write_QE_script_w_ASE", _args, merged_reasons, context, _desc,
-        param_sources=param_sources, parent_result_ids=parent_result_ids,
-        value=filename, varied_parameters=_varied,
-    )
-    if _pblock:
-        return _pblock
 
     id = CANVAS.register_tool_output(
         tool_name="write_QE_script_w_ASE",
@@ -3195,11 +3197,40 @@ def generate_convergence_test(
             for (path, ref, axis, axis_value) in resolved_entries
         ]
         striped_varying_parameter_values = [path for (path, _, _, _) in resolved_entries]
+    else:
+        if not all(isinstance(v, (int, float)) for v in varying_parameter_values):
+            return (
+                f"When varying_parameter_name={varying_parameter_name!r}, "
+                "varying_parameter_values must be a list of floats."
+            )
+        striped_varying_parameter_values = varying_parameter_values
 
-        # Each path must be readable as a structure. Verify all up
-        # front; on the first failure abort before generating any
-        # files. Also detect basename collisions so two structures
-        # don't silently overwrite each other's job files.
+    # ---- In-tool gate: run right after the deterministic provenance/resolution
+    # checks and BEFORE any file I/O (structure-readability reads, template read,
+    # per-job file writes). Sensitive param is the template `input_file_name`,
+    # sourced from input_file_name_ref.
+    merged_reasons = _merge_context(context, reasons)
+    _args = {
+        "input_file_name": input_file_name,
+        "varying_parameter_name": varying_parameter_name,
+        "varying_parameter_values": striped_varying_parameter_values,
+    }
+    _desc = (
+        f"Convergence test jobs generated from template {input_file_name}, "
+        f"varying {varying_parameter_name}.")
+    _pblock, _pmd = _param_gate(
+        "generate_convergence_test", _args, merged_reasons, context, _desc,
+        param_sources={"input_file_name": input_file_name_ref},
+        parent_result_ids=[input_file_name_ref],
+        varied_parameters=[varying_parameter_name],
+    )
+    if _pblock:
+        return _pblock
+
+    # Structural mode: each candidate path must be readable, and basenames must be
+    # unique (so job filenames don't collide). Checked AFTER the gate so a bad
+    # parameterization is rejected before any structure files are read.
+    if is_structural:
         WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
         basenames: List[str] = []
         for path, ref, _axis_name, _axis_value in resolved_entries:
@@ -3219,13 +3250,6 @@ def generate_convergence_test(
                 "Rename one of the upstream structure files to "
                 "disambiguate."
             )
-    else:
-        if not all(isinstance(v, (int, float)) for v in varying_parameter_values):
-            return (
-                f"When varying_parameter_name={varying_parameter_name!r}, "
-                "varying_parameter_values must be a list of floats."
-            )
-        striped_varying_parameter_values = varying_parameter_values
 
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     input_file = os.path.join(WORKING_DIRECTORY, input_file_name)
@@ -3233,28 +3257,6 @@ def generate_convergence_test(
         template_atom = read(input_file)
     except:
         return f"Invalid input file, please inspect CANVAS and select the correct template file."
-
-    merged_reasons = _merge_context(context, reasons)
-
-    # Per-parameter gate — run ONCE before the per-job loop (registered args are
-    # constant across it). Sensitive param is the template `input_file_name`,
-    # sourced from input_file_name_ref.
-    _args = {
-        "input_file_name": input_file_name,
-        "varying_parameter_name": varying_parameter_name,
-        "varying_parameter_values": striped_varying_parameter_values,
-    }
-    _desc = (
-        f"Convergence test jobs generated from template {input_file_name}, "
-        f"varying {varying_parameter_name}.")
-    _pblock, _pmd = _param_gate(
-        "generate_convergence_test", _args, merged_reasons, context, _desc,
-        param_sources={"input_file_name": input_file_name_ref},
-        parent_result_ids=[input_file_name_ref],
-        varied_parameters=[varying_parameter_name],
-    )
-    if _pblock:
-        return _pblock
 
     job_list_dict = CANVAS.canvas.get('jobs_K_and_ecut', {})
     job_list = []
@@ -3785,6 +3787,23 @@ def generate_eos_test(
     if not ok:
         return msg
 
+    # ---- In-tool gate: run right after the deterministic provenance check and
+    # BEFORE any file I/O / canvas mutation (template read, EOS job-file writes).
+    param_sources: Dict[str, Any] = {"input_file_name": input_file_name_ref}
+    parent_result_ids = [input_file_name_ref]
+    merged_reasons = _merge_context(context, reasons)
+    _args = {"input_file_name": input_file_name, "stepSize": stepSize}
+    _desc = (
+        f"EOS test jobs generated from template {input_file_name} "
+        f"(stepSize={stepSize}).")
+    _pblock, _pmd = _param_gate(
+        "generate_eos_test", _args, merged_reasons, context, _desc,
+        param_sources=param_sources, parent_result_ids=parent_result_ids,
+        varied_parameters=[],
+    )
+    if _pblock:
+        return _pblock
+
     CANVAS.canvas['jobs_K_and_ecut'] = {}
 
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
@@ -3875,34 +3894,6 @@ def generate_eos_test(
         
 
     job_list = list(set(job_list))
-
-    # Build provenance — same set of refs across all scales.
-    param_sources: Dict[str, Any] = {"input_file_name": input_file_name_ref}
-    # if kspacing_ref:
-    #     param_sources["kspacing"] = kspacing_ref
-    # if ecutwfc_ref:
-    #     param_sources["ecutwfc"] = ecutwfc_ref
-
-    # if kspacing_ref != "" and ecutwfc_ref != "":
-    #     parent_result_ids = [kspacing_ref, ecutwfc_ref, input_file_name_ref]
-    # else:
-    parent_result_ids = [input_file_name_ref]
-
-    merged_reasons = _merge_context(context, reasons)
-
-    # Per-parameter gate — run ONCE before the per-job loop (registered args are
-    # constant across it).
-    _args = {"input_file_name": input_file_name, "stepSize": stepSize}
-    _desc = (
-        f"EOS test jobs generated from template {input_file_name} "
-        f"(stepSize={stepSize}).")
-    _pblock, _pmd = _param_gate(
-        "generate_eos_test", _args, merged_reasons, context, _desc,
-        param_sources=param_sources, parent_result_ids=parent_result_ids,
-        varied_parameters=[],
-    )
-    if _pblock:
-        return _pblock
 
     id_dict = {}
     for job in job_list:
@@ -4235,6 +4226,43 @@ def find_optimal_parameter(
             f"reference_file '{reference_file}' is not present in the supplied filenames."
         )
 
+    # ---- In-tool gates: run the per-parameter + cross-parameter judges right after
+    # the deterministic provenance checks and BEFORE any output-file I/O, so a bad
+    # parameterization is rejected before the tool reads energies / plots / selects.
+    param_sources: Dict[str, Any] = {
+        "filename": bare_filename_refs,
+        "parameters": bare_parameter_refs,
+    }
+    parent_result_ids = list(set(bare_filename_refs + bare_parameter_refs))
+    merged_reasons = _merge_context(context, reasons)
+    _args = {
+        "sweeping_parameter": sweeping_parameter,
+        "filename": bare_filenames,
+        "parameters": bare_parameters,
+        "reference_file": reference_file,
+        "threshold": threshold,
+        "comparison_mode": comparison_mode,
+    }
+    _desc = (
+        f"We are going to determine the most optimal parameter value for production "
+        f"run based on the reference file {reference_file} (**MUST BE INCLUDED IN THE "
+        f"LIST**) and the threshold {threshold} ({comparison_mode} comparison). It is "
+        f"totally okay for agent to use filenames ending with .pwi since, in that case, "
+        f"the tool automatically append .pwo to the all filenames to read the output "
+        f"files."
+    )
+    _pblock, _pmd = _param_gate(
+        "find_optimal_parameter", _args, merged_reasons, context, _desc,
+        param_sources=param_sources, parent_result_ids=parent_result_ids,
+        varied_parameters=[sweeping_parameter],
+    )
+    if _pblock:
+        return _pblock
+    _block, _md = _cross_param_gate("find_optimal_parameter", _args, merged_reasons, context, _desc)
+    if _block:
+        return _block
+    _md = {**_pmd, **_md}
+
     reference_param = file_to_param[reference_file]
     reference_energy = read(os.path.join(WORKING_DIRECTORY, reference_file)).get_potential_energy()
 
@@ -4281,40 +4309,21 @@ def find_optimal_parameter(
 
     chosen = max(acceptable, key=lambda x: abs(x[1] - reference_param))
 
-    param_sources: Dict[str, Any] = {
-        "filename": bare_filename_refs,
-        "parameters": bare_parameter_refs,
-    }
-    parent_result_ids = list(set(bare_filename_refs + bare_parameter_refs))
-
-    merged_reasons = _merge_context(context, reasons)
-
-    _args = {
-        "sweeping_parameter": sweeping_parameter,
-        "filename": bare_filenames,
-        "parameters": bare_parameters,
-        "reference_file": reference_file,
-        "threshold": threshold,
-        "comparison_mode": comparison_mode,
-    }
-    _desc = f"The most optimal parameter value for production run based on the reference file {reference_file} (**MUST BE INCLUDED IN THE LIST**) and the threshold {threshold} ({comparison_mode} comparison). The chosen parameter value is {chosen[1]} with file name {chosen[0]}. It is totally okay for agent to use filenames ending with .pwi since, in that case, the tool automatically append .pwo to the all filenames to read the output files."
-    _pblock, _pmd = _param_gate(
-        "find_optimal_parameter", _args, merged_reasons, context, _desc,
-        param_sources=param_sources, parent_result_ids=parent_result_ids,
-        value=chosen[1], varied_parameters=[sweeping_parameter],
+    # The REGISTERED description keeps the final (result-containing) form; the gate
+    # above used a forward-looking, result-independent description (pre-compute).
+    _reg_desc = (
+        f"The most optimal parameter value for production run based on the reference "
+        f"file {reference_file} (**MUST BE INCLUDED IN THE LIST**) and the threshold "
+        f"{threshold} ({comparison_mode} comparison). The chosen parameter value is "
+        f"{chosen[1]} with file name {chosen[0]}. It is totally okay for agent to use "
+        f"filenames ending with .pwi since, in that case, the tool automatically append "
+        f".pwo to the all filenames to read the output files."
     )
-    if _pblock:
-        return _pblock
-    _block, _md = _cross_param_gate("find_optimal_parameter", _args, merged_reasons, context, _desc)
-    if _block:
-        return _block
-    _md = {**_pmd, **_md}
-
     id = CANVAS.register_tool_output(
         tool_name="find_optimal_parameter",
         args=_args,
         value=chosen[1],
-        description=_desc,
+        description=_reg_desc,
         context=context,
         reasons=merged_reasons,
         parent_result_ids=parent_result_ids,
@@ -4627,6 +4636,43 @@ def find_optimal_parameter_from_derived(
     reference_quantity = quantities[reference_index]
     reference_axis_value = axis_values[reference_index]
 
+    # ---- In-tool gates: run right after the deterministic provenance checks and
+    # BEFORE any file I/O (the convergence plot), so a bad parameterization is
+    # rejected before the tool selects/plots.
+    axis_bare_ids = [a.split(".", 1)[0] for a in axis_value_refs]
+    parent_result_ids = list(set(bare_quantity_refs + axis_bare_ids))
+    param_sources: Dict[str, Any] = {
+        "data_points": bare_quantity_refs,
+        "axis_values": axis_value_refs,
+        "reference_ref": bare_quantity_refs[reference_index],
+    }
+    merged_reasons = _merge_context(context, reasons)
+    _args = {
+        "sweeping_parameter": sweeping_parameter,
+        "data_points": quantities,
+        "axis_values": axis_values,
+        "reference_ref": bare_quantity_refs[reference_index],
+        "threshold": threshold,
+    }
+    description = (
+        f"We are going to determine the most optimal {sweeping_parameter} value for "
+        f"production run from a derived-quantity convergence test, based on the "
+        f"reference data point (ref {reference_ref}, **MUST BE INCLUDED IN THE LIST**) "
+        f"and the threshold {threshold} (absolute comparison)."
+    )
+    _pblock, _pmd = _param_gate(
+        "find_optimal_parameter_from_derived", _args, merged_reasons, context,
+        description, param_sources=param_sources,
+        parent_result_ids=parent_result_ids, varied_parameters=[sweeping_parameter],
+    )
+    if _pblock:
+        return _pblock
+    _block, _md = _cross_param_gate("find_optimal_parameter_from_derived", _args,
+                                    merged_reasons, context, description)
+    if _block:
+        return _block
+    _md = {**_pmd, **_md}
+
     # Selection.
     Qdiff: List[float] = []
     acceptable: List[Tuple[int, float, float]] = []  # (index, axis_value, quantity)
@@ -4685,7 +4731,8 @@ def find_optimal_parameter_from_derived(
         key=lambda t: abs(t[1] - reference_axis_value),
     )
 
-    # Build a compact summary table for the registered description.
+    # The REGISTERED description keeps the final (result-containing) summary table;
+    # the gate above used a forward-looking, result-independent description.
     summary_lines: List[str] = []
     summary_lines.append(
         f"Convergence summary for {sweeping_parameter} via derived "
@@ -4707,8 +4754,7 @@ def find_optimal_parameter_from_derived(
     summary_lines.append("")
     summary_lines.append("Per-data-point provenance traces:")
     summary_lines.extend(chain_traces)
-
-    description = (
+    _reg_desc = (
         f"Optimal {sweeping_parameter} = {chosen_axis_value} selected "
         f"from a derived-quantity convergence test. Reference data "
         f"point: {sweeping_parameter}={reference_axis_value} (**MUST BE INCLUDED IN THE LIST**), "
@@ -4718,45 +4764,11 @@ def find_optimal_parameter_from_derived(
         + "\n".join(summary_lines)
     )
 
-    # Provenance for the registered output.
-    #   parent_result_ids — every data point's bare quantity ref, plus
-    #     every distinct axis-source bare id.
-    axis_bare_ids = [a.split(".", 1)[0] for a in axis_value_refs]
-    parent_result_ids = list(set(bare_quantity_refs + axis_bare_ids))
-    param_sources: Dict[str, Any] = {
-        "data_points": bare_quantity_refs,
-        "axis_values": axis_value_refs,
-        "reference_ref": bare_quantity_refs[reference_index],
-    }
-
-    merged_reasons = _merge_context(context, reasons)
-
-    _args = {
-        "sweeping_parameter": sweeping_parameter,
-        "data_points": quantities,
-        "axis_values": axis_values,
-        "reference_ref": bare_quantity_refs[reference_index],
-        "threshold": threshold,
-    }
-    _pblock, _pmd = _param_gate(
-        "find_optimal_parameter_from_derived", _args, merged_reasons, context,
-        description, param_sources=param_sources,
-        parent_result_ids=parent_result_ids, value=chosen_axis_value,
-        varied_parameters=[sweeping_parameter],
-    )
-    if _pblock:
-        return _pblock
-    _block, _md = _cross_param_gate("find_optimal_parameter_from_derived", _args,
-                                    merged_reasons, context, description)
-    if _block:
-        return _block
-    _md = {**_pmd, **_md}
-
     new_id = CANVAS.register_tool_output(
         tool_name="find_optimal_parameter_from_derived",
         args=_args,
         value=chosen_axis_value,
-        description=description,
+        description=_reg_desc,
         context=context,
         reasons=merged_reasons,
         parent_result_ids=parent_result_ids,
@@ -4853,6 +4865,38 @@ def calculate_formation_E(
         if not ok:
             return f"Verification failed for {label}={fname!r} with ref {ref!r}: {msg}"
 
+    # ---- In-tool gates: run right after the deterministic provenance checks and
+    # BEFORE any output-file I/O, so a bad parameterization is rejected before the
+    # tool reads energies / computes.
+    param_sources: Dict[str, Any] = {
+        "slabFilePath": slabFilePath_ref,
+        "adsorbateFilePath": adsorbateFilePath_ref,
+        "systemFilePath": systemFilePath_ref,
+    }
+    parent_result_ids = list({slabFilePath_ref, adsorbateFilePath_ref, systemFilePath_ref})
+    merged_reasons = _merge_context(context, reasons)
+    _args = {
+        "slabFilePath": slabFilePath,
+        "adsorbateFilePath": adsorbateFilePath,
+        "systemFilePath": systemFilePath,
+    }
+    _desc = (
+        f"The formation energy of the adsorbate on the slab calculated "
+        f"using {slabFilePath}, {adsorbateFilePath}, and {systemFilePath}"
+        f"The tool automatically append .pwo to the all filenames to read the output files."
+    )
+    _pblock, _pmd = _param_gate(
+        "calculate_formation_E", _args, merged_reasons, context, _desc,
+        param_sources=param_sources, parent_result_ids=parent_result_ids,
+        varied_parameters=[],
+    )
+    if _pblock:
+        return _pblock
+    _block, _md = _cross_param_gate("calculate_formation_E", _args, merged_reasons, context, _desc)
+    if _block:
+        return _block
+    _md = {**_pmd, **_md}
+
     working_directory = var.my_WORKING_DIRECTORY
     if not slabFilePath.endswith('.pwo'):
         slabFilePathFull = os.path.join(working_directory, slabFilePath + '.pwo')
@@ -4879,37 +4923,6 @@ def calculate_formation_E(
     NslabInSystem = system.numbers.tolist().count(slabSpecies)
 
     formationEnergy = systemEnergy - slabEnergy * NslabInSystem - adsorbateEnergy
-
-    param_sources: Dict[str, Any] = {
-        "slabFilePath": slabFilePath_ref,
-        "adsorbateFilePath": adsorbateFilePath_ref,
-        "systemFilePath": systemFilePath_ref,
-    }
-    parent_result_ids = list({slabFilePath_ref, adsorbateFilePath_ref, systemFilePath_ref})
-
-    merged_reasons = _merge_context(context, reasons)
-
-    _args = {
-        "slabFilePath": slabFilePath,
-        "adsorbateFilePath": adsorbateFilePath,
-        "systemFilePath": systemFilePath,
-    }
-    _desc = (
-        f"The formation energy of the adsorbate on the slab calculated "
-        f"using {slabFilePath}, {adsorbateFilePath}, and {systemFilePath}"
-        f"The tool automatically append .pwo to the all filenames to read the output files."
-    )
-    _pblock, _pmd = _param_gate(
-        "calculate_formation_E", _args, merged_reasons, context, _desc,
-        param_sources=param_sources, parent_result_ids=parent_result_ids,
-        value=formationEnergy, varied_parameters=[],
-    )
-    if _pblock:
-        return _pblock
-    _block, _md = _cross_param_gate("calculate_formation_E", _args, merged_reasons, context, _desc)
-    if _block:
-        return _block
-    _md = {**_pmd, **_md}
 
     id = CANVAS.register_tool_output(
         tool_name="calculate_formation_E",
@@ -4979,6 +4992,24 @@ def calculate_lc(
         bare_filenames.append(name)
         bare_refs.append(ref)
 
+    # ---- In-tool gates: run right after the deterministic provenance checks and
+    # BEFORE any output-file I/O (the per-job reads / EOS fit / plot).
+    param_sources: Dict[str, Any] = {"jobFilenames": bare_refs}
+    merged_reasons = _merge_context(context, reasons)
+    _args = {"jobFilenames": bare_filenames}
+    _desc = f"The lattice constant calculated using the job list {bare_filenames}. The tool automatically append .pwo to the all filenames to read the output files."
+    _pblock, _pmd = _param_gate(
+        "calculate_lc", _args, merged_reasons, context, _desc,
+        param_sources=param_sources, parent_result_ids=list(set(bare_refs)),
+        varied_parameters=[],
+    )
+    if _pblock:
+        return _pblock
+    _block, _md = _cross_param_gate("calculate_lc", _args, merged_reasons, context, _desc)
+    if _block:
+        return _block
+    _md = {**_pmd, **_md}
+
     print(f"actual job list: {bare_filenames}")
 
     volume_list = []
@@ -5021,24 +5052,6 @@ def calculate_lc(
 
     with open(json_file, "w") as file:
         json.dump(lc_dict, file)
-
-    param_sources: Dict[str, Any] = {"jobFilenames": bare_refs}
-
-    merged_reasons = _merge_context(context, reasons)
-
-    _args = {"jobFilenames": bare_filenames}
-    _desc = f"The lattice constant calculated using the job list {bare_filenames}. The tool automatically append .pwo to the all filenames to read the output files."
-    _pblock, _pmd = _param_gate(
-        "calculate_lc", _args, merged_reasons, context, _desc,
-        param_sources=param_sources, parent_result_ids=list(set(bare_refs)),
-        value=lc, varied_parameters=[],
-    )
-    if _pblock:
-        return _pblock
-    _block, _md = _cross_param_gate("calculate_lc", _args, merged_reasons, context, _desc)
-    if _block:
-        return _block
-    _md = {**_pmd, **_md}
 
     id = CANVAS.register_tool_output(
         tool_name="calculate_lc",
@@ -5139,6 +5152,7 @@ def analyze_BEEF_result(
         if not ok:
             return f"Verification failed for {label}={fname!r} with ref {ref!r}: {msg}"
 
+
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     DirOfInterests = WORKING_DIRECTORY.split('/')[-1]
 
@@ -5164,6 +5178,36 @@ def analyze_BEEF_result(
                 f"try again."
             )
 
+    # ---- In-tool gates: run right after the deterministic provenance checks and
+    # BEFORE any output-file I/O (the ensemble reads / plot).
+    common_args = {
+        "slabFilePath": slabFilePath,
+        "adsorbateFilePath": adsorbateFilePath,
+        "systemFilePath": systemFilePath,
+    }
+    param_sources: Dict[str, Any] = {
+        "slabFilePath": slabFilePath_ref,
+        "adsorbateFilePath": adsorbateFilePath_ref,
+        "systemFilePath": systemFilePath_ref,
+    }
+    parent_result_ids = list({slabFilePath_ref, adsorbateFilePath_ref, systemFilePath_ref})
+    merged_reasons = _merge_context(context, reasons)
+    _desc = (
+        f"BEEF-vdW ensemble adsorption-energy analysis using {slabFilePath}, "
+        f"{adsorbateFilePath}, and {systemFilePath}.")
+    _pblock, _pmd = _param_gate(
+        "analyze_BEEF_result", common_args, merged_reasons, context, _desc,
+        param_sources=param_sources, parent_result_ids=parent_result_ids,
+        varied_parameters=[],
+    )
+    if _pblock:
+        return _pblock
+    _block, _md = _cross_param_gate(
+        "analyze_BEEF_result", common_args, merged_reasons, context, _desc)
+    if _block:
+        return _block
+    _md = {**_pmd, **_md}
+    
     # Read BEEF energies.
     slab_e = read_BEEF_output(PathList[0])
     if slab_e == "WrongCalc":
@@ -5211,36 +5255,6 @@ def analyze_BEEF_result(
     E_formation = system_e - slab_e - adsorbate_e
     E_formation_mean = E_formation.mean()
     E_formation_std = E_formation.std()
-
-    common_args = {
-        "slabFilePath": slabFilePath,
-        "adsorbateFilePath": adsorbateFilePath,
-        "systemFilePath": systemFilePath,
-    }
-    param_sources: Dict[str, Any] = {
-        "slabFilePath": slabFilePath_ref,
-        "adsorbateFilePath": adsorbateFilePath_ref,
-        "systemFilePath": systemFilePath_ref,
-    }
-    parent_result_ids = list({slabFilePath_ref, adsorbateFilePath_ref, systemFilePath_ref})
-
-    merged_reasons = _merge_context(context, reasons)
-
-    _desc = (
-        f"BEEF-vdW ensemble adsorption-energy analysis using {slabFilePath}, "
-        f"{adsorbateFilePath}, and {systemFilePath}.")
-    _pblock, _pmd = _param_gate(
-        "analyze_BEEF_result", common_args, merged_reasons, context, _desc,
-        param_sources=param_sources, parent_result_ids=parent_result_ids,
-        value=E_formation_mean, varied_parameters=[],
-    )
-    if _pblock:
-        return _pblock
-    _block, _md = _cross_param_gate(
-        "analyze_BEEF_result", common_args, merged_reasons, context, _desc)
-    if _block:
-        return _block
-    _md = {**_pmd, **_md}
 
     mean_id = CANVAS.register_tool_output(
         tool_name="analyze_BEEF_result",
