@@ -208,11 +208,15 @@ class wokerResponse(BaseModel):
     )
 
 class judgeResponse(BaseModel):
-    verdict: Literal["pass", "fail", "warning"] = Field(
-        description="the final verdict of the judge after careful and critical evaluation based on the information given. Should be pass, fail, or warning."
-    )
+    # Reasoning is declared FIRST so the model writes its full analysis BEFORE
+    # committing to a verdict (structured output fills fields in declaration order,
+    # so this makes the verdict conditioned on the reasoning the model just wrote —
+    # the same reason tools take `reasons` before the parameters).
     reasoning: str = Field(
-        description="the reasoning behind the verdict. Please be specific and detailed in your reasoning, with references that support your verdict and your reasoning."
+        description="Your detailed, step-by-step reasoning. Work through the evidence FIRST — the rule, the parameter value and its provenance, and the study context — citing specifics that support your conclusion. Reason to your conclusion here BEFORE stating the verdict."
+    )
+    verdict: Literal["pass", "fail", "warning"] = Field(
+        description="The FINAL verdict, decided AFTER the reasoning above. Must be pass, fail, or warning."
     )
     
 class ExecutedRecord(BaseModel):
@@ -1152,10 +1156,14 @@ class judge():
         # sonnet-5). Build those without temperature; older models keep
         # temperature=0.0 for deterministic judging.
         _model = config['ANTHROPIC_MODEL']
-        if 'opus' in _model or 'sonnet-5' in _model:
-            self.llm = ChatAnthropic(model=_model, api_key=config['ANTHROPIC_API_KEY']).with_structured_output(judgeResponse, include_raw=True)
+        # max_tokens must be generous: reasoning is emitted BEFORE the verdict
+        # (reason-first schema), so a small budget can truncate the response
+        # before the verdict field is produced -> missing required field ->
+        # parse failure. 8192 leaves ample room for detailed reasoning + verdict.
+        if 'opus' in _model or 'sonnet-5' in _model or 'fable' in _model:
+            self.llm = ChatAnthropic(model=_model, api_key=config['ANTHROPIC_API_KEY'], max_tokens=8192).with_structured_output(judgeResponse, include_raw=True)
         else:
-            self.llm = ChatAnthropic(model=_model, api_key=config['ANTHROPIC_API_KEY'],temperature=0.0).with_structured_output(judgeResponse, include_raw=True)
+            self.llm = ChatAnthropic(model=_model, api_key=config['ANTHROPIC_API_KEY'], temperature=0.0, max_tokens=8192).with_structured_output(judgeResponse, include_raw=True)
     
     def invoke(self, input):
         with open(f"{var.my_WORKING_DIRECTORY}/judge_status.txt", "r") as f:
@@ -1209,8 +1217,13 @@ class judge():
                 break
         else:
             print(agent_response)
-            print("Judge Agent failed to give a valid response after 3 attempts. Exiting.")
-            exit()
+            print("Judge Agent failed to give a valid response after 3 attempts.")
+            # Raise (instead of exit()) so a single unparseable response is a
+            # recoverable error the caller can handle — a run/harness records it
+            # and moves on rather than the whole process dying.
+            raise RuntimeError(
+                "Judge failed to return a valid {verdict, reasoning} after 3 attempts"
+            )
 
         outStr = f"Judge's verdict: {agent_response['verdict']}\nJudge's reasoning: {agent_response['reasoning']}\nJudge's token usage: input_tokens: {token_usage.get('input_tokens')}, output_tokens: {token_usage.get('output_tokens')}"
         print(outStr)

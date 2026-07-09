@@ -7,7 +7,7 @@ from networkx import predecessor
 import pandas as pd
 from src.utils import *
 from src.myCANVAS import CANVAS, ListedArtifact
-from src.safety_guard import guard_math_expression, guard_extraction
+from src.safety_guard import guard_math_expression, guard_extraction, guard_cross_parameters, guard_parameterization
 from ase import Atoms, Atom
 from pydantic import StrictStr, StrictFloat, BaseModel, Field
 from langchain.tools import tool
@@ -108,6 +108,67 @@ def _merge_context(context: str, reasons: Any) -> Dict[str, str]:
     return {"reasons": f"{prefix}\n\nRationale: {reasons}"}
 
 
+def _cross_param_gate(tool_name, args, merged_reasons, context, description):
+    """On-site cross-parameter consistency gate, run right before an artifact is
+    registered by one of the CROSS_PARAM_TOOLS. Mirrors the guard_math_expression
+    consumption pattern. Returns (block_message_or_None, metadata_dict):
+      - fail    -> (message, {}): the caller must RETURN the message WITHOUT
+                   registering (hard block; the on-site value checks already
+                   passed, so this rejects a scientifically-inconsistent set).
+      - warning -> (None, {stamp}): register, but stamp the warning in metadata.
+      - pass    -> (None, {}): register normally.
+    Fails OPEN (pass) inside guard_cross_parameters if the judge is unavailable."""
+    _cpv, _cpr = guard_cross_parameters(
+        tool_name=tool_name, args=args, reasons=merged_reasons,
+        context=context, description=description,
+    )
+    if _cpv == "fail":
+        return (
+            f"{tool_name.upper()}_CROSS_PARAM_FAILED: the cross-parameter "
+            f"consistency check rejected this call. Reason: {_cpr}\n"
+            f"The result was NOT registered. Fix the flagged inconsistency (e.g. "
+            f"mutually inconsistent inputs, a wrong reference/baseline, or too few "
+            f"points) and call the tool again with corrected parameters/rationale."
+        ), {}
+    md = {}
+    if _cpv == "warning":
+        md = {"cross_param_verdict": "warning", "cross_param_reasoning": _cpr}
+    return None, md
+
+
+def _param_gate(tool_name, args, merged_reasons, context, description,
+                param_sources=None, parent_result_ids=None, value=None,
+                varied_parameters=None):
+    """On-site PER-PARAMETER gate (Phase 3), run right before an artifact is
+    registered — AFTER the tool's deterministic value checks and BEFORE
+    `_cross_param_gate` (sequence: value-check -> per-param -> cross-param ->
+    register; proceed iff all pass). Mirrors `_cross_param_gate`'s contract:
+      - fail    -> (message, {}): the caller must RETURN the message WITHOUT
+                   registering (hard block — STRICT: any per-param fail blocks).
+      - warning -> (None, {stamp}): register, but stamp the warning in metadata.
+      - pass    -> (None, {}): register normally.
+    Fails OPEN (pass) inside guard_parameterization if the judge is unavailable."""
+    _pv, _pr = guard_parameterization(
+        tool_name=tool_name, args=args, value=value, reasons=merged_reasons,
+        param_sources=param_sources, parent_result_ids=parent_result_ids,
+        description=description, context=context,
+        varied_parameters=varied_parameters,
+    )
+    if _pv == "fail":
+        return (
+            f"{tool_name.upper()}_PARAM_GATE_FAILED: the per-parameter check "
+            f"rejected this call. Reason: {_pr}\n"
+            f"The result was NOT registered. Fix the flagged parameter(s) (e.g. a "
+            f"wrong/missing provenance source, a value inconsistent with its "
+            f"source, or a non-situated 'standard value' rationale) and call the "
+            f"tool again with corrected parameters/rationale."
+        ), {}
+    md = {}
+    if _pv == "warning":
+        md = {"param_verdict": "warning", "param_reasoning": _pr}
+    return None, md
+
+
 _ALLOWED_FUNCS = {
     "abs": abs, "round": round, "min": min, "max": max, "sum": sum,
     "pow": pow, "sqrt": math.sqrt, "exp": math.exp, "log": math.log,
@@ -170,10 +231,13 @@ def math_expression_tool(
     ],
     context: Annotated[
         str,
-        "1-2 sentence describing which study or exploration this tool call "
-        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
-        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'), and the reason why you call this tool."
+        "1-2 sentences describing which study or exploration this tool call "
+        "is part of, and the reason for the call. You MUST state EXPLICITLY "
+        "whether this is a 'production run' (its output feeds a reported final "
+        "result) or a 'sub-study / exploration' (e.g. 'convergence test for "
+        "ecutwfc', 'sensitivity sweep over n_fixed_layers', 'one-off check'). "
+        "This production-vs-sub-study declaration is taken at face value by the "
+        "reviewer and sets the provenance requirements, so state it accurately."
     ],
 ) -> str:
     """
@@ -1149,10 +1213,13 @@ def extract_numeric_from_tool_output(
     ],
     context: Annotated[
         str,
-        "1-2 sentence describing which study or exploration this tool call "
-        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
-        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'), and the reason why you call this tool."
+        "1-2 sentences describing which study or exploration this tool call "
+        "is part of, and the reason for the call. You MUST state EXPLICITLY "
+        "whether this is a 'production run' (its output feeds a reported final "
+        "result) or a 'sub-study / exploration' (e.g. 'convergence test for "
+        "ecutwfc', 'sensitivity sweep over n_fixed_layers', 'one-off check'). "
+        "This production-vs-sub-study declaration is taken at face value by the "
+        "reviewer and sets the provenance requirements, so state it accurately."
     ],
 ):
     """
@@ -1313,10 +1380,13 @@ def extract_text_from_tool_output(
     ],
     context: Annotated[
         str,
-        "1-2 sentence describing which study or exploration this tool call "
-        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
-        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'), and the reason why you call this tool."
+        "1-2 sentences describing which study or exploration this tool call "
+        "is part of, and the reason for the call. You MUST state EXPLICITLY "
+        "whether this is a 'production run' (its output feeds a reported final "
+        "result) or a 'sub-study / exploration' (e.g. 'convergence test for "
+        "ecutwfc', 'sensitivity sweep over n_fixed_layers', 'one-off check'). "
+        "This production-vs-sub-study declaration is taken at face value by the "
+        "reviewer and sets the provenance requirements, so state it accurately."
     ],
 ):
     """
@@ -1533,10 +1603,13 @@ def inspect_ase_atoms(
     ],
     context: Annotated[
         str,
-        "1-2 sentence describing which study or exploration this tool call "
-        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
-        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'), and the reason why you call this tool."
+        "1-2 sentences describing which study or exploration this tool call "
+        "is part of, and the reason for the call. You MUST state EXPLICITLY "
+        "whether this is a 'production run' (its output feeds a reported final "
+        "result) or a 'sub-study / exploration' (e.g. 'convergence test for "
+        "ecutwfc', 'sensitivity sweep over n_fixed_layers', 'one-off check'). "
+        "This production-vs-sub-study declaration is taken at face value by the "
+        "reviewer and sets the provenance requirements, so state it accurately."
     ],
 ) -> str:
     """
@@ -1660,10 +1733,13 @@ def get_ase_atoms_property(
     ],
     context: Annotated[
         str,
-        "1-2 sentence describing which study or exploration this tool call "
-        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
-        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'), and the reason why you call this tool."
+        "1-2 sentences describing which study or exploration this tool call "
+        "is part of, and the reason for the call. You MUST state EXPLICITLY "
+        "whether this is a 'production run' (its output feeds a reported final "
+        "result) or a 'sub-study / exploration' (e.g. 'convergence test for "
+        "ecutwfc', 'sensitivity sweep over n_fixed_layers', 'one-off check'). "
+        "This production-vs-sub-study declaration is taken at face value by the "
+        "reviewer and sets the provenance requirements, so state it accurately."
     ],
 ) -> str:
     """
@@ -1783,10 +1859,13 @@ def init_structure_data_for_none_adsorption_calculations(
     a: Annotated[float, "Lattice constant"],
     context: Annotated[
         str,
-        "1-2 sentence describing which study or exploration this tool call "
-        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
-        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'), and the reason why you call this tool."
+        "1-2 sentences describing which study or exploration this tool call "
+        "is part of, and the reason for the call. You MUST state EXPLICITLY "
+        "whether this is a 'production run' (its output feeds a reported final "
+        "result) or a 'sub-study / exploration' (e.g. 'convergence test for "
+        "ecutwfc', 'sensitivity sweep over n_fixed_layers', 'one-off check'). "
+        "This production-vs-sub-study declaration is taken at face value by the "
+        "reviewer and sets the provenance requirements, so state it accurately."
     ],
     b: Annotated[float, "Lattice constant. If only a and b is given, b will be interpreted as c instead."] = None,
     c: Annotated[float, "Lattice constant"] = None,
@@ -1802,21 +1881,29 @@ def init_structure_data_for_none_adsorption_calculations(
     saveDir = os.path.join(WORKING_DIRECTORY, f"{element}-{lattice}.xyz")
     write(saveDir, atoms)
     merged_reasons = _merge_context(context, reasons)
+    _args = {
+        "element": element,
+        "lattice": lattice,
+        "a": a,
+        "b": b,
+        "c": c,
+    }
+    _desc = "Path of the saved initial structure data file."
+    _pblock, _pmd = _param_gate(
+        "init_structure_data", _args, merged_reasons, context, _desc,
+        value=f"{element}-{lattice}.xyz", varied_parameters=[],
+    )
+    if _pblock:
+        return _pblock
     result_id = CANVAS.register_tool_output(
         tool_name="init_structure_data",
-        args={
-            "element": element,
-            "lattice": lattice,
-            "a": a,
-            "b": b,
-            "c": c,
-        },
+        args=_args,
         value=f"{element}-{lattice}.xyz",
-        description="Path of the saved initial structure data file.",
+        description=_desc,
         context=context,
         reasons=merged_reasons,
         parent_result_ids=[],
-        metadata={},
+        metadata=_pmd,
     )
 
     return f"Created atoms saved in the working directory with name '{element}-{lattice}.xyz' Directory info registered with ID={result_id}"
@@ -1856,10 +1943,13 @@ def generateSurface_and_getPossibleSite(
     vacuum_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of vacuum size value was generated. Accepts either an 8-char id (referencing a past tool output) or `<8-char-id>.<param_name>` (referencing a specific input parameter of a past tool call — useful when this value should match a value used as input to an earlier call; call `list_referenceable_inputs` to see available param names). If not provided (left empty), you can only play around and see the effect of input parameter settings to output result of this tool, but you cannot use the output directly to calculate the final result."],
     context: Annotated[
         str,
-        "1-2 sentence describing which study or exploration this tool call "
-        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
-        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'), and the reason why you call this tool."
+        "1-2 sentences describing which study or exploration this tool call "
+        "is part of, and the reason for the call. You MUST state EXPLICITLY "
+        "whether this is a 'production run' (its output feeds a reported final "
+        "result) or a 'sub-study / exploration' (e.g. 'convergence test for "
+        "ecutwfc', 'sensitivity sweep over n_fixed_layers', 'one-off check'). "
+        "This production-vs-sub-study declaration is taken at face value by the "
+        "reviewer and sets the provenance requirements, so state it accurately."
     ],
 ):
     """Generate the clean slab structure and get the available adsorption sites. 
@@ -1938,6 +2028,20 @@ def generateSurface_and_getPossibleSite(
 
     merged_reasons = _merge_context(context, reasons)
 
+    # Per-parameter gate — run ONCE before the per-site registrations (args are
+    # constant across the loop); sequence: value-check -> per-param -> register.
+    _desc = (
+        f"Clean {species}{facets} slab surface and its possible adsorption sites "
+        f"(vacuum={vacuum}, supercell_dim_z={supercell_dim_z}, "
+        f"n_fixed_layers={n_fixed_layers}).")
+    _pblock, _pmd = _param_gate(
+        "generateSurface_and_getPossibleSite", common_args, merged_reasons,
+        context, _desc, param_sources=param_sources,
+        parent_result_ids=parent_result_ids, varied_parameters=[],
+    )
+    if _pblock:
+        return _pblock
+
     ids = {}
     for k, v in mySites.items():
         ids[k] = CANVAS.register_tool_output(
@@ -1949,7 +2053,7 @@ def generateSurface_and_getPossibleSite(
         reasons=merged_reasons,
             parent_result_ids=parent_result_ids,
             parent_result_ids_w_args=param_sources,
-            metadata={},
+            metadata=_pmd,
         )
         mySites[k] = [list(v), f"ID={ids[k]}"]
 
@@ -1969,7 +2073,7 @@ def generateSurface_and_getPossibleSite(
         reasons=merged_reasons,
         parent_result_ids=parent_result_ids,
         parent_result_ids_w_args=param_sources,
-        metadata={},
+        metadata=_pmd,
     )
     # if supercell_dim_z_ref != "" and n_fixed_layers_ref != "" and vacuum_ref != "":
     return f"the surface generated is saved at surface/{surfaceFilename}, Path_ID={path_id}\navailable adsorbate sites are: {repr(mySites)}"
@@ -2000,10 +2104,13 @@ def generate_myAdsorbate(
     vaccum: Annotated[float, "Vacuum size in Angstrom around the adsorbate structure. Typically 10.0 Angstrom should be sufficient"],
     context: Annotated[
         str,
-        "1-2 sentence describing which study or exploration this tool call "
-        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
-        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'), and the reason why you call this tool."
+        "1-2 sentences describing which study or exploration this tool call "
+        "is part of, and the reason for the call. You MUST state EXPLICITLY "
+        "whether this is a 'production run' (its output feeds a reported final "
+        "result) or a 'sub-study / exploration' (e.g. 'convergence test for "
+        "ecutwfc', 'sensitivity sweep over n_fixed_layers', 'one-off check'). "
+        "This production-vs-sub-study declaration is taken at face value by the "
+        "reviewer and sets the provenance requirements, so state it accurately."
     ],
 ):
     """Generate an adsorbate structure and save it.
@@ -2018,20 +2125,28 @@ def generate_myAdsorbate(
     tmpAtoms.center(vacuum=vaccum)
     write(os.path.join(WORKING_DIRECTORY, "adsorbates", f"{AdsorbateFileName}"), tmpAtoms)
     merged_reasons = _merge_context(context, reasons)
+    _args = {
+        "symbols": symbols,
+        "positions": positions,
+        "AdsorbateFileName": AdsorbateFileName,
+        "vaccum": vaccum,
+    }
+    _desc = "Path of the saved adsorbate structure file in traj format."
+    _pblock, _pmd = _param_gate(
+        "generate_myAdsorbate", _args, merged_reasons, context, _desc,
+        value=f"adsorbates/{AdsorbateFileName}", varied_parameters=[],
+    )
+    if _pblock:
+        return _pblock
     id = CANVAS.register_tool_output(
         tool_name="generate_myAdsorbate",
-        args={
-            "symbols": symbols,
-            "positions": positions,
-            "AdsorbateFileName": AdsorbateFileName,
-            "vaccum": vaccum,
-        },
+        args=_args,
         value=f"adsorbates/{AdsorbateFileName}",
-        description="Path of the saved adsorbate structure file in traj format.",
+        description=_desc,
         context=context,
         reasons=merged_reasons,
         parent_result_ids=[],
-        metadata={},
+        metadata=_pmd,
     )
     return f"Adsorbate saved under working directory at adsorbates/{AdsorbateFileName}. Path_ID={id}"
 
@@ -2063,10 +2178,13 @@ def add_myAdsorbate(
     surfaceWithAdsorbateFileName: Annotated[str, "filename (not a path) of the surface adsorbated with adsorbate to be saved as surface/<filename>.traj format"],
     context: Annotated[
         str,
-        "1-2 sentence describing which study or exploration this tool call "
-        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
-        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'), and the reason why you call this tool."
+        "1-2 sentences describing which study or exploration this tool call "
+        "is part of, and the reason for the call. You MUST state EXPLICITLY "
+        "whether this is a 'production run' (its output feeds a reported final "
+        "result) or a 'sub-study / exploration' (e.g. 'convergence test for "
+        "ecutwfc', 'sensitivity sweep over n_fixed_layers', 'one-off check'). "
+        "This production-vs-sub-study declaration is taken at face value by the "
+        "reviewer and sets the provenance requirements, so state it accurately."
     ],
     mySites_ref: Annotated[str, "source_result_id for mySites. Accepts an 8-char id to reference the output, or `<8-char-id>.<param_name>` to reference an input parameter of a past tool call (see `list_referenceable_inputs`)."],
 ):
@@ -2130,22 +2248,31 @@ def add_myAdsorbate(
 
     outStr = f"Surface with adsorbate saved at {relaPath}."
     merged_reasons = _merge_context(context, reasons)
+    _args = {
+        "mySurfacePath": mySurfacePath,
+        "adsorbatePath": adsorbatePath,
+        "mySites": mySites,
+        "rotations": rotations,
+        "surfaceWithAdsorbateFileName": surfaceWithAdsorbateFileName,
+    }
+    _desc = "Path of the saved surface with adsorbate structure file in traj format."
+    _pblock, _pmd = _param_gate(
+        "add_myAdsorbate", _args, merged_reasons, context, _desc,
+        param_sources=param_sources, parent_result_ids=parent_result_ids,
+        value=relaPath, varied_parameters=[],
+    )
+    if _pblock:
+        return _pblock
     id = CANVAS.register_tool_output(
         tool_name="add_myAdsorbate",
-        args={
-            "mySurfacePath": mySurfacePath,
-            "adsorbatePath": adsorbatePath,
-            "mySites": mySites,
-            "rotations": rotations,
-            "surfaceWithAdsorbateFileName": surfaceWithAdsorbateFileName,
-        },
+        args=_args,
         value=relaPath,
-        description="Path of the saved surface with adsorbate structure file in traj format.",
+        description=_desc,
         context=context,
         reasons=merged_reasons,
         parent_result_ids=parent_result_ids,
         parent_result_ids_w_args=param_sources,
-        metadata={},
+        metadata=_pmd,
     )
     # if mySites_ref != "":
     outStr += f" Path_ID={id}"
@@ -2209,10 +2336,13 @@ def write_QE_script_w_ASE(
         "If left empty the output is exploratory only and cannot feed a final result."],
     context: Annotated[
         str,
-        "1-2 sentence describing which study or exploration this tool call "
-        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
-        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'), and the reason why you call this tool."
+        "1-2 sentences describing which study or exploration this tool call "
+        "is part of, and the reason for the call. You MUST state EXPLICITLY "
+        "whether this is a 'production run' (its output feeds a reported final "
+        "result) or a 'sub-study / exploration' (e.g. 'convergence test for "
+        "ecutwfc', 'sensitivity sweep over n_fixed_layers', 'one-off check'). "
+        "This production-vs-sub-study declaration is taken at face value by the "
+        "reviewer and sets the provenance requirements, so state it accurately."
     ],
     ready_to_run_job: Annotated[bool, "True if the job is intended to be run directly without further modification, False if this file is intended to be used to generate other files"] = False,
     additional_input: Annotated[Dict[str, Any], "Additional input parameters to be added to the input script. Should be in the format of a flat dict, {'input_parameter_1': parameter_1, 'input_parameter_2': parameter_2, ...}, parameter_x remain in their native type, str, float, bool, etc. Do not use unless you know what you are doing."] = {},
@@ -2332,37 +2462,51 @@ def write_QE_script_w_ASE(
 
     merged_reasons = _merge_context(context, reasons)
 
+    _args = {
+        "listofElements": listofElements,
+        "ppfiles": ppfiles,
+        "filename": filename,
+        "inputAtomsDir": tmpinputAtomsDir,
+        "ensembleCalculation": ensembleCalculation,
+        "calculation": calculation,
+        "restart_mode": restart_mode,
+        "prefix": prefix,
+        "disk_io": disk_io,
+        "ibrav": ibrav,
+        "ecutwfc": ecutwfc,
+        "ecutrho": ecutrho,
+        "kspacing": kspacing,
+        "occupations": occupations,
+        "smearing": smearing,
+        "degauss": degauss,
+        "conv_thr": conv_thr,
+        "electron_maxstep": electron_maxstep,
+        "input_dft": input_dft,
+        "additional_input": additional_input,
+    }
+    _desc = "Path of the saved Quantum Espresso input script."
+    # A template (ready_to_run_job=False) carries placeholder DFT knobs that a
+    # downstream convergence sweep will vary, so route those to the sweep-point
+    # (R2) rule instead of demanding upstream provenance (R1).
+    _varied = [] if ready_to_run_job else ["ecutwfc", "kspacing"]
+    _pblock, _pmd = _param_gate(
+        "write_QE_script_w_ASE", _args, merged_reasons, context, _desc,
+        param_sources=param_sources, parent_result_ids=parent_result_ids,
+        value=filename, varied_parameters=_varied,
+    )
+    if _pblock:
+        return _pblock
+
     id = CANVAS.register_tool_output(
         tool_name="write_QE_script_w_ASE",
-        args={
-            "listofElements": listofElements,
-            "ppfiles": ppfiles,
-            "filename": filename,
-            "inputAtomsDir": tmpinputAtomsDir,
-            "ensembleCalculation": ensembleCalculation,
-            "calculation": calculation,
-            "restart_mode": restart_mode,
-            "prefix": prefix,
-            "disk_io": disk_io,
-            "ibrav": ibrav,
-            "ecutwfc": ecutwfc,
-            "ecutrho": ecutrho,
-            "kspacing": kspacing,
-            "occupations": occupations,
-            "smearing": smearing,
-            "degauss": degauss,
-            "conv_thr": conv_thr,
-            "electron_maxstep": electron_maxstep,
-            "input_dft": input_dft,
-            "additional_input": additional_input,
-        },
+        args=_args,
         value=filename,
-        description="Path of the saved Quantum Espresso input script.",
+        description=_desc,
         context=context,
         reasons=merged_reasons,
         parent_result_ids=parent_result_ids,
         parent_result_ids_w_args=param_sources,
-        metadata={},
+        metadata=_pmd,
     )
 
     if not ready_to_run_job:
@@ -2852,10 +2996,13 @@ def generate_convergence_test(
     input_file_name_ref: Annotated[str, "The source_result_id of the previous tool output where this input_file_name value was generated. Accepts an 8-char id, or `<8-char-id>.<param_name>` to reference an input parameter of a past tool call (see `list_referenceable_inputs`)."],
     context: Annotated[
         str,
-        "1-2 sentence describing which study or exploration this tool call "
-        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
-        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'), and the reason why you call this tool."
+        "1-2 sentences describing which study or exploration this tool call "
+        "is part of, and the reason for the call. You MUST state EXPLICITLY "
+        "whether this is a 'production run' (its output feeds a reported final "
+        "result) or a 'sub-study / exploration' (e.g. 'convergence test for "
+        "ecutwfc', 'sensitivity sweep over n_fixed_layers', 'one-off check'). "
+        "This production-vs-sub-study declaration is taken at face value by the "
+        "reviewer and sets the provenance requirements, so state it accurately."
     ],
 ):
     '''
@@ -3089,6 +3236,26 @@ def generate_convergence_test(
 
     merged_reasons = _merge_context(context, reasons)
 
+    # Per-parameter gate — run ONCE before the per-job loop (registered args are
+    # constant across it). Sensitive param is the template `input_file_name`,
+    # sourced from input_file_name_ref.
+    _args = {
+        "input_file_name": input_file_name,
+        "varying_parameter_name": varying_parameter_name,
+        "varying_parameter_values": striped_varying_parameter_values,
+    }
+    _desc = (
+        f"Convergence test jobs generated from template {input_file_name}, "
+        f"varying {varying_parameter_name}.")
+    _pblock, _pmd = _param_gate(
+        "generate_convergence_test", _args, merged_reasons, context, _desc,
+        param_sources={"input_file_name": input_file_name_ref},
+        parent_result_ids=[input_file_name_ref],
+        varied_parameters=[varying_parameter_name],
+    )
+    if _pblock:
+        return _pblock
+
     job_list_dict = CANVAS.canvas.get('jobs_K_and_ecut', {})
     job_list = []
     prefix = input_file_name.split('.')[0]
@@ -3213,7 +3380,7 @@ def generate_convergence_test(
         reasons=merged_reasons,
             parent_result_ids=this_parent_ids,
             parent_result_ids_w_args=this_param_sources,
-            metadata={},
+            metadata=_pmd,
         )
 
     job_list = list(set(job_list))
@@ -3589,10 +3756,13 @@ def generate_eos_test(
     stepSize: Annotated[float, "Step size for scaling the cell size. The cell will be scaled from (1-2*stepSize) to (1+2*stepSize). Typically 0.025 should be good."],
     context: Annotated[
         str,
-        "1-2 sentence describing which study or exploration this tool call "
-        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
-        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'), and the reason why you call this tool."
+        "1-2 sentences describing which study or exploration this tool call "
+        "is part of, and the reason for the call. You MUST state EXPLICITLY "
+        "whether this is a 'production run' (its output feeds a reported final "
+        "result) or a 'sub-study / exploration' (e.g. 'convergence test for "
+        "ecutwfc', 'sensitivity sweep over n_fixed_layers', 'one-off check'). "
+        "This production-vs-sub-study declaration is taken at face value by the "
+        "reviewer and sets the provenance requirements, so state it accurately."
     ],
     input_file_name_ref: Annotated[str, "The source_result_id of the previous tool output where the name of the template quantum espresso input file was generated. Accepts an 8-char id to reference the output, or `<8-char-id>.<param_name>` to reference an input parameter of a past tool call (see `list_referenceable_inputs`)."],
     # kspacing_ref: Annotated[str, "Optional source_result_id of the previous tool output where this choice of kspacing value was generated. If not provided, you can only play around and see the effect of input parameter settings to output result of this tool, but you cannot use the output directly to calculate the final result"] = "",
@@ -3720,6 +3890,20 @@ def generate_eos_test(
 
     merged_reasons = _merge_context(context, reasons)
 
+    # Per-parameter gate — run ONCE before the per-job loop (registered args are
+    # constant across it).
+    _args = {"input_file_name": input_file_name, "stepSize": stepSize}
+    _desc = (
+        f"EOS test jobs generated from template {input_file_name} "
+        f"(stepSize={stepSize}).")
+    _pblock, _pmd = _param_gate(
+        "generate_eos_test", _args, merged_reasons, context, _desc,
+        param_sources=param_sources, parent_result_ids=parent_result_ids,
+        varied_parameters=[],
+    )
+    if _pblock:
+        return _pblock
+
     id_dict = {}
     for job in job_list:
         id_dict[job] = CANVAS.register_tool_output(
@@ -3737,7 +3921,7 @@ def generate_eos_test(
         reasons=merged_reasons,
             parent_result_ids=parent_result_ids,
             parent_result_ids_w_args=param_sources,
-            metadata={},
+            metadata=_pmd,
         )
 
     job_list_dict_for_canvas = {job_name: id_dict[job_name] for job_name in job_list}
@@ -3966,10 +4150,13 @@ def find_optimal_parameter(
     ],
     context: Annotated[
         str,
-        "1-2 sentence describing which study or exploration this tool call "
-        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
-        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'), and the reason why you call this tool."
+        "1-2 sentences describing which study or exploration this tool call "
+        "is part of, and the reason for the call. You MUST state EXPLICITLY "
+        "whether this is a 'production run' (its output feeds a reported final "
+        "result) or a 'sub-study / exploration' (e.g. 'convergence test for "
+        "ecutwfc', 'sensitivity sweep over n_fixed_layers', 'one-off check'). "
+        "This production-vs-sub-study declaration is taken at face value by the "
+        "reviewer and sets the provenance requirements, so state it accurately."
     ],
 ) -> Dict[str, Any]:
     """
@@ -4102,23 +4289,37 @@ def find_optimal_parameter(
 
     merged_reasons = _merge_context(context, reasons)
 
+    _args = {
+        "sweeping_parameter": sweeping_parameter,
+        "filename": bare_filenames,
+        "parameters": bare_parameters,
+        "reference_file": reference_file,
+        "threshold": threshold,
+        "comparison_mode": comparison_mode,
+    }
+    _desc = f"The most optimal parameter value for production run based on the reference file {reference_file} (**MUST BE INCLUDED IN THE LIST**) and the threshold {threshold} ({comparison_mode} comparison). The chosen parameter value is {chosen[1]} with file name {chosen[0]}. It is totally okay for agent to use filenames ending with .pwi since, in that case, the tool automatically append .pwo to the all filenames to read the output files."
+    _pblock, _pmd = _param_gate(
+        "find_optimal_parameter", _args, merged_reasons, context, _desc,
+        param_sources=param_sources, parent_result_ids=parent_result_ids,
+        value=chosen[1], varied_parameters=[sweeping_parameter],
+    )
+    if _pblock:
+        return _pblock
+    _block, _md = _cross_param_gate("find_optimal_parameter", _args, merged_reasons, context, _desc)
+    if _block:
+        return _block
+    _md = {**_pmd, **_md}
+
     id = CANVAS.register_tool_output(
         tool_name="find_optimal_parameter",
-        args={
-            "sweeping_parameter": sweeping_parameter,
-            "filename": bare_filenames,
-            "parameters": bare_parameters,
-            "reference_file": reference_file,
-            "threshold": threshold,
-            "comparison_mode": comparison_mode,
-        },
+        args=_args,
         value=chosen[1],
-        description=f"The most optimal parameter value for production run based on the reference file {reference_file} (**MUST BE INCLUDED IN THE LIST**) and the threshold {threshold} ({comparison_mode} comparison). The chosen parameter value is {chosen[1]} with file name {chosen[0]}. It is totally okay for agent to use filenames ending with .pwi since, in that case, the tool automatically append .pwo to the all filenames to read the output files.",
+        description=_desc,
         context=context,
         reasons=merged_reasons,
         parent_result_ids=parent_result_ids,
         parent_result_ids_w_args=param_sources,
-        metadata={},
+        metadata=_md,
     )
 
     return f"Please choose {sweeping_parameter}={chosen[1]}. result_ID={id}."
@@ -4228,11 +4429,17 @@ def find_optimal_parameter_from_derived(
         List[Tuple[float, str]],
         "List of (quantity_value, quantity_ref) pairs — one per data "
         "point in the sweep. Each `quantity_value` is the converging "
-        "derived quantity (e.g. an adsorption energy in eV from a "
-        "`calculate_formation_E` call, a lattice constant from "
-        "`calculate_lc`, etc.); each `quantity_ref` is the "
-        "source_result_id of the tool call that produced that quantity. "
-        "Aligned by index with `axis_values_w_refs`.",
+        "derived quantity. The producing tool is NOT restricted to a fixed "
+        "list — any tool that produces a genuine derived quantity is "
+        "acceptable. For example, an adsorption energy in eV may come from a "
+        "`calculate_formation_E` call OR from a `math_expression_tool` call "
+        "that combines real registered slab / adsorbate / combined-system "
+        "energies (both are equally valid); a lattice constant may come from "
+        "`calculate_lc`; etc. These tool names are ILLUSTRATIVE examples, not "
+        "a whitelist — do not reject a data point solely because it came from "
+        "a different (but appropriate) derived-quantity tool. Each "
+        "`quantity_ref` is the source_result_id of the tool call that produced "
+        "that quantity. Aligned by index with `axis_values_w_refs`.",
     ],
     axis_values_w_refs: Annotated[
         List[Tuple[float, str]],
@@ -4267,10 +4474,13 @@ def find_optimal_parameter_from_derived(
     ],
     context: Annotated[
         str,
-        "1-2 sentence describing which study or exploration this tool call "
-        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
-        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'), and the reason why you call this tool."
+        "1-2 sentences describing which study or exploration this tool call "
+        "is part of, and the reason for the call. You MUST state EXPLICITLY "
+        "whether this is a 'production run' (its output feeds a reported final "
+        "result) or a 'sub-study / exploration' (e.g. 'convergence test for "
+        "ecutwfc', 'sensitivity sweep over n_fixed_layers', 'one-off check'). "
+        "This production-vs-sub-study declaration is taken at face value by the "
+        "reviewer and sets the provenance requirements, so state it accurately."
     ],
 ):
     """
@@ -4521,22 +4731,37 @@ def find_optimal_parameter_from_derived(
 
     merged_reasons = _merge_context(context, reasons)
 
+    _args = {
+        "sweeping_parameter": sweeping_parameter,
+        "data_points": quantities,
+        "axis_values": axis_values,
+        "reference_ref": bare_quantity_refs[reference_index],
+        "threshold": threshold,
+    }
+    _pblock, _pmd = _param_gate(
+        "find_optimal_parameter_from_derived", _args, merged_reasons, context,
+        description, param_sources=param_sources,
+        parent_result_ids=parent_result_ids, value=chosen_axis_value,
+        varied_parameters=[sweeping_parameter],
+    )
+    if _pblock:
+        return _pblock
+    _block, _md = _cross_param_gate("find_optimal_parameter_from_derived", _args,
+                                    merged_reasons, context, description)
+    if _block:
+        return _block
+    _md = {**_pmd, **_md}
+
     new_id = CANVAS.register_tool_output(
         tool_name="find_optimal_parameter_from_derived",
-        args={
-            "sweeping_parameter": sweeping_parameter,
-            "data_points": quantities,
-            "axis_values": axis_values,
-            "reference_ref": bare_quantity_refs[reference_index],
-            "threshold": threshold,
-        },
+        args=_args,
         value=chosen_axis_value,
         description=description,
         context=context,
         reasons=merged_reasons,
         parent_result_ids=parent_result_ids,
         parent_result_ids_w_args=param_sources,
-        metadata={},
+        metadata=_md,
     )
 
     return (
@@ -4589,10 +4814,13 @@ def calculate_formation_E(
     ],
     context: Annotated[
         str,
-        "1-2 sentence describing which study or exploration this tool call "
-        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
-        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'), and the reason why you call this tool."
+        "1-2 sentences describing which study or exploration this tool call "
+        "is part of, and the reason for the call. You MUST state EXPLICITLY "
+        "whether this is a 'production run' (its output feeds a reported final "
+        "result) or a 'sub-study / exploration' (e.g. 'convergence test for "
+        "ecutwfc', 'sensitivity sweep over n_fixed_layers', 'one-off check'). "
+        "This production-vs-sub-study declaration is taken at face value by the "
+        "reviewer and sets the provenance requirements, so state it accurately."
     ],
 ):
     """Using the energies of the slab, adsorbate, and slab-with-adsorbate,
@@ -4661,24 +4889,38 @@ def calculate_formation_E(
 
     merged_reasons = _merge_context(context, reasons)
 
+    _args = {
+        "slabFilePath": slabFilePath,
+        "adsorbateFilePath": adsorbateFilePath,
+        "systemFilePath": systemFilePath,
+    }
+    _desc = (
+        f"The formation energy of the adsorbate on the slab calculated "
+        f"using {slabFilePath}, {adsorbateFilePath}, and {systemFilePath}"
+        f"The tool automatically append .pwo to the all filenames to read the output files."
+    )
+    _pblock, _pmd = _param_gate(
+        "calculate_formation_E", _args, merged_reasons, context, _desc,
+        param_sources=param_sources, parent_result_ids=parent_result_ids,
+        value=formationEnergy, varied_parameters=[],
+    )
+    if _pblock:
+        return _pblock
+    _block, _md = _cross_param_gate("calculate_formation_E", _args, merged_reasons, context, _desc)
+    if _block:
+        return _block
+    _md = {**_pmd, **_md}
+
     id = CANVAS.register_tool_output(
         tool_name="calculate_formation_E",
-        args={
-            "slabFilePath": slabFilePath,
-            "adsorbateFilePath": adsorbateFilePath,
-            "systemFilePath": systemFilePath,
-        },
+        args=_args,
         value=formationEnergy,
-        description=(
-            f"The formation energy of the adsorbate on the slab calculated "
-            f"using {slabFilePath}, {adsorbateFilePath}, and {systemFilePath}"
-            f"The tool automatically append .pwo to the all filenames to read the output files."
-        ),
+        description=_desc,
         context=context,
         reasons=merged_reasons,
         parent_result_ids=parent_result_ids,
         parent_result_ids_w_args=param_sources,
-        metadata={},
+        metadata=_md,
     )
 
     return f"The formation energy of the adsorbate on the slab is {formationEnergy} eV. Energy_ID={id}."
@@ -4709,10 +4951,13 @@ def calculate_lc(
     ],
     context: Annotated[
         str,
-        "1-2 sentence describing which study or exploration this tool call "
-        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
-        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'), and the reason why you call this tool."
+        "1-2 sentences describing which study or exploration this tool call "
+        "is part of, and the reason for the call. You MUST state EXPLICITLY "
+        "whether this is a 'production run' (its output feeds a reported final "
+        "result) or a 'sub-study / exploration' (e.g. 'convergence test for "
+        "ecutwfc', 'sensitivity sweep over n_fixed_layers', 'one-off check'). "
+        "This production-vs-sub-study declaration is taken at face value by the "
+        "reviewer and sets the provenance requirements, so state it accurately."
     ],
 ) -> str:
     """Read the output file and calculate the lattice constant
@@ -4781,16 +5026,30 @@ def calculate_lc(
 
     merged_reasons = _merge_context(context, reasons)
 
+    _args = {"jobFilenames": bare_filenames}
+    _desc = f"The lattice constant calculated using the job list {bare_filenames}. The tool automatically append .pwo to the all filenames to read the output files."
+    _pblock, _pmd = _param_gate(
+        "calculate_lc", _args, merged_reasons, context, _desc,
+        param_sources=param_sources, parent_result_ids=list(set(bare_refs)),
+        value=lc, varied_parameters=[],
+    )
+    if _pblock:
+        return _pblock
+    _block, _md = _cross_param_gate("calculate_lc", _args, merged_reasons, context, _desc)
+    if _block:
+        return _block
+    _md = {**_pmd, **_md}
+
     id = CANVAS.register_tool_output(
         tool_name="calculate_lc",
-        args={"jobFilenames": bare_filenames},
+        args=_args,
         value=lc,
-        description=f"The lattice constant calculated using the job list {bare_filenames}. The tool automatically append .pwo to the all filenames to read the output files.",
+        description=_desc,
         context=context,
         reasons=merged_reasons,
         parent_result_ids=list(set(bare_refs)),
         parent_result_ids_w_args=param_sources,
-        metadata={},
+        metadata=_md,
     )
 
     return f'The lattice constant is {lc}. LC_ID={id}'
@@ -4840,10 +5099,13 @@ def analyze_BEEF_result(
     ],
     context: Annotated[
         str,
-        "1-2 sentence describing which study or exploration this tool call "
-        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
-        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'), and the reason why you call this tool."
+        "1-2 sentences describing which study or exploration this tool call "
+        "is part of, and the reason for the call. You MUST state EXPLICITLY "
+        "whether this is a 'production run' (its output feeds a reported final "
+        "result) or a 'sub-study / exploration' (e.g. 'convergence test for "
+        "ecutwfc', 'sensitivity sweep over n_fixed_layers', 'one-off check'). "
+        "This production-vs-sub-study declaration is taken at face value by the "
+        "reviewer and sets the provenance requirements, so state it accurately."
     ],
 ) -> str:
     '''Read, extract, and analyze BEEF calculation results for slab,
@@ -4964,6 +5226,22 @@ def analyze_BEEF_result(
 
     merged_reasons = _merge_context(context, reasons)
 
+    _desc = (
+        f"BEEF-vdW ensemble adsorption-energy analysis using {slabFilePath}, "
+        f"{adsorbateFilePath}, and {systemFilePath}.")
+    _pblock, _pmd = _param_gate(
+        "analyze_BEEF_result", common_args, merged_reasons, context, _desc,
+        param_sources=param_sources, parent_result_ids=parent_result_ids,
+        value=E_formation_mean, varied_parameters=[],
+    )
+    if _pblock:
+        return _pblock
+    _block, _md = _cross_param_gate(
+        "analyze_BEEF_result", common_args, merged_reasons, context, _desc)
+    if _block:
+        return _block
+    _md = {**_pmd, **_md}
+
     mean_id = CANVAS.register_tool_output(
         tool_name="analyze_BEEF_result",
         args=common_args,
@@ -4977,7 +5255,7 @@ def analyze_BEEF_result(
         reasons=merged_reasons,
         parent_result_ids=parent_result_ids,
         parent_result_ids_w_args=param_sources,
-        metadata={},
+        metadata=_md,
     )
 
     std_id = CANVAS.register_tool_output(
@@ -4993,7 +5271,7 @@ def analyze_BEEF_result(
         reasons=merged_reasons,
         parent_result_ids=parent_result_ids,
         parent_result_ids_w_args=param_sources,
-        metadata={},
+        metadata=_md,
     )
 
     return (
@@ -5446,10 +5724,13 @@ def read_energy_from_output(
     ],
     context: Annotated[
         str,
-        "1-2 sentence describing which study or exploration this tool call "
-        "is part of (e.g. 'convergence test for ecutwfc', 'production run "
-        "for adsorption energy', 'sensitivity sweep over n_fixed_layers', "
-        "'one-off check'), and the reason why you call this tool."
+        "1-2 sentences describing which study or exploration this tool call "
+        "is part of, and the reason for the call. You MUST state EXPLICITLY "
+        "whether this is a 'production run' (its output feeds a reported final "
+        "result) or a 'sub-study / exploration' (e.g. 'convergence test for "
+        "ecutwfc', 'sensitivity sweep over n_fixed_layers', 'one-off check'). "
+        "This production-vs-sub-study declaration is taken at face value by the "
+        "reviewer and sets the provenance requirements, so state it accurately."
     ],
 ) -> str:
     '''Read the total energy from the output file in job list and return it in a string

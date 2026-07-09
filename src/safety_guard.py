@@ -646,7 +646,13 @@ R1_RULE = (
     "convergence result used as a kspacing pin), when the source's "
     "characterization conditions clearly don't match the current use "
     "(e.g. a kspacing converged at low ecutwfc used at high ecutwfc), "
-    "or when the rationale fails to identify the workflow context."
+    "or when the rationale fails to identify the workflow context. "
+    "Independently of whether the source is appropriate, the rationale must give a "
+    "study-specific justification for WHY this particular source/value is the right "
+    "choice here (e.g. naming the study, the source, and why its characterization "
+    "conditions fit this use). A generic boilerplate rationale — 'standard value', "
+    "'typical setting', or a bare restatement of the value with no study-specific "
+    "content — is NOT acceptable: return fail even when the source itself is appropriate."
 )
 
 R1_DOTTED_RULE = (
@@ -673,7 +679,12 @@ R1_DOTTED_RULE = (
     "    uncharacterized input launders the missing characterization and is "
     "    therefore unacceptable. Reject when the source input was "
     "    uncharacterized, or when the rationale fails to identify the "
-    "    workflow context of either the current call or the source input."
+    "    workflow context of either the current call or the source input. "
+    "Independently of source appropriateness, the current parameter's rationale must "
+    "give a study-specific justification for why sourcing this value from that earlier "
+    "input is the right choice; a generic boilerplate rationale ('standard value', "
+    "'typical setting', or a bare restatement with no study-specific content) is NOT "
+    "acceptable — return fail even when the dotted source is otherwise appropriate."
 )
 
 
@@ -749,6 +760,17 @@ Guidance:
   you whether this artifact is part of the production lineage of the
   claim or part of an earlier sub-study, and you must adjust scrutiny
   accordingly.
+
+- TAKE THE CONTEXT'S DECLARED WORK-TYPE AT FACE VALUE. The agent is
+  required to state whether the call is PRODUCTION work or a SUB-STUDY /
+  exploration. Honor that declaration exactly: if the `Context:` says this
+  is a production run, treat it as PRODUCTION and apply the strict
+  production requirements — do NOT reinterpret a stated production context
+  as a sub-study just because the same tool COULD be used in a sub-study
+  or because that would make an otherwise-missing source acceptable.
+  Conversely, if it clearly declares a sub-study/convergence/exploration,
+  judge it under the sub-study path. When the declaration is genuinely
+  ambiguous or absent, say so and lean toward the stricter reading.
 
 - HARD RULE for `math_expression_tool` (applies regardless of which
   rule branch — R1/R1_DOTTED/R1_NO_SOURCE/R2/R3 — the parameter falls
@@ -1454,6 +1476,45 @@ def _tool_usage_block(tool_name: str, parameter_name: str) -> str:
     return "\n".join(parts) + "\n"
 
 
+def _reconstruct_agent_input(parameter_value: Any, source_refs: Any) -> Optional[Any]:
+    """Rebuild the (value, source_ref) input the agent actually submitted, from the
+    stored bare value + its source refs (`parent_result_ids_w_args`).
+
+    Tools record the RESOLVED bare value and track source refs separately, but a tool's
+    annotation describes the INPUT form (e.g. `List[Tuple[value, source_ref]]` / a
+    `<arg>_w_ref` tuple). Re-zipping restores that input form so the value the judge sees
+    is consistent with the annotation it is shown — removing the spurious "this is a bare
+    list, not a list of tuples" format complaint. Safe because the tool already validated
+    the shape + provenance at call time. Returns None when there is no usable source (the
+    caller then shows the bare value, whose plain annotation matches it fine)."""
+    if not source_refs:
+        return None
+    # list value + aligned list of refs -> list of (value, ref) tuples
+    if (isinstance(parameter_value, list) and isinstance(source_refs, list)
+            and len(parameter_value) == len(source_refs) and all(source_refs)):
+        return list(zip(parameter_value, source_refs))
+    # scalar value + scalar (or single-elem) ref -> one (value, ref) pair
+    if not isinstance(parameter_value, list):
+        ref = source_refs[0] if isinstance(source_refs, list) else source_refs
+        return (parameter_value, ref) if ref else None
+    # whole list sourced from a single scalar ref -> (list, ref)
+    if isinstance(parameter_value, list) and isinstance(source_refs, str) and source_refs:
+        return (parameter_value, source_refs)
+    return None
+
+
+_STRUCTURE_ALREADY_VALIDATED_NOTE = """\
+IMPORTANT — what is (and is not) your job:
+The producing tool already validated this parameter's INPUT STRUCTURE and PROVENANCE at
+call time — the argument shape (e.g. (value, source_ref) tuples), that each
+source_result_id resolves to a real artifact, and that each value equals its cited
+source's value. Those deterministic checks passed and are guaranteed correct. Do NOT
+re-judge format/shape, and do NOT fail the parameter because a value "looks like a bare
+value" rather than a tuple — that is the resolved form of an already-validated input.
+Judge ONLY the SCIENTIFIC / semantic appropriateness of the value(s) under the rule below.
+"""
+
+
 def _call_param_judge_llm(
     *,
     tool_name: str,
@@ -1464,6 +1525,7 @@ def _call_param_judge_llm(
     source_artifact_summary: Optional[Any],   # dict or list-of-dicts
     rule_to_apply: str,
     judge,
+    source_refs: Any = None,
 ) -> Dict[str, Any]:
     """Slim per-parameter judge call.
 
@@ -1496,19 +1558,33 @@ def _call_param_judge_llm(
 
     tool_usage = _tool_usage_block(tool_name, parameter_name)
 
+    reconstructed = _reconstruct_agent_input(parameter_value, source_refs)
+    if reconstructed is not None:
+        param_block = (
+            f"  name:  {parameter_name}\n"
+            f"  value AS THE AGENT SUBMITTED IT (each scientific value paired with its\n"
+            f"        already-validated source_result_id): {repr(reconstructed)}\n"
+            f"  reason given by the agent: {reason}"
+        )
+    else:
+        param_block = (
+            f"  name:  {parameter_name}\n"
+            f"  value: {repr(parameter_value)}\n"
+            f"  reason given by the agent: {reason}"
+        )
+
     prompt = f"""
 You are verifying whether one tool parameter was set correctly in a scientific
 agent workflow.
 
+{_STRUCTURE_ALREADY_VALIDATED_NOTE}
 Artifact overview:
   produced by tool:                 {tool_name}
   artifact result description:      {result_description}
 
 {tool_usage}
 Parameter under review:
-  name:  {parameter_name}
-  value: {repr(parameter_value)}
-  reason given by the agent: {reason}
+{param_block}
 
 Source artifact(s) for this parameter, if any:
 {source_block}
@@ -2025,6 +2101,249 @@ def guard_extraction(*, source_description, source_tool, source_args,
 
 
 # =========================================================
+# Cross-parameter consistency check (Phase C)
+# =========================================================
+#
+# Runs AFTER the per-parameter checks pass (in production: at tool-call time,
+# once per gated tool call; the harness calls it directly to measure it). It is
+# the ONLY place cross-parameter errors are judged — the per-parameter judge is
+# not expected to catch them. General and deliberately LENIENT: it flags only a
+# clear inconsistency visible from the declared values + rationales, and never
+# digs into how a source was produced (it cannot see that).
+
+CROSS_PARAM_TOOLS: Set[str] = {
+    "calculate_formation_E",
+    "analyze_BEEF_result",
+    "calculate_lc",
+    "find_optimal_parameter",
+    "find_optimal_parameter_from_derived",
+}
+
+_CROSS_PARAM_REMINDERS: Dict[str, str] = {
+    "find_optimal_parameter": (
+        "Tool-specific reminder: the `reference_file` should be the MOST-converged / "
+        "most-accurate calculation among the candidate files (e.g. the highest ecutwfc, "
+        "or the densest k-mesh / smallest kspacing). If the designated reference is a "
+        "middle or cheaper setting while more-accurate candidates are present in the list, "
+        "that is a cross-parameter inconsistency. Also, a convergence sweep needs ENOUGH "
+        "candidate points to establish a trend — two points (the reference plus a single "
+        "other) cannot demonstrate convergence."
+    ),
+    "find_optimal_parameter_from_derived": (
+        "Tool-specific reminder: the reference data point should correspond to the "
+        "MOST-converged value of the swept axis (e.g. the thickest slab / highest cutoff). "
+        "If the reference is a middle or least-converged point while more-converged points "
+        "are present, that is a cross-parameter inconsistency. Also, ENOUGH data points are "
+        "needed to establish convergence of the derived quantity — two points cannot "
+        "demonstrate a converging trend."
+    ),
+    "calculate_lc": (
+        "Tool-specific reminder: a lattice constant from an equation-of-state fit needs "
+        "enough volume points to constrain the fit (typically about 5; fewer than ~4 "
+        "cannot meaningfully fit the energy-volume curve)."
+    ),
+    "calculate_formation_E": (
+        "Tool-specific reminder: the slab, adsorbate, and combined-system energies must all "
+        "come from calculations at the SAME DFT settings and form one consistent system; if "
+        "the rationales indicate different settings across the three, the energy difference "
+        "is meaningless."
+    ),
+    "analyze_BEEF_result": (
+        "Tool-specific reminder: the slab, adsorbate, and combined-system inputs must be "
+        "the same-settings, consistent-system BEEF-vdW ensemble calculations; contradictory "
+        "settings or mismatched systems across them make the result meaningless."
+    ),
+}
+
+
+def cross_parameter_check(
+    *,
+    tool_name: str,
+    args: Dict[str, Any],
+    reasons: Dict[str, Any],
+    context: str,
+    description: str,
+    judge,
+) -> Dict[str, Any]:
+    """Cross-parameter consistency check for one tool call. Returns
+    {"verdict": pass|warning|fail, "reasoning": str}. Applies only to
+    CROSS_PARAM_TOOLS; all other tools return pass (no-op). Fails OPEN (pass) if
+    the judge cannot return a verdict, so it never blocks for a non-scientific
+    reason."""
+    if tool_name not in CROSS_PARAM_TOOLS:
+        return {"verdict": "pass",
+                "reasoning": "(cross-parameter check not applicable to this tool)"}
+
+    doc = _lookup_tool_docstring(tool_name) or "(no docstring available)"
+    lines = []
+    for pname, pval in (args or {}).items():
+        r = (reasons or {}).get(pname, "") or (reasons or {}).get("reasons", "")
+        lines.append(f"- {pname} = {repr(pval)}\n    rationale: {r}")
+    params_block = "\n".join(lines)
+    reminder = _CROSS_PARAM_REMINDERS.get(tool_name, "")
+
+    prompt = f"""
+You are performing a CROSS-PARAMETER consistency check on a single tool call in a
+scientific agent workflow. Each parameter has ALREADY been individually validated
+(its own value and provenance). Your job is ONLY to catch problems that become visible
+when the parameters are viewed TOGETHER — a per-parameter review cannot see these.
+
+Tool: {tool_name}
+Tool's documented usage:
+\"\"\"
+{doc}
+\"\"\"
+
+Study context (declared by the agent): {context}
+Artifact result description: {description}
+
+All parameters and the agent's rationale for each:
+{params_block}
+
+Check ONLY for cross-parameter problems, such as:
+- Do any of the rationales CONTRADICT each other (e.g. one states a setting is X while
+  another asserts all inputs share identical settings)?
+- Are the inputs mutually COMPARABLE / consistent for what this tool computes — the same
+  system and the same settings where the tool requires it (scientifically like-for-like)?
+- Is the SET internally coherent — enough inputs of the right kind for what the tool does,
+  and any designated reference/baseline consistent with the rest of the set?
+
+{reminder}
+
+Be LENIENT. Only flag a CLEAR cross-parameter inconsistency that is evident from the
+declared values and rationales. You CANNOT see the underlying files or how each input was
+produced beyond what the rationales state — do NOT speculate about undisclosed details, and
+if the parameters are mutually consistent (or you cannot tell without information you do not
+have), return pass. Do NOT re-judge any single parameter's individual value or provenance;
+that was already checked.
+
+Reason first, then give your verdict:
+- pass    : the parameters are mutually consistent (or no clear inconsistency is visible)
+- fail    : a clear cross-parameter inconsistency
+- warning : a plausible but uncertain cross-parameter inconsistency
+"""
+    _dbg(f"cross_parameter_check: INVOKE tool={tool_name!r} n_args={len(args or {})} "
+         f"prompt_len={len(prompt)}")
+    result = judge.invoke(prompt)
+    localPatient = 3
+    while result.get("verdict") is None and localPatient > 0:
+        result = judge.invoke(prompt)
+        localPatient -= 1
+    if result.get("verdict") is None:
+        return {"verdict": "pass",
+                "reasoning": "(cross-parameter judge returned no verdict after retries; failing open)"}
+    _dbg(f"cross_parameter_check: RETURN tool={tool_name!r} verdict={result.get('verdict')!r}")
+    return {"verdict": result["verdict"], "reasoning": result.get("reasoning", "")}
+
+
+def guard_cross_parameters(*, tool_name, args, reasons, context, description):
+    """Public entry point for the tool-call-time gate (Phase 3), mirroring
+    `guard_math_expression`. Builds a guard judge (fail-open if unavailable) and
+    returns (verdict, reasoning)."""
+    if tool_name not in CROSS_PARAM_TOOLS:
+        return "pass", ""
+    judge = _get_guard_judge()
+    if judge is None:
+        return "pass", ""
+    try:
+        res = cross_parameter_check(
+            tool_name=tool_name, args=args, reasons=reasons,
+            context=context, description=description, judge=judge,
+        )
+    except Exception as e:  # noqa: BLE001 — fail OPEN: never block a tool for infra reasons
+        _dbg(f"guard_cross_parameters: judge error ({e}); failing open (pass).")
+        return "pass", ""
+    return res.get("verdict", "pass"), str(res.get("reasoning", ""))
+
+
+class _ProvisionalArtifact:
+    """Lightweight duck-typed stand-in for a not-yet-registered artifact, used by
+    `guard_parameterization` at tool-call time. Exposes exactly the attributes
+    `verify_artifact_parameterization` (and its depth-1 source helpers) read off an
+    artifact. Deliberately NOT the CANVAS pydantic model: no validation, so a tool
+    passing a non-standard `reasons`/`args` shape can never make the gate raise and
+    silently fail open (skipping the check)."""
+    __slots__ = ("result_id", "tool_name", "args", "value", "description",
+                 "context", "reasons", "parent_result_ids_w_args",
+                 "parent_result_ids", "metadata")
+
+    def __init__(self, *, tool_name, args, value, description, context, reasons,
+                 parent_result_ids_w_args, parent_result_ids, metadata):
+        self.result_id = "<provisional>"
+        self.tool_name = tool_name
+        self.args = args or {}
+        self.value = value
+        self.description = description or ""
+        self.context = context or ""
+        self.reasons = reasons or {}
+        self.parent_result_ids_w_args = parent_result_ids_w_args or {}
+        self.parent_result_ids = parent_result_ids or []
+        self.metadata = metadata or {}
+
+
+def guard_parameterization(*, tool_name, args, value=None, reasons,
+                           param_sources=None, parent_result_ids=None,
+                           description="", context="", varied_parameters=None):
+    """Public entry point for the per-parameter tool-call-time gate (Phase 3),
+    mirroring `guard_cross_parameters`. Runs the SAME per-parameter verification
+    the report-time judge uses, on an in-memory provisional artifact built from the
+    exact fields the tool is about to register — so the tool-time verdict matches
+    the eventual report-time verdict. Returns (verdict, reasoning) where reasoning
+    lists each failing/flagged parameter. Fails OPEN ('pass') on any
+    guard-infrastructure problem so the guard never blocks a run for a
+    non-scientific reason."""
+    # Info / extraction tools are out of scope (extraction has its own guard).
+    if tool_name in INFO_TOOLS or tool_name in EXTRACTION_TOOL_NAMES:
+        return "pass", ""
+    judge = _get_guard_judge()
+    if judge is None:
+        return "pass", ""
+    try:
+        # Skip defaulted, unmentioned optionals: a parameter whose value is None
+        # AND which has no rationale entry carries nothing to judge (e.g. an
+        # optional lattice constant left as None for a cubic system). Judging it
+        # only produces spurious "under-justified" warnings.
+        _reasons = reasons or {}
+        _gated_args = {k: v for k, v in (args or {}).items()
+                       if not (v is None and k not in _reasons)}
+        provisional = _ProvisionalArtifact(
+            tool_name=tool_name, args=_gated_args, value=value,
+            description=description, context=context, reasons=reasons,
+            parent_result_ids_w_args=param_sources,
+            parent_result_ids=parent_result_ids, metadata={},
+        )
+        sensitive = (getattr(var, "OTHER_GLOBAL_VARIABLES", {}) or {}).get(
+            "sensitive_para", []) or []
+        res = verify_artifact_parameterization(
+            target_quantity=description or "",
+            overall_goal=getattr(var, "OVERALL_GOAL", "") or "",
+            varied_parameters=varied_parameters or [],
+            sensitive_parameters=sensitive,
+            result_id="<provisional>",
+            judge=judge,
+            artifact=provisional,
+        )
+    except Exception as e:  # noqa: BLE001 — fail OPEN: never block a tool for infra reasons
+        _dbg(f"guard_parameterization: error ({e}); failing open (pass).")
+        return "pass", ""
+
+    verdict = res.get("overall_verdict", "pass")
+    # Build a helpful message from the per-parameter checks (the generic `summary`
+    # does not name the offending params). List only the non-pass ones.
+    bad = [c for c in (res.get("checks") or [])
+           if c.get("verdict") in ("fail", "warning")]
+    if bad:
+        reasoning = " | ".join(
+            f"[{c.get('verdict', '?').upper()}] {c.get('parameter_name')}="
+            f"{c.get('parameter_value')!r}: {c.get('reasoning', '')}"
+            for c in bad
+        )
+    else:
+        reasoning = str(res.get("summary", ""))
+    return verdict, reasoning
+
+
+# =========================================================
 # Tool 1 — Structured report generation
 # =========================================================
 @tool
@@ -2317,14 +2636,28 @@ def verify_artifact_parameterization(
     sensitive_parameters: Annotated[List[str], "User-specified sensitive parameters."],
     result_id: Annotated[str, "Artifact result_id to verify."],
     judge,
+    *,
+    artifact: Annotated[Any, "Optional in-memory artifact to verify instead of a "
+                             "registry lookup. Used by the tool-call-time gate "
+                             "(guard_parameterization), where the artifact is not "
+                             "registered yet."] = None,
 ) -> Dict[str, Any]:
-    """Verify one artifact locally."""
+    """Verify one artifact locally.
+
+    When `artifact` is provided it is verified directly (the registry lookup by
+    `result_id` is skipped) — this is the tool-call-time / provisional path. When
+    it is None the artifact is fetched from the registry by `result_id` (the
+    report-time path). Behavior is otherwise identical (strict): any per-parameter
+    `fail` folds to an overall `fail`.
+    """
     _dbg(
         f"verify_artifact_parameterization: ENTER result_id={result_id!r} "
+        f"provisional={artifact is not None} "
         f"target_quantity={target_quantity!r} "
         f"varied={varied_parameters} sensitive={sensitive_parameters}"
     )
-    artifact = _get_artifact(result_id)
+    artifact = artifact if artifact is not None else _get_artifact(result_id)
+    rid = getattr(artifact, "result_id", result_id)
     args = artifact.args or {}
     reasons = artifact.reasons or {}
     param_source_ids = _param_source_ids(artifact)
@@ -2564,6 +2897,7 @@ def verify_artifact_parameterization(
             source_artifact_summary=source_summary,
             rule_to_apply=rule,
             judge=judge,
+            source_refs=source,
         )
         _dbg(
             f"verify_artifact_parameterization: judge verdict for "
@@ -2585,17 +2919,17 @@ def verify_artifact_parameterization(
         overall = _fold_verdict(overall, judgement["verdict"])
 
     _dbg(
-        f"verify_artifact_parameterization: DONE result_id={result_id!r} "
+        f"verify_artifact_parameterization: DONE result_id={rid!r} "
         f"overall={overall!r} n_checks={len(checks)}"
     )
 
     return ArtifactVerificationResult(
-        result_id=result_id,
+        result_id=rid,
         tool_name=artifact.tool_name,
         artifact_description=artifact.description,
         overall_verdict=overall,
         summary=(
-            f"Local verification for artifact {result_id} → '{overall}' "
+            f"Local verification for artifact {rid} → '{overall}' "
             f"(in scope of quantity '{target_quantity}')."
         ),
         checks=checks,
@@ -2691,6 +3025,7 @@ def _verify_sourced_param(
         source_artifact_summary=source_summary,
         rule_to_apply=rule,
         judge=judge,
+        source_refs=source,
     )
     _dbg(
         f"_verify_sourced_param: RETURN param={param_name!r} "
