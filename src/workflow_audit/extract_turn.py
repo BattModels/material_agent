@@ -17,11 +17,15 @@ round and is never extracted.
 Usage:
     python -m src.workflow_audit.extract_turn his.txt 842
     python -m src.workflow_audit.extract_turn his.txt 12 15 -o range.txt
+    python -m src.workflow_audit.extract_turn hist/ 842   # new-style runs
+
+For a `hist/` directory, the legacy sibling his.txt (if any) is included as
+the chronologically-first source (see history_parser._resolve_sources), so
+turn numbers stay continuous across the old-file/new-directory boundary.
 """
 from __future__ import annotations
 
 import argparse
-import os
 from pathlib import Path
 
 try:
@@ -29,26 +33,27 @@ try:
 except ImportError:                      # progress bar is optional
     tqdm = None
 
-from .history_parser import RE_BOSS, RE_SUP, RE_WORK, parse_elapsed_hours
+from .history_parser import RE_BOSS, RE_SUP, RE_WORK, _resolve_sources, parse_elapsed_hours
 
 
 def _find_round_boundaries(path, start_turn: int, end_turn: int,
                             progress: bool = True):
-    """Stream the file once; return a list of (round, agent, start_line,
+    """Stream the source(s) once; return a list of (round, agent, start_line,
     start_raw, lines) dicts for each round in [start_turn, end_turn]. Stops
     reading as soon as the round after end_turn is seen -- no need to scan
-    the whole file unless the target range is near the end.
+    the rest unless the target range is near the end.
 
     Raises ValueError if end_turn (and therefore possibly start_turn) falls
-    outside the rounds actually found in the file.
+    outside the rounds actually found.
     """
+    files = _resolve_sources(path)
     round_idx = 0
     agent = None
     current = None      # dict for the round currently being captured
     found = []
     range_closed = False   # True once a round after end_turn is seen
 
-    total = os.path.getsize(path)
+    total = sum(f.stat().st_size for f in files)
     bar = tqdm(total=total, unit="B", unit_scale=True,
                desc=f"scanning for turn(s) {start_turn}-{end_turn}"
                ) if (progress and tqdm) else None
@@ -56,45 +61,50 @@ def _find_round_boundaries(path, start_turn: int, end_turn: int,
         print(f"scanning for turn(s) {start_turn}-{end_turn} "
               f"({total / 1e9:.2f} GB)...")
 
-    with open(path, "rb") as fh:
-        for lineno, raw in enumerate(fh, 1):
-            if bar:
-                bar.update(len(raw))
-            line = raw.decode("utf-8", "replace").rstrip("\n")
-
-            new_agent = None
-            start_raw = ""
-            m = RE_SUP.match(line)
-            if m:
-                new_agent, start_raw = "supervisor", m.group(1)
-            elif RE_WORK.match(line):
-                new_agent = "worker"
-            else:
-                m = RE_BOSS.match(line)
-                if m and m.group(1) != "supervisor":
-                    new_agent, start_raw = "boss", m.group(2)
-
-            if new_agent is not None and new_agent != agent:
-                if current is not None:
-                    found.append(current)
-                round_idx += 1
-                agent = new_agent
+    lineno = 0
+    for fpath in files:
+        if range_closed:
+            break
+        with open(fpath, "rb") as fh:
+            for raw in fh:
+                lineno += 1
                 if bar:
-                    bar.set_postfix(round=round_idx, agent=agent, refresh=False)
-                if round_idx > end_turn:
-                    range_closed = True
-                    break
-                current = None
-                if round_idx >= start_turn:
-                    current = dict(round=round_idx, agent=agent,
-                                    start_line=lineno, start_raw=start_raw,
-                                    lines=[])
-                    if progress and not tqdm:
-                        print(f"  found turn {round_idx} (agent={agent}) "
-                              f"at line {lineno}")
+                    bar.update(len(raw))
+                line = raw.decode("utf-8", "replace").rstrip("\n")
 
-            if current is not None:
-                current["lines"].append(raw)
+                new_agent = None
+                start_raw = ""
+                m = RE_SUP.match(line)
+                if m:
+                    new_agent, start_raw = "supervisor", m.group(1)
+                elif RE_WORK.match(line):
+                    new_agent = "worker"
+                else:
+                    m = RE_BOSS.match(line)
+                    if m and m.group(1) != "supervisor":
+                        new_agent, start_raw = "boss", m.group(2)
+
+                if new_agent is not None and new_agent != agent:
+                    if current is not None:
+                        found.append(current)
+                    round_idx += 1
+                    agent = new_agent
+                    if bar:
+                        bar.set_postfix(round=round_idx, agent=agent, refresh=False)
+                    if round_idx > end_turn:
+                        range_closed = True
+                        break
+                    current = None
+                    if round_idx >= start_turn:
+                        current = dict(round=round_idx, agent=agent,
+                                        start_line=lineno, start_raw=start_raw,
+                                        lines=[])
+                        if progress and not tqdm:
+                            print(f"  found turn {round_idx} (agent={agent}) "
+                                  f"at line {lineno}")
+
+                if current is not None:
+                    current["lines"].append(raw)
 
     if bar:
         bar.close()
@@ -116,6 +126,11 @@ def extract_turns(path, start_turn: int, end_turn: int, out_path,
     (without creating out_path) if the requested turns don't exist."""
     rounds = _find_round_boundaries(path, start_turn, end_turn,
                                      progress=progress)
+    # "global-lines" when multiple physical files are stitched together
+    # (a hist/ dir, possibly plus its legacy his.txt sibling) -- the line
+    # number then spans files, so labeling it plain "lines" would wrongly
+    # imply a single file.
+    line_label = "global-lines" if len(_resolve_sources(path)) > 1 else "lines"
 
     if progress:
         print(f"writing {len(rounds)} turn(s) -> {out_path}")
@@ -128,7 +143,7 @@ def extract_turns(path, start_turn: int, end_turn: int, out_path,
                        if rnd["start_raw"] else None)
             header = (
                 f"# turn {rnd['round']} | agent={rnd['agent']} | "
-                f"{path} lines {rnd['start_line']}-{end_line} | "
+                f"{path} {line_label} {rnd['start_line']}-{end_line} | "
                 f"round_start="
                 f"{rnd['start_raw'] or '-'}"
                 f"{f' ({start_h:.3f}h)' if start_h is not None else ''}\n"
@@ -141,7 +156,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(
         description="Extract one turn (round), or an inclusive range of "
                     "turns, of raw his.txt text into a small new file.")
-    ap.add_argument("history", help="path to his.txt")
+    ap.add_argument("history", help="path to his.txt (old runs) or the hist/ directory (new runs)")
     ap.add_argument("turn", type=int, help="turn (round) number")
     ap.add_argument("end_turn", type=int, nargs="?", default=None,
                      help="if given, extract the inclusive range "

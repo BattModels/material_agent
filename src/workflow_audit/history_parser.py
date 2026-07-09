@@ -18,7 +18,6 @@ redundant-polling echoes), so every tool call appears exactly once.
 from __future__ import annotations
 
 import argparse
-import os
 import re
 from pathlib import Path
 
@@ -28,6 +27,8 @@ try:
     from tqdm import tqdm
 except ImportError:                      # progress bar is optional
     tqdm = None
+
+from src.history_log import list_hist_files
 
 # Structured-output "tools" that are control flow (a supervisor decision, a
 # worker return, a boss verdict), not real tools -- excluded from the counts.
@@ -54,8 +55,39 @@ def parse_elapsed_hours(text: str):
     return (int(days or 0) * 86400 + int(hh) * 3600 + int(mm) * 60 + int(ss)) / 3600.0
 
 
+def _resolve_sources(path) -> list[Path]:
+    """Accept either a single his.txt (a run with no hist/ dir yet) or a
+    hist/ directory (detected via is_dir()). For the latter, also pick up
+    a sibling legacy his.txt (WORKING_DIR/his.txt, frozen at the resume that
+    created hist/) as the chronologically-first source, if present -- the
+    old flat file predates everything under hist/, never the reverse."""
+    p = Path(path)
+    if p.is_dir():
+        files = list_hist_files(p)
+        legacy = p.parent / "his.txt"
+        if legacy.is_file():
+            files = [legacy] + files
+        if not files:
+            raise ValueError(f"No his.txt or his_<N>.txt files found for {p}")
+        return files
+    return [p]
+
+
 def parse_history(path, progress: bool = True) -> pd.DataFrame:
-    """Stream his.txt once; return one row per real tool call."""
+    """Parse a run's dialogue log into one row per real tool call.
+
+    path: a single his.txt file (a run with no hist/ dir yet), or a hist/
+    directory (a run migrated to the rotating writer) -- in the latter case
+    its legacy sibling his.txt, if any, is included as the chronologically
+    -first source (see _resolve_sources).
+    progress: show a byte-accurate tqdm progress bar while streaming.
+
+    Returns a DataFrame with one row per real tool call (plus one
+    placeholder row per tool-call-free round), columns: round, agent, tool,
+    calc_type, outcome, round_start_h, round_start_raw, line_no -- see the
+    module docstring / README for what each means.
+    """
+    files = _resolve_sources(path)
     rows = []
     round_idx = 0            # rules 1-3: increments when the active agent changes
     agent = None             # supervisor / worker / boss
@@ -76,98 +108,101 @@ def parse_history(path, progress: bool = True) -> pd.DataFrame:
                              round_start_h=start_h, round_start_raw=start_raw,
                              line_no=round_marker_line))
 
-    total = os.path.getsize(path)
+    total = sum(f.stat().st_size for f in files)
     bar = tqdm(total=total, unit="B", unit_scale=True,
                desc="parsing his.txt") if (progress and tqdm) else None
 
-    with open(path, "rb") as fh:
-        for lineno, raw in enumerate(fh, 1):
-            if bar:
-                bar.update(len(raw))
-            line = raw.decode("utf-8", "replace").rstrip("\n")
+    lineno = 0
+    for fpath in files:
+        with open(fpath, "rb") as fh:
+            for raw in fh:
+                lineno += 1
+                if bar:
+                    bar.update(len(raw))
+                line = raw.decode("utf-8", "replace").rstrip("\n")
 
-            # rule 1 -- supervisor marker: new round only if the agent changed;
-            #           carries the timestamp.
-            m = RE_SUP.match(line)
-            if m:
-                if agent != "supervisor":
-                    flush_empty_round()          # close the previous round
-                    round_idx += 1
-                    round_has_rows = False
-                    round_marker_line = lineno
-                agent = "supervisor"
-                start_raw = m.group(1)
-                start_h = parse_elapsed_hours(start_raw)
-                open_call, expect_result = None, False
-                continue
-
-            # rule 2 -- worker marker: new round only if the agent changed. Worker
-            #           turns have NO timestamp, so the time fields are left blank.
-            if RE_WORK.match(line):
-                if agent != "worker":
-                    flush_empty_round()
-                    round_idx += 1
-                    round_has_rows = False
-                    round_marker_line = lineno
-                agent = "worker"
-                start_raw = ""
-                start_h = None
-                open_call, expect_result = None, False
-                continue
-
-            # rule 3 -- boss marker: new round only if the agent changed (not the
-            #           supervisor); carries the timestamp.
-            m = RE_BOSS.match(line)
-            if m and m.group(1) != "supervisor":
-                if agent != "boss":
-                    flush_empty_round()
-                    round_idx += 1
-                    round_has_rows = False
-                    round_marker_line = lineno
-                agent = "boss"
-                start_raw = m.group(2)        # group(1) is the agent name, group(2) the time
-                start_h = parse_elapsed_hours(start_raw)
-                open_call, expect_result = None, False
-                continue
-
-            # rule 4 -- tool-call invocation: emit a row (skip control tools)
-            m = RE_TOOL.match(line)
-            if m:
-                tool = m.group(1)
-                expect_result = False
-                if tool in CONTROL_TOOLS:
-                    open_call = None
+                # rule 1 -- supervisor marker: new round only if the agent changed;
+                #           carries the timestamp.
+                m = RE_SUP.match(line)
+                if m:
+                    if agent != "supervisor":
+                        flush_empty_round()          # close the previous round
+                        round_idx += 1
+                        round_has_rows = False
+                        round_marker_line = lineno
+                    agent = "supervisor"
+                    start_raw = m.group(1)
+                    start_h = parse_elapsed_hours(start_raw)
+                    open_call, expect_result = None, False
                     continue
-                open_call = dict(round=round_idx, agent=agent, tool=tool,
-                                 calc_type="", outcome="",
-                                 round_start_h=start_h, round_start_raw=start_raw,
-                                 line_no=lineno)
-                rows.append(open_call)
-                round_has_rows = True
-                continue
 
-            # rule 5 -- calculation_type for an open submit_dft_job call
-            m = RE_CALC.match(line)
-            if (m and open_call is not None
-                    and open_call["tool"] == "submit_dft_job"
-                    and not open_call["calc_type"]):
-                open_call["calc_type"] = m.group(1)
-                continue
+                # rule 2 -- worker marker: new round only if the agent changed. Worker
+                #           turns have NO timestamp, so the time fields are left blank.
+                if RE_WORK.match(line):
+                    if agent != "worker":
+                        flush_empty_round()
+                        round_idx += 1
+                        round_has_rows = False
+                        round_marker_line = lineno
+                    agent = "worker"
+                    start_raw = ""
+                    start_h = None
+                    open_call, expect_result = None, False
+                    continue
 
-            # rule 6a -- result header matching the open call -> next line decides
-            m = RE_NAME.match(line)
-            if (m and open_call is not None
-                    and m.group(1) == open_call["tool"]
-                    and open_call["outcome"] == ""):
-                expect_result = True
-                continue
+                # rule 3 -- boss marker: new round only if the agent changed (not the
+                #           supervisor); carries the timestamp.
+                m = RE_BOSS.match(line)
+                if m and m.group(1) != "supervisor":
+                    if agent != "boss":
+                        flush_empty_round()
+                        round_idx += 1
+                        round_has_rows = False
+                        round_marker_line = lineno
+                    agent = "boss"
+                    start_raw = m.group(2)        # group(1) is the agent name, group(2) the time
+                    start_h = parse_elapsed_hours(start_raw)
+                    open_call, expect_result = None, False
+                    continue
 
-            # rule 6b -- first non-empty line after that header = the result
-            if expect_result and open_call is not None and line.strip():
-                open_call["outcome"] = ("error" if line.lstrip().startswith("Tool error")
-                                        else "success")
-                expect_result = False
-                continue
+                # rule 4 -- tool-call invocation: emit a row (skip control tools)
+                m = RE_TOOL.match(line)
+                if m:
+                    tool = m.group(1)
+                    expect_result = False
+                    if tool in CONTROL_TOOLS:
+                        open_call = None
+                        continue
+                    open_call = dict(round=round_idx, agent=agent, tool=tool,
+                                     calc_type="", outcome="",
+                                     round_start_h=start_h, round_start_raw=start_raw,
+                                     line_no=lineno)
+                    rows.append(open_call)
+                    round_has_rows = True
+                    continue
+
+                # rule 5 -- calculation_type for an open submit_dft_job call
+                m = RE_CALC.match(line)
+                if (m and open_call is not None
+                        and open_call["tool"] == "submit_dft_job"
+                        and not open_call["calc_type"]):
+                    open_call["calc_type"] = m.group(1)
+                    continue
+
+                # rule 6a -- result header matching the open call -> next line decides
+                m = RE_NAME.match(line)
+                if (m and open_call is not None
+                        and m.group(1) == open_call["tool"]
+                        and open_call["outcome"] == ""):
+                    expect_result = True
+                    continue
+
+                # rule 6b -- first non-empty line after that header = the result
+                if expect_result and open_call is not None and line.strip():
+                    open_call["outcome"] = ("error" if line.lstrip().startswith("Tool error")
+                                            else "success")
+                    expect_result = False
+                    continue
 
     flush_empty_round()   # the final round, if it had no tool calls
 
@@ -181,7 +216,7 @@ def parse_history(path, progress: bool = True) -> pd.DataFrame:
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="his.txt -> per-tool-call CSV")
-    ap.add_argument("history", help="path to his.txt")
+    ap.add_argument("history", help="path to his.txt (old runs) or the hist/ directory (new runs)")
     ap.add_argument("-o", "--output", default="outputs/tool_calls.csv")
     ap.add_argument("--no-progress", action="store_true")
     args = ap.parse_args(argv)
