@@ -594,11 +594,7 @@ def supervisor_chain_node(state, config, agent=None, name=None):
 
     # can't print state anymore because it now contains canvas and explog, and printing them will cause too much output
     # print(state)
-    if var.my_SAVE_DIALOGUE:
-        with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-            f.write(str(state))
-            f.write("\n")
-            
+
     plan = state["plan"]
     plan_str = "\n".join(f"{i+1}. {step.step}" for i, step in enumerate(plan))
     # task_formatted = f"""For the following plan:
