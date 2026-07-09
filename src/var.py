@@ -63,6 +63,17 @@ DISPOSITION_DEFAULT_ACTIVE = "Medium priority"   # neutral; legacy "Investigatin
 # Set negative to disable forgotten-OH detection entirely.
 GO_DEV_OH_THRESHOLD = 0.3
 
+# --- Dialogue history log rotation (hist/his_<N>.txt) --------------------------
+# Once the active his_<N>.txt file reaches this many bytes, close it and start
+# the next (see src/history_log.py). Tune here.
+HIST_ROTATE_BYTES = 1 * 1024**3  # ~1 GiB
+
+# Runtime cache owned by src/history_log.py -- which his_<N>.txt is active and
+# its current byte count. None until the first write_history() call in THIS
+# process, which (re)computes both from disk. Do not set by hand.
+hist_active_index = None
+hist_active_bytes = None
+
 # When the wait-tool's Gate-2 message lists more than this many forgotten jobs,
 # there is plainly plenty of work to do, so it drops the "return to the
 # supervisor / do a literature review" closer and just tells the worker to get on

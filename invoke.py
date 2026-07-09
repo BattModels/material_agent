@@ -24,6 +24,7 @@ import sys
 import time
 from src.utils import load_config, save_graph_to_file,initialize_database
 from src.myCANVAS import CANVAS
+from src.history_log import write_history
 from src import var
 
 import sqlite3
@@ -662,9 +663,7 @@ You have a maximum of 1 hours to complete the entire study and make your final r
     with open(log_filename, "a") as log_file:
         log_file.write(f"=== Session started at {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n\n")
         var.startTime = time.time()
-        if eval(config["SAVE_DIALOGUE"]):
-            with open(f"{WORKING_DIRECTORY}/his.txt", "a") as f:
-                f.write(f"=== Session started at {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n\n")
+        write_history(f"=== Session started at {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n\n")
         
               
         try:
@@ -934,11 +933,9 @@ You have a maximum of 1 hours to complete the entire study and make your final r
             if "__end__" not in s:
                 # print(s)
                 print("----")
-                if eval(config["SAVE_DIALOGUE"]):
-                    with open(f"{WORKING_DIRECTORY}/his.txt", "a") as f:
-                        # f.write(repr(s) + "\n")
-                        f.write("----\n")
-                
+                # write_history(repr(s) + "\n")
+                write_history("----\n")
+
                 # time.sleep(5)
                 # Print to console
                 log_file.write(f"{s}\n")
@@ -949,7 +946,5 @@ You have a maximum of 1 hours to complete the entire study and make your final r
             # of the parent graph, i.e. a safe boundary to prune at.
             prune_old_rounds(checkpointer, db_path, THREAD_ID, max_bytes=30 * 1024**3, keep_rounds=3)
         log_file.write(f"=== Session ended at {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n\n")
-        if eval(config["SAVE_DIALOGUE"]):
-            with open(f"{WORKING_DIRECTORY}/his.txt", "a") as f:
-                f.write(f"=== Session ended at {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n\n")
+        write_history(f"=== Session ended at {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n\n")
     print("End, check the log file for details")

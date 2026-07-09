@@ -39,6 +39,7 @@ from src.tools import *
 from src.prompt import dft_agent_prompt,hpc_agent_prompt,supervisor_prompt, oer_agent_prompt, boss_prompt
 from src.disposition_messages import classify_wait_handback, format_supervisor_handback_directive
 from src.forgotten_jobs import find_forgotten_jobs
+from src.history_log import write_history
 from src import var
 from src.myCANVAS import CANVAS
 from src.live_visualizer import LiveVisualizer
@@ -446,38 +447,23 @@ def print_stream(s, DAG=None):
     
     if "messages" not in s:
         print("#################")
-        if var.my_SAVE_DIALOGUE:
-            with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-                f.write("#################\n")
+        write_history("#################\n")
         print(s)
-        if var.my_SAVE_DIALOGUE:
-            with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-                f.write(repr(s))
-                f.write("\n")
+        write_history(repr(s) + "\n")
     else:
         message = s["messages"][-1]
         if isinstance(message, tuple):
             print(message)
-            if var.my_SAVE_DIALOGUE:
-                with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-                    f.write(repr(message))
-                    f.write("\n")
+            write_history(repr(message) + "\n")
         else:
             if hasattr(message, 'usage_metadata'):
                 var.TOKEN_USAGE.append(message.usage_metadata)
                 print(f"input_tokens: {message.usage_metadata['input_tokens']}, output_tokens: {message.usage_metadata['output_tokens']}")
-                if var.my_SAVE_DIALOGUE:
-                    with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-                        f.write(f"input_tokens: {message.usage_metadata['input_tokens']}, output_tokens: {message.usage_metadata['output_tokens']}\n")
+                write_history(f"input_tokens: {message.usage_metadata['input_tokens']}, output_tokens: {message.usage_metadata['output_tokens']}\n")
             message.pretty_print()
-            if var.my_SAVE_DIALOGUE:
-                with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-                    f.write(message.pretty_repr())
-                    f.write("\n")
+            write_history(message.pretty_repr() + "\n")
     print()
-    if var.my_SAVE_DIALOGUE:
-        with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-            f.write("\n")
+    write_history("\n")
 
 
 def boss_node(state, config, agent=None, name=None):
@@ -499,9 +485,7 @@ def boss_node(state, config, agent=None, name=None):
     currentTime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     timeElapsed = timedelta(seconds= time.time() - var.startTime)
     print(f"{name} is processing!!!!! Current time: {timeElapsed}.")
-    if var.my_SAVE_DIALOGUE:
-        with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-            f.write(f"{name} is processing!!!!! Current time: {timeElapsed}.\n")
+    write_history(f"{name} is processing!!!!! Current time: {timeElapsed}.\n")
 
     # can't print state anymore because it now contains canvas and explog, and printing them will cause too much output
     # print(state)
@@ -527,10 +511,7 @@ def boss_node(state, config, agent=None, name=None):
     """
 
     # Pritn the message to the boss:
-    if var.my_SAVE_DIALOGUE:
-        with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-            f.write(bossMessage)
-            f.write("\n")
+    write_history(bossMessage + "\n")
 
 
     # stream_mode MUST be pinned: with the parent config propagated, the
@@ -588,9 +569,7 @@ def supervisor_chain_node(state, config, agent=None, name=None):
     timeElapsed = timedelta(seconds= time.time() - var.startTime)
     
     print(f"supervisor is processing!!!!! Current time: {timeElapsed}.")
-    if var.my_SAVE_DIALOGUE:
-        with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-            f.write(f"supervisor is processing!!!!! Current time: {timeElapsed}.\n")
+    write_history(f"supervisor is processing!!!!! Current time: {timeElapsed}.\n")
 
 
     plan = state["plan"]
@@ -765,11 +744,7 @@ def supervisor_chain_node(state, config, agent=None, name=None):
         plan_str = "\n".join(f"{i+1}. {step.step}, agent={step.agent}, required_tools: {step.required_tools}" for i, step in enumerate(plan[1:]))
         print("No change to the plan, continue to execute the original plan.")
         print(plan_str)
-        if var.my_SAVE_DIALOGUE:
-            with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-                f.write("No change to the plan, continue to execute the original plan.\n")
-                f.write(plan_str)
-                f.write("\n")
+        write_history("No change to the plan, continue to execute the original plan.\n" + plan_str + "\n")
         return {
             "plan": plan[1:],
             "next": plan[1].agent,
@@ -781,10 +756,7 @@ def supervisor_chain_node(state, config, agent=None, name=None):
     else:
         plan_str = "\n".join(f"{i+1}. {step.step}, agent={step.agent}, required_tools: {step.required_tools}" for i, step in enumerate(agent_response.action.steps))
         print(plan_str)
-        if var.my_SAVE_DIALOGUE:
-            with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-                f.write(plan_str)
-                f.write("\n")
+        write_history(plan_str + "\n")
         return {
             "plan": agent_response.action.steps, 
             "next": agent_response.action.steps[0].agent, 
@@ -812,10 +784,8 @@ def worker_agent_node(state, config, agent=None, name=None):
             status = f.read()
     
     print(f"Agent {name} is processing!!!!!")
-    if var.my_SAVE_DIALOGUE:
-        with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-            f.write(f"Agent {name} is processing!!!!!\n")
-        
+    write_history(f"Agent {name} is processing!!!!!\n")
+
     plan = state["plan"]
     plan_str = "\n".join(f"{i+1}. {step.step}" for i, step in enumerate(plan))
     # print(plan_str)
@@ -857,14 +827,8 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
     workerGood_patient = 2
     while not workerGood and workerGood_patient > 0:
         print(task_formatted)
-        if var.my_SAVE_DIALOGUE:
-            with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-                f.write(task_formatted)
-                f.write("\n")
         print(f"Agent {name} is processing!!!!!")
-        if var.my_SAVE_DIALOGUE:
-            with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-                f.write(f"Agent {name} is processing!!!!!\n")
+        write_history(task_formatted + "\n" + f"Agent {name} is processing!!!!!\n")
         workerGood_patient -= 1
         # stream_mode pinned: see note in boss_node — without it the propagated
         # parent config flips chunks to "values" mode.
@@ -950,15 +914,9 @@ Please only do this task! Do not do anything else! The summarized old steps will
 """
 
         print(task_formatted)
-        if var.my_SAVE_DIALOGUE:
-            with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-                f.write(task_formatted)
-                f.write("\n")
         print(f"Summarize Agent is processing!!!!!")
-        if var.my_SAVE_DIALOGUE:
-            with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-                f.write(f"Summarize Agent is processing!!!!!\n")
-        
+        write_history(task_formatted + "\n" + f"Summarize Agent is processing!!!!!\n")
+
         config = var.OTHER_GLOBAL_VARIABLES
         workerllm = ChatAnthropic(model="claude-sonnet-4-5-20250929", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
         response = workerllm.invoke(task_formatted)

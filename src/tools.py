@@ -66,6 +66,7 @@ from src.disposition_messages import (
     evaluate_terminal_tag_gate,
 )
 from src.forgotten_jobs import find_forgotten_jobs
+from src.history_log import write_history
 from src.aq_gnome_candidate_sync import (
     MATERIAL_PROPERTY_COLUMNS,
     sync_reduced_formula,
@@ -4226,9 +4227,7 @@ def get_convergence_suggestions(
                 
                 finalSuggestion += agent_response.content + "\n\n"
                 print(agent_response + "\n\n")
-                if var.my_SAVE_DIALOGUE:
-                    with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-                        f.write(repr(agent_response))
+                write_history(repr(agent_response))
             else:
                 fileTrimed = True
                 # Large: compute block boundaries
@@ -4255,9 +4254,7 @@ def get_convergence_suggestions(
                 
                 finalSuggestion += agent_response.content + "\n\n"
                 print(agent_response + "\n\n")
-                if var.my_SAVE_DIALOGUE:
-                    with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
-                        f.write(repr(agent_response))
+                write_history(repr(agent_response))
 
             
     if finalSuggestion == "":
