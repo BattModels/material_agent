@@ -592,8 +592,6 @@ def supervisor_chain_node(state, config, agent=None, name=None):
         with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
             f.write(f"supervisor is processing!!!!! Current time: {timeElapsed}.\n")
 
-    # can't print state anymore because it now contains canvas and explog, and printing them will cause too much output
-    # print(state)
 
     plan = state["plan"]
     plan_str = "\n".join(f"{i+1}. {step.step}" for i, step in enumerate(plan))
