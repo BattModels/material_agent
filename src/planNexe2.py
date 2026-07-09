@@ -84,7 +84,12 @@ def _dbg(msg: str) -> None:
 # may name. Referenced by the myStep schema AND the plan-editing tool
 # validators so the two can never drift. The empty string "" means "no
 # specific final tool required for this step".
-WORKER_TOOL_NAMES: List[str] = [
+# The legal `required_tools` values, SPLIT BY WHICH WORKER AGENT can actually run
+# them, so a plan step can be validated against the agent it is assigned to. These
+# MUST stay in sync with the real per-agent toolsets `dft_tools` / `hpc_tools` at the
+# bottom of this file (create_planning_graph); a drift guard there enforces it at
+# graph-build time.
+DFT_TOOL_NAMES: List[str] = [
     "calculate_formation_E",
     "generateSurface_and_getPossibleSite",
     "generate_myAdsorbate",
@@ -95,21 +100,39 @@ WORKER_TOOL_NAMES: List[str] = [
     "calculate_lc",
     "generate_convergence_test",
     "find_optimal_parameter",
+    "find_optimal_parameter_from_derived",
     "generate_eos_test",
     "read_energy_from_output",
     "get_convergence_suggestions",
     "analyze_BEEF_result",
     "extract_numeric_from_tool_output",
+    "extract_text_from_tool_output",
     "math_expression_tool",
+    "generate_structured_report",
+]
+HPC_TOOL_NAMES: List[str] = [
     "submit_and_monitor_job",
     "add_resource_suggestion",
-    "generate_structured_report",
-    "extract_text_from_tool_output",
-    "find_optimal_parameter_from_derived",
-    "",
 ]
-# Mirror onto var so tool modules can reference the same list at runtime.
+# "" means "no specific final tool required for this step" — legal for EITHER agent.
+_NO_REQUIRED_TOOL = ""
+
+# Per-agent legal `required_tools` (each agent may also use "" = no specific tool).
+# Keyed by the worker-agent names in `members`.
+AGENT_TOOL_NAMES: Dict[str, List[str]] = {
+    "DFT_Agent": DFT_TOOL_NAMES + [_NO_REQUIRED_TOOL],
+    "HPC_Agent": HPC_TOOL_NAMES + [_NO_REQUIRED_TOOL],
+}
+
+# Union across all agents — the single source of truth for the `myStep` schema Literal
+# and the overall legality check. Order: DFT, then HPC, then "".
+WORKER_TOOL_NAMES: List[str] = DFT_TOOL_NAMES + HPC_TOOL_NAMES + [_NO_REQUIRED_TOOL]
+
+# Mirror onto var so tool modules can reference the same lists at runtime.
 var.WORKER_TOOL_NAMES = WORKER_TOOL_NAMES
+var.DFT_TOOL_NAMES = DFT_TOOL_NAMES
+var.HPC_TOOL_NAMES = HPC_TOOL_NAMES
+var.AGENT_TOOL_NAMES = AGENT_TOOL_NAMES
 
 
 class myStep(BaseModel):
@@ -301,6 +324,7 @@ def _render_plan_for_tool(plan: List[myStep]) -> str:
 def _validate_steps_for_tool(steps: List[myStep]) -> Optional[str]:
     """Return an error string if any step is invalid, else None."""
     legal = list(getattr(var, "WORKER_TOOL_NAMES", WORKER_TOOL_NAMES))
+    agent_tools = getattr(var, "AGENT_TOOL_NAMES", AGENT_TOOL_NAMES)
     for j, s in enumerate(steps):
         pos = f"step #{j+1} in your provided list"
         if s.agent not in members:
@@ -309,6 +333,17 @@ def _validate_steps_for_tool(steps: List[myStep]) -> Optional[str]:
         if s.required_tools not in legal:
             return (f"{pos} names required_tools {s.required_tools!r}, which "
                     f"is not a recognized tool. Valid tools: {legal}.")
+        # The named tool must actually be available to the agent this step is
+        # assigned to (DFT tools -> DFT_Agent, HPC tools -> HPC_Agent; "" = no
+        # specific tool is legal for either).
+        allowed_for_agent = list(agent_tools.get(s.agent, []))
+        if s.required_tools not in allowed_for_agent:
+            owner = next((a for a, tools in agent_tools.items()
+                          if s.required_tools in tools), None)
+            hint = f" That tool belongs to {owner}." if owner else ""
+            return (f"{pos} assigns required_tools {s.required_tools!r} to "
+                    f"{s.agent!r}, but {s.agent} does not have that tool.{hint} "
+                    f"Tools available to {s.agent}: {allowed_for_agent}.")
         if s.required_tools == "generate_structured_report" and not list(s.required_quantities):
             return (f"{pos} is a report step "
                     f"(required_tools='generate_structured_report') but has "
@@ -1156,6 +1191,7 @@ class judge():
         # sonnet-5). Build those without temperature; older models keep
         # temperature=0.0 for deterministic judging.
         _model = config['ANTHROPIC_MODEL']
+        _model = "claude-opus-4-8"
         # max_tokens must be generous: reasoning is emitted BEFORE the verdict
         # (reason-first schema), so a small budget can truncate the response
         # before the verdict field is produced -> missing required field ->
@@ -1791,6 +1827,22 @@ def create_planning_graph(config: dict) -> StateGraph:
         submit_and_monitor_job,
         add_resource_suggestion
         ]
+
+    # Verification guard: the per-agent required_tools name lists used to validate
+    # plan steps (DFT_TOOL_NAMES / HPC_TOOL_NAMES, top of file) MUST match the agents'
+    # ACTUAL toolsets. Catch drift here at graph-build time rather than letting a step
+    # pass validation for a tool its assigned agent cannot actually run.
+    _dft_have = {getattr(t, "name", "") for t in dft_tools}
+    _hpc_have = {getattr(t, "name", "") for t in hpc_tools}
+    _missing_dft = [n for n in DFT_TOOL_NAMES if n and n not in _dft_have]
+    _missing_hpc = [n for n in HPC_TOOL_NAMES if n and n not in _hpc_have]
+    if _missing_dft or _missing_hpc:
+        raise RuntimeError(
+            f"planNexe2 agent/tool-name drift: DFT_TOOL_NAMES not in dft_tools "
+            f"{_missing_dft}; HPC_TOOL_NAMES not in hpc_tools {_missing_hpc}. "
+            f"Update DFT_TOOL_NAMES / HPC_TOOL_NAMES (top of file) to match."
+        )
+
     hpc_agent = create_agent(
         model=workerllm,
         tools=hpc_tools,
