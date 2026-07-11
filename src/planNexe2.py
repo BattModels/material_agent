@@ -279,6 +279,14 @@ class ExecutedRecord(BaseModel):
                     "for a span of earlier records (whose full text is on "
                     "canvas under an ARCHIVE:: key named in worker_summary).",
     )
+    n_original: int = Field(
+        default=1,
+        description="How many ORIGINAL executed steps this record stands for: 1 "
+                    "for a normal record; the span size for a compressed record. "
+                    "History numbering is a running sum of this, so a compressed "
+                    "span shown as '1-5' is followed by step 6 (not step 2), and "
+                    "the numbers stay stable across further compressions.",
+    )
 
 
 class PlanExecute(TypedDict):
@@ -485,28 +493,60 @@ def delete_plan_steps(
 
 # ---- Shared history rendering (supervisor AND worker see the same view) ----
 
+def _orig_step_ranges(executed_steps) -> List[Tuple[int, int]]:
+    """Per-record (start, end) 1-based ORIGINAL executed-step numbers.
+
+    A record numbers itself by how many original steps it stands for
+    (`n_original`): 1 for a normal record, the span size for a compressed one.
+    The numbering is a running sum, so a compressed span [1-5] is followed by
+    step 6 (not step 2) and the numbers stay stable across further compressions.
+    This is the single source of truth for BOTH the history display and the
+    step-number <-> list-index mapping used by `compress_history`.
+    """
+    ranges: List[Tuple[int, int]] = []
+    n = 0
+    for r in executed_steps:
+        cnt = getattr(r, "n_original", 1) or 1
+        ranges.append((n + 1, n + cnt))
+        n += cnt
+    return ranges
+
+
+def _fmt_step_range(rng: Tuple[int, int]) -> str:
+    """'6' for a single step, '1-5' for a compressed span."""
+    a, b = rng
+    return f"{a}" if a == b else f"{a}-{b}"
+
+
 def _render_executed_section(executed_steps: List[ExecutedRecord]) -> str:
     """Render the two history sections shared by supervisor and worker:
     the numbered executed-steps list and the per-step worker responses
-    (with the verifier line only for report steps, per point 4)."""
+    (with the verifier line only for report steps, per point 4).
+
+    Steps are numbered by ORIGINAL step count (via `_orig_step_ranges`), so a
+    compressed record appears as a range like `3-7` and the following step
+    continues at `8` — the numbers never restart after a compression.
+    """
     if not executed_steps:
         steps_block = "(nothing executed yet)"
         resp_block = "(no worker responses yet)"
     else:
+        ranges = _orig_step_ranges(executed_steps)
         steps_lines = [
-            f"{i+1}. [{r.agent}] {r.step}"
+            f"{_fmt_step_range(ranges[i])}. [{r.agent}] {r.step}"
             for i, r in enumerate(executed_steps)
         ]
         steps_block = "\n".join(steps_lines)
         resp_lines = []
         for i, r in enumerate(executed_steps):
-            line = f"{i+1}. [{r.step}] -> worker: {r.worker_summary}"
+            line = f"{_fmt_step_range(ranges[i])}. [{r.step}] -> worker: {r.worker_summary}"
             if r.verdict_line:
                 line += f"; verifier: {r.verdict_line}"
             resp_lines.append(line)
         resp_block = "\n".join(resp_lines)
     return (
-        f"## Executed plan steps (most recent last):\n{steps_block}\n\n"
+        f"## Executed plan steps (most recent last; a range like `3-7` is one "
+        f"compressed span standing for those original steps):\n{steps_block}\n\n"
         f"## Worker agents' responses on executed plan items:\n{resp_block}"
     )
 
@@ -600,11 +640,16 @@ def _compress_span(executed_steps, start_idx, end_idx, goal):
     if all(getattr(r, "is_compressed", False) for r in span):
         return executed_steps, None
 
-    # Human-friendly 1-based step range for labeling.
-    a = start_idx + 1
-    b = end_idx  # inclusive 1-based end
+    # ORIGINAL 1-based step range for labeling: account for any earlier
+    # compressed records in this list that each stand for multiple original
+    # steps (so the label reads e.g. 'Steps 8-10', not shrunken list positions).
+    ranges = _orig_step_ranges(executed_steps)
+    a = ranges[start_idx][0]
+    b = ranges[end_idx - 1][1]
+    n_orig = sum(getattr(r, "n_original", 1) or 1 for r in span)  # == b - a + 1
     archive_body = "\n\n".join(
-        _render_record_for_archive(a + j, r) for j, r in enumerate(span)
+        _render_record_for_archive(_fmt_step_range(ranges[start_idx + j]), r)
+        for j, r in enumerate(span)
     )
     archive_key, _ = CANVAS.framework_write_versioned(
         f"ARCHIVE::steps_{a}-{b}",
@@ -626,6 +671,7 @@ def _compress_span(executed_steps, start_idx, end_idx, goal):
         ),
         verdict_line="",
         is_compressed=True,
+        n_original=n_orig,
     )
     new_steps = executed_steps[:start_idx] + [compressed] + executed_steps[end_idx:]
     return new_steps, (a, b)
@@ -663,9 +709,12 @@ def _compression_opportunities(executed_steps):
     """List spans eligible for OPT-IN supervisor compression: spans whose
     closing report is a warning or fail (clean-pass spans are already
     auto-compressed and never appear here). Each opportunity is
-    (start_step_1based, end_step_1based, closing_verdict, judge_key)."""
+    (start_step, end_step, closing_verdict, judge_key), where start_step and
+    end_step are ORIGINAL 1-based step numbers (the same numbers shown in the
+    executed-steps history and accepted by `compress_history`)."""
     opps = []
     report_idxs = _report_boundary_indices(executed_steps)
+    ranges = _orig_step_ranges(executed_steps)
     prev = -1
     for ridx in report_idxs:
         closing = executed_steps[ridx]
@@ -674,8 +723,8 @@ def _compression_opportunities(executed_steps):
         has_uncompressed = any(not getattr(r, "is_compressed", False) for r in span)
         if span and has_uncompressed and verdict in ("warning", "fail"):
             opps.append((
-                prev + 2,            # 1-based first step of span
-                ridx,                # 1-based last step of span
+                ranges[prev + 1][0],   # ORIGINAL first step of span
+                ranges[ridx - 1][1],   # ORIGINAL last step of span
                 verdict,
                 getattr(closing, "judge_key", ""),
             ))
@@ -695,8 +744,10 @@ def _render_compression_advisory(executed_steps) -> str:
         "because their closing report did not cleanly pass. You MAY compress "
         "any of them with compress_history(start_step, end_step) to shrink the "
         "history — this is non-destructive (full detail is archived to canvas "
-        "and remains readable). Read the linked verifier feedback first if you "
-        "want to judge whether the span is still relevant.",
+        "and remains readable). The start/end numbers below are the same "
+        "original step numbers shown in the executed-steps history; pass a "
+        "range exactly as listed. Read the linked verifier feedback first if "
+        "you want to judge whether the span is still relevant.",
     ]
     for (a, b, verdict, judge_key) in opps:
         jk = f" (verifier feedback: '{judge_key}')" if judge_key else ""
@@ -711,13 +762,16 @@ def _render_compression_advisory(executed_steps) -> str:
 def compress_history(
     start_step: Annotated[
         int,
-        "1-based number of the FIRST executed step in the span to compress "
-        "(as shown in the 'Compression opportunities' advisory).",
+        "ORIGINAL 1-based number of the FIRST executed step in the span to "
+        "compress — exactly as shown in the executed-steps history and the "
+        "'Compression opportunities' advisory. If a step there is shown as a "
+        "range like `8-10` (an already-compressed span), use its first number.",
     ],
     end_step: Annotated[
         int,
-        "1-based number of the LAST executed step in the span to compress. "
-        "This must be the step just before the span's closing report.",
+        "ORIGINAL 1-based number of the LAST executed step in the span "
+        "(the step just before the span's closing report), as shown in the "
+        "history / advisory. For a range like `8-10`, use its last number.",
     ],
 ):
     """Compress a report-bounded span of executed steps that was offered in
@@ -727,23 +781,39 @@ def compress_history(
     and the span is replaced in the running history by one summary. Use it to
     shrink a long history once you've decided a span's verbose detail is no
     longer needed inline. You may compress a span even if its failure was not
-    resolved — nothing is lost, the detail stays on canvas."""
+    resolved — nothing is lost, the detail stays on canvas.
+
+    start_step/end_step are the SAME numbers shown in the history (a compressed
+    record already appears as a range like `3-7`); the span must begin and end
+    on those record boundaries — an already-compressed span cannot be split.
+    Prefer copying an exact range straight from the advisory."""
     steps = list(getattr(var, "WORKING_EXECUTED_STEPS", []))
     n = len(steps)
-    if start_step < 1 or end_step < 1 or start_step > end_step or end_step > n:
+    ranges = _orig_step_ranges(steps)
+    total = ranges[-1][1] if ranges else 0
+    if start_step < 1 or end_step < 1 or start_step > end_step or end_step > total:
         return (f"COMPRESS_FAILED: invalid span {start_step}-{end_step}. "
-                f"There are {n} executed steps; start_step<=end_step and both "
-                f"must be within 1..{n}.")
-    start_idx = start_step - 1
-    end_idx = end_step  # slice end is exclusive -> covers up to end_step
-    # The span must be report-bounded: the record immediately AFTER end_step
-    # must be a report (its closing fencepost), and the span itself must not
-    # contain an interior report.
-    if end_idx < n and not _is_report_record(steps[end_idx]):
-        return (f"COMPRESS_FAILED: step {end_step+1} (just after your span) is "
-                f"not a report. A compressible span must end immediately "
-                f"before its closing report. Use the exact ranges listed in "
+                f"There are {total} executed steps; need start_step<=end_step "
+                f"within 1..{total}.")
+    # Map ORIGINAL step numbers -> list indices. The span must begin on the
+    # first step of some record and end on the last step of some record (you
+    # cannot split a span that is already one compressed record).
+    start_idx = next((i for i, (sa, sb) in enumerate(ranges) if sa == start_step), None)
+    end_rec_idx = next((i for i, (sa, sb) in enumerate(ranges) if sb == end_step), None)
+    if start_idx is None or end_rec_idx is None or start_idx > end_rec_idx:
+        return (f"COMPRESS_FAILED: span {start_step}-{end_step} does not align "
+                f"with executed-step record boundaries (an already-compressed "
+                f"span cannot be split). Use one of the exact ranges shown in "
                 f"the Compression opportunities advisory.")
+    end_idx = end_rec_idx + 1  # slice end is exclusive -> covers up to end_step
+    # The span must be report-bounded: the record immediately AFTER it must be
+    # a report (its closing fencepost), and the span itself must not contain an
+    # interior report.
+    if end_idx < n and not _is_report_record(steps[end_idx]):
+        return (f"COMPRESS_FAILED: the step after your span is not a report. A "
+                f"compressible span must end immediately before its closing "
+                f"report. Use the exact ranges listed in the Compression "
+                f"opportunities advisory.")
     if any(_is_report_record(r) for r in steps[start_idx:end_idx]):
         return (f"COMPRESS_FAILED: span {start_step}-{end_step} contains a "
                 f"report record. Spans are bounded by reports and cannot "
@@ -878,7 +948,13 @@ def on_act_parse_error(exc: Exception) -> str:
 
 
 def print_stream(s):
-    if "messages" not in s:
+    # `s` is either a LangGraph stream chunk (a dict that may carry "messages")
+    # or a raw value to print (e.g. a worker's summary string, passed deliberately
+    # at the end of worker_agent_node). Distinguish by TYPE, not by
+    # `"messages" in s`: on a string the latter is a SUBSTRING test, so a summary
+    # containing the word "messages" would wrongly take the dict branch and crash
+    # on s["messages"].
+    if not isinstance(s, dict) or "messages" not in s:
         print("#################")
         if var.my_SAVE_DIALOGUE:
             with open(f"{var.my_WORKING_DIRECTORY}/his.txt", "a") as f:
@@ -1084,8 +1160,8 @@ The overall goal is: {state['inputs']}.
 ## Current plan (step 1 below will be executed next unless you edit it):
 {plan_block}
 
-Please inspect and extract related information from CANVAS, then update the
-plan with the plan-editing tools if needed, and return Proceed.
+Please inspect and extract related information from CANVAS, Do not trust inferred numbers, ask worker to run calculations to prove them!
+update the plan with the plan-editing tools if needed, and return Proceed.
 {_PLAN_EDIT_GUIDANCE}
 {_JUDGE_FEEDBACK_GUIDANCE}
 {_REPORT_QUANTITY_GUIDANCE}

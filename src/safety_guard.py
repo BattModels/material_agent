@@ -3077,6 +3077,25 @@ def _verify_optional_source_match(
             f"_verify_optional_source_match: value-match element idx={i} "
             f"value={v!r} ref={ref!r}"
         )
+        # Pointer parameter: the value IS its own source id (e.g.
+        # find_optimal_parameter_from_derived's `reference_ref`, which names WHICH
+        # upstream data point is the reference). Such a parameter does not claim
+        # that artifact's OUTPUT value, so matching the id against the numeric
+        # output is a category error. Just confirm the referenced artifact exists.
+        if isinstance(v, str) and isinstance(ref, str) and v == ref:
+            bare = ref.split(".", 1)[0]
+            if CANVAS.get_artifact(bare) is None:
+                label = f"{param_name}[{i}]" if is_list else param_name
+                _dbg(f"_verify_optional_source_match: pointer {label} -> missing ref")
+                return [ParamCheckResult(
+                    parameter_name=label, parameter_value=v,
+                    verdict="fail", rule_applied=VALUE_MATCH_SENTINEL,
+                    source_result_id=ref,
+                    reasoning=f"Referenced artifact '{ref}' does not exist in CANVAS.",
+                    category=IssueCategory.VALUE_MISMATCH_PARAM,
+                )], "fail", None
+            _dbg(f"_verify_optional_source_match: pointer param (value==ref {ref!r}) -> skip value-match")
+            continue
         ok, msg = CANVAS.verify_artifact(v, ref)
         _dbg(
             f"_verify_optional_source_match: verify_artifact -> ok={ok} "

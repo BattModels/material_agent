@@ -2482,7 +2482,7 @@ def write_QE_script_w_ASE(
               'restart_mode': restart_mode,
               'prefix': prefix,
               'pseudo_dir': "/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/all_lda_pbe_UPF",
-              'outdir': './out',
+              'outdir': f"./out-{filename[:-4]}",
               'disk_io': disk_io,
               'ibrav': ibrav,
               'ecutwfc': ecutwfc,
@@ -3347,7 +3347,7 @@ def generate_convergence_test(
               'restart_mode': args['restart_mode'],
               'prefix': args['prefix'],
               'pseudo_dir': "/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/all_lda_pbe_UPF",
-              'outdir': './out',
+              'outdir': f"./out-{new_file_name[:-4]}",
               'disk_io': args['disk_io'],
               'ibrav': args['ibrav'],
               'ecutwfc': args['ecutwfc'],
@@ -4304,7 +4304,7 @@ def find_optimal_parameter(
     1) If you think a higher-accuracy setting is valid, ask the supervisor to run it and then rerun the convergence test with the new reference.
     2) If you think the current reference is already at the extreme end of the parameter range and it's unlikely that a higher-accuracy setting will be valid, suggest the supervisor to try out something else.
     3) If you think the threshold is set too tight, retry with another threshold and justify your choice.
-    NEVER EVER determine the optimal parameter yourself! 
+    NEVER EVER determine the optimal parameter yourself! Do not trust inferred numbers, request to run calculations to prove them!
     """
 
     chosen = max(acceptable, key=lambda x: abs(x[1] - reference_param))
@@ -4720,7 +4720,7 @@ def find_optimal_parameter_from_derived(
     1) If you think a higher-accuracy setting is valid, ask the supervisor to run it and then rerun the convergence test with the new reference.
     2) If you think the current reference is already at the extreme end of the parameter range and it's unlikely that a higher-accuracy setting will be valid, suggest the supervisor to try out something else.
     3) If you think the threshold is set too tight, retry with another threshold and justify your choice.
-    NEVER EVER determine the optimal parameter yourself! """
+    NEVER EVER determine the optimal parameter yourself! Do not trust inferred numbers, request to run calculations to prove them!"""
 
     # Pick the acceptable point whose axis value is FARTHEST from the
     # reference axis value — i.e. the "cheapest" point that still
