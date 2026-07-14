@@ -102,12 +102,8 @@ DFT_TOOL_NAMES: List[str] = [
     "find_optimal_parameter",
     "find_optimal_parameter_from_derived",
     "generate_eos_test",
-    "read_energy_from_output",
     "get_convergence_suggestions",
     "analyze_BEEF_result",
-    "extract_numeric_from_tool_output",
-    "extract_text_from_tool_output",
-    "math_expression_tool",
     "generate_structured_report",
 ]
 HPC_TOOL_NAMES: List[str] = [
