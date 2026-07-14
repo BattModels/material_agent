@@ -454,8 +454,8 @@ You have a maximum of 1 hours to complete the entire study and make your final r
     is to ask your worker to search the the result ID, do not touch the plan, keep it as is.
     """
     
-    minimal_test_message_3 = """
-    do not do any literature search, just filter through the database and, in 3 round, enter 15 candidates into the experiment log, 5 per round.
+    minimal_test_message_33 = """
+    do not do any literature search, just filter through the database and, in 100 round, enter 200 candidates into the experiment log, 2 per round. ask your worker to return extremly over detialed responses, the longer the better.
     """
 
     revised_message_v6 = """
@@ -611,7 +611,7 @@ You have a maximum of 1 hours to complete the entire study and make your final r
         if not os.path.exists(db_file):
             initialize_database(db_file)
 
-    EXPLOG_MODE = "production"
+    EXPLOG_MODE = "test"  # "production" or "test"
     EXPLOG.init(Path(WORKING_DIRECTORY)/"vasp_calcs",
                 EXPLOG_MODE,
                 reject_if_failed_exists = True,
@@ -691,9 +691,13 @@ You have a maximum of 1 hours to complete the entire study and make your final r
 
         if overwrite:
             inputs = {
-                "inputs": f"{minimal_test_message_3}",
+                "inputs": f"{minimal_test_message_33}",
                 "plan": [],
                 "past_steps": [],
+                # Monotone; NOT len(past_steps), which compaction shrinks. Resumed
+                # runs from before this channel existed fall back to len(past_steps)
+                # in planNexe2.steps_completed_of().
+                "steps_completed": 0,
                 "draft_response": "",
                 "boss_feedback": "",
                 "response": "",

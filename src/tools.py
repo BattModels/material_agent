@@ -2343,10 +2343,20 @@ def write_report(
     
     outStr = CANVAS.write(report_name, report, False)
     if outStr == f"Key '{report_name}' already exists. Please choose a different key. If you want to overwrite the value, set the 'overwrite' flag to True.":
-        outStr = f"Report '{report_name}' already exists. Please choose a different name for the report. You should never overwirte a report."
-    else:
-        var.reportName = report_name
-        
+        # The name collided, so CANVAS refused the write and NO report was stored.
+        # Bail out here. This used to fall through and still register an artifact,
+        # handing back a Report_ID for a report that does not exist -- so the agent
+        # believed it had reported, while var.reportName stayed unset and the
+        # context compaction that a report is supposed to trigger silently never
+        # happened. Fail loudly instead.
+        return (
+            f"ERROR: no report was written. The name '{report_name}' is already taken, and "
+            f"reports are never overwritten. Call write_report again with a NEW, unique "
+            f"report_name (e.g. append the round number). Nothing has been recorded yet."
+        )
+
+    var.reportName = report_name
+
     id = CANVAS.register_tool_output(
         tool_name="write_report",
         args={
@@ -2358,7 +2368,10 @@ def write_report(
         parent_result_ids=ref_list,
         metadata={},
     )
-    
+    # Handed to worker_agent_node together with reportName so the compaction digest
+    # can cite the report's artifact id, not just its canvas key.
+    var.reportId = id
+
     return outStr + f"\nReport_ID: {id}. Please refer to this ID if you want to reference this report later or use the information in the report for further analysis or decision making."
 
 # @tool

@@ -13,7 +13,15 @@ TOKEN_USAGE = []
 TOTAL_TOKEN_USED = 0
 GPU_AVAILABLE = False
 path_to_data_directory = None
+
+# Set by the write_report tool on a SUCCESSFUL report write, and consumed once by
+# worker_agent_node at the top of the next turn, which uses them to compact the
+# steps that report covers into a one-line pointer (see src/past_steps.py).
+# Consume-and-clear, never read twice: these used to be cleared only inside the
+# compaction block, so reportName latched and every later turn believed a fresh
+# report had just landed.
 reportName = ""
+reportId = ""
 
 # HPC queue policy: if fewer than this many jobs are pending, tools recommend
 # submitting more ready work so the queue does not drain (agents decide).

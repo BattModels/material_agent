@@ -40,6 +40,22 @@ from src.prompt import dft_agent_prompt,hpc_agent_prompt,supervisor_prompt, oer_
 from src.disposition_messages import classify_wait_handback, format_supervisor_handback_directive
 from src.forgotten_jobs import find_forgotten_jobs
 from src.history_log import write_history
+from src.past_steps import (
+    HARD_TOKENS,
+    K_VERBATIM,
+    STEP_CHAR_CAP,
+    archive_records,
+    build_report_digest,
+    build_summary_digest,
+    count_leading_digests,
+    first_verbatim_index,
+    fold_digests,
+    is_digest,
+    plan_compaction,
+    render_past_steps,
+    should_request_report,
+    truncate_step_text,
+)
 from src import var
 from src.myCANVAS import CANVAS
 from src.live_visualizer import LiveVisualizer
@@ -47,6 +63,7 @@ from gnome_dreams_oer_screening.explog.explog import EXPLOG
 
 import json, hashlib, time
 from collections import defaultdict, deque
+from datetime import timedelta  # was only reaching us via `from src.tools import *`
 import traceback
 
 viz = LiveVisualizer(
@@ -187,7 +204,14 @@ class wokerResponse(BaseModel):
 class PlanExecute(TypedDict):
     inputs: str
     plan: List[myStep]
-    past_steps: List[myStep]
+    # past_steps is a BOUNDED ledger: [digest steps ...] + [last K_VERBATIM steps].
+    # It no longer grows with the run; see src/past_steps.py.
+    past_steps: List[myPastStep]
+    # Total steps EVER completed -- monotone, and deliberately NOT len(past_steps),
+    # which compaction shrinks. Drives the step_<N>_DAG.html filenames (which used
+    # to regress and overwrite each other after a compaction) and the absolute step
+    # numbering the supervisor sees.
+    steps_completed: int
     draft_response: str
     boss_feedback: str
     response: str
@@ -466,6 +490,31 @@ def print_stream(s, DAG=None):
     write_history("\n")
 
 
+def steps_completed_of(state) -> int:
+    """Monotone count of steps ever completed.
+
+    Falls back to len(past_steps) so a checkpoint written before this channel
+    existed resumes with the right step number instead of restarting at 0.
+    """
+    return state.get("steps_completed") or len(state["past_steps"])
+
+
+def render_history(state, *, with_timing: bool = True) -> str:
+    """The single rendering of past_steps, shared by the boss, supervisor and
+    worker prompts (it used to be four copy-pasted f-strings that could drift).
+
+    Numbering is ABSOLUTE, so after a compaction the supervisor still sees
+    "27." rather than a list that restarts at "1." and implies the study is
+    younger than it is.
+    """
+    steps = state["past_steps"]
+    return render_past_steps(
+        steps,
+        with_timing=with_timing,
+        start_index=first_verbatim_index(steps, steps_completed_of(state)),
+    )
+
+
 def boss_node(state, config, agent=None, name=None):
     # Parent RunnableConfig is injected by LangGraph (carries the checkpointer,
     # thread_id and this task's checkpoint namespace). Propagating it into
@@ -490,7 +539,7 @@ def boss_node(state, config, agent=None, name=None):
     # can't print state anymore because it now contains canvas and explog, and printing them will cause too much output
     # print(state)
 
-    old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step} [total time elapsed since project start: {str(step.timeStamp).split('.')[0]}, time spent on step {i+1}: {step.timeSpent}]" for i, step in enumerate(state["past_steps"]))
+    old_tasks_string = render_history(state)
     bossMessage = f"""
     The overall goal is:
     {state['inputs']}
@@ -572,7 +621,7 @@ def supervisor_chain_node(state, config, agent=None, name=None):
     plan_str = "\n".join(f"{i+1}. {step.step}" for i, step in enumerate(plan))
     # task_formatted = f"""For the following plan:
     # {plan_str}\n\nYou are tasked with executing step {1}, {task}."""
-    old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step} [total time elapsed since project start: {str(step.timeStamp).split('.')[0]}, time spent on step {i+1}: {step.timeSpent}]" for i, step in enumerate(state["past_steps"]))
+    old_tasks_string = render_history(state)
 
     current_boss_feedback = state["boss_feedback"].strip() # Remove leading/trailing whitespaces
     if current_boss_feedback == "":
@@ -654,6 +703,33 @@ def supervisor_chain_node(state, config, agent=None, name=None):
                 + "\n\n"
                 + format_supervisor_handback_directive(_hb_path, _hb_forgotten)
             )
+
+    # --- Context budget (SOFT watermark) --------------------------------------
+    # The step history used to grow ~666 tokens/step forever and was injected into
+    # every prompt. It is now bounded, and a report is the cheapest way to bound it:
+    # once the worker writes one, the steps it covers collapse to a one-line pointer
+    # at the report on CANVAS, at zero LLM cost.
+    #
+    # So when the history crosses SOFT, STEER -- ask the supervisor to plan a report
+    # step. It measures its OWN state["past_steps"], so no flag has to be carried
+    # over from the worker and there is no process-global to lose on resume.
+    #
+    # This is advisory: the worker may ignore it. The HARD watermark in
+    # worker_agent_node is the backstop that makes the bound unconditional.
+    if should_request_report(state["past_steps"]):
+        supervisorMessage += (
+            "\n\nCONTEXT BUDGET -- WRITE A REPORT NOW.\n"
+            "The record of completed steps is long enough that it is crowding the context "
+            "window of both you and your worker. The remedy is a report: once the worker "
+            "calls write_report, every step that report covers is replaced by a short "
+            "pointer to it on CANVAS, and the detail stays retrievable via read_my_canvas.\n"
+            "Add a step NOW instructing the worker to write an intermediate report covering "
+            "the work done SINCE THE LAST REPORT (not the whole study -- earlier work is "
+            "already captured in earlier reports), and pin required_tools=['write_report'] "
+            "on that step. Give the report a NEW, unique name; reports are never overwritten.\n"
+            "If you ignore this, the history will be compacted mechanically instead, which "
+            "produces a worse summary than one you commission deliberately."
+        )
 
     old_supervisorMessage = supervisorMessage
     sup_good = False
@@ -764,7 +840,107 @@ def supervisor_chain_node(state, config, agent=None, name=None):
     
     
 
-def worker_agent_node(state, config, agent=None, name=None):
+def _archive(records):
+    """Append evicted step text to WORKING_DIR/past_steps_archive.jsonl.
+
+    A plain file, deliberately NOT CANVAS: full_state_snapshot() deepcopies the
+    whole canvas after every tool call and checkpoints it with durability="sync",
+    so anything parked there is re-serialised thousands of times into a DB we
+    already prune at 30 GB. And the supervisor holds read_my_canvas -- a
+    canvas-resident archive would let it pull the evicted tokens straight back
+    into context and undo the compaction.
+    """
+    archive_records(f"{var.my_WORKING_DIRECTORY}/past_steps_archive.jsonl", records)
+
+
+def _summarize_evicted(summarizer, objective, evicted_text):
+    """The HARD-path summary: only reached when the agent ignored the SOFT nudge
+    and never wrote a report covering this work."""
+    prompt = f"""You are compacting the working memory of a long-running research agent.
+
+Here is the overall objective:
+{objective}
+
+Below are completed steps that are about to be dropped from the agent's context.
+No report covers them, so this summary is the ONLY thing that will survive.
+
+{evicted_text}
+
+Write a compact summary (at most ~250 words) that preserves what is NOT recoverable
+from the experiment log: the strategy and how it evolved, hypotheses formed and
+whether they were confirmed or rejected, literature findings, what was tried and
+FAILED, and any CANVAS keys or reference IDs worth revisiting. Do NOT restate
+per-candidate numbers (G(O), G(OH), overpotentials) -- those live in EXPLOG and are
+retrievable with query_explog. Output only the summary."""
+    response = summarizer.invoke(prompt)
+    content = response.content
+    if isinstance(content, list):  # Anthropic can return content blocks, not a str
+        content = "".join(
+            block.get("text", "") if isinstance(block, dict) else str(block)
+            for block in content
+        )
+    return str(content).strip()
+
+
+def _compact_ledger(ledger, *, steps_completed, report_written, report_name,
+                    report_id, summarizer, objective):
+    """Enforce  past_steps == [digests] + [last K verbatim steps].
+
+    Two ways in, and the difference is the whole point of the design:
+
+      * A report was just written -> FREE. The report is already on CANVAS with a
+        result id, so the evicted steps collapse to a one-line pointer at it. No
+        LLM call, no latency, nothing new that can fail.
+      * We are at/over HARD and no report covers this work -> pay for an LLM
+        summary. This is the backstop, and it only runs on the path where the
+        agent already declined to report.
+    """
+    plan = plan_compaction(ledger, k=K_VERBATIM, hard=HARD_TOKENS,
+                           report_written=report_written)
+    if not plan.should:
+        return ledger
+
+    evicted = ledger[plan.evict_lo:plan.evict_hi]
+    lo_abs = first_verbatim_index(ledger, steps_completed)
+    hi_abs = lo_abs + plan.n_evicted - 1
+
+    _archive([
+        {"kind": "evicted_step", "step": lo_abs + i, "agent": s.agent,
+         "timeStamp": str(s.timeStamp), "timeSpent": s.timeSpent, "text": s.step,
+         "reason": plan.reason}
+        for i, s in enumerate(evicted)
+    ])
+
+    if plan.reason == "report":
+        digest_text = build_report_digest(
+            report_name=report_name, report_id=report_id,
+            step_lo=lo_abs, step_hi=hi_abs,
+        )
+        print(f"Compacted steps {lo_abs}-{hi_abs} into a pointer at report '{report_name}'.")
+    else:
+        summary = _summarize_evicted(
+            summarizer, objective,
+            render_past_steps(evicted, with_timing=False, start_index=lo_abs),
+        )
+        digest_text = build_summary_digest(summary=summary, step_lo=lo_abs, step_hi=hi_abs)
+        print(f"HARD watermark hit: mechanically summarized steps {lo_abs}-{hi_abs}. "
+              f"(A report would have done this better, and for free.)")
+
+    # Not routed through print_stream: that expects a graph stream event, and its
+    # `"messages" not in s` guard is a substring test on a raw string.
+    print(digest_text)
+    write_history(digest_text + "\n")
+
+    # Keep the digest block itself bounded -- ~40 digests over a 500-step campaign.
+    digest_texts = fold_digests([s.step for s in ledger[:plan.evict_lo]] + [digest_text])
+    digests = [
+        myPastStep(step=t, agent="system", timeStamp=timedelta(seconds=0), timeSpent="0:00:00")
+        for t in digest_texts
+    ]
+    return digests + list(ledger[plan.evict_hi:])
+
+
+def worker_agent_node(state, config, agent=None, name=None, summarizer=None):
     # Parent RunnableConfig injected by LangGraph -> inner agent runs as a
     # checkpointed subgraph; every tool call gets a resumable checkpoint.
     inner_cfg = {**config, "recursion_limit": 1000}
@@ -789,9 +965,25 @@ def worker_agent_node(state, config, agent=None, name=None):
     # (Gate 2, Step 6). Re-derived from plan[0] every turn, so it survives resume;
     # defaults True when the supervisor omits it.
     var.enforce_queue_floor = getattr(task, "enforce_queue_floor", True)
+
+    # This step's absolute number. Derived from the monotone steps_completed
+    # channel, NOT len(past_steps) -- compaction shrinks the ledger, which used to
+    # make the step_<N>_DAG.html filenames march backwards and overwrite each other.
+    step_no = steps_completed_of(state) + 1
+
+    # Consume-and-clear the report flag ONCE, at the top. var.reportName is set by
+    # the write_report tool and used to be cleared only inside the compaction block,
+    # so it LATCHED: once a report was written it stayed truthy, and every later turn
+    # would think a fresh report had just landed.
+    report_written = bool(getattr(var, "reportName", ""))
+    report_name = var.reportName if report_written else ""
+    report_id = getattr(var, "reportId", "") if report_written else ""
+    var.reportName = ""
+    var.reportId = ""
+
 #     task_formatted = f"""For the following plan:
 # {plan_str}\n\nYou are tasked with executing step {1}, {task}."""
-    old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step} [total time elapsed since project start: {str(step.timeStamp).split('.')[0]}, time spent on step {i+1}: {step.timeSpent}]" for i, step in enumerate(state["past_steps"]))
+    old_tasks_string = render_history(state)
     task_formatted = f"""
 Here are what has been done so far:
 {old_tasks_string}
@@ -828,7 +1020,7 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
         ):
             # set agent_response to be the value of the first key of the dictionary
             agent_response = next(iter(agent_response.values()))
-            print_stream(agent_response, DAG=len(state["past_steps"])+1)
+            print_stream(agent_response, DAG=step_no)
         
         # agent_response = agent.invoke(
         #     {"messages": [("user", task_formatted)]},  {"configurable": {"thread_id": "1"}}
@@ -854,7 +1046,7 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
                 # LLM sanity check
                 # if LLM_check_passed:
                 #     workerGood = True
-                DAG_title = f"step_{len(state['past_steps'])+1}_DAG"
+                DAG_title = f"step_{step_no}_DAG"
                 CANVAS.gen_DAG(
                     filename=f"{var.my_WORKING_DIRECTORY}/{DAG_title}.html",
                     title=DAG_title,
@@ -870,75 +1062,68 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
         
     timeElapsed_tmp = time.time() - var.startTime
     timeElapsed = timedelta(seconds=timeElapsed_tmp)
-    # state["past_steps"].append((task, agent_response["messages"][-1].content))
+
     if len(state["past_steps"]) > 0:
         prevTimeStamp = state["past_steps"][-1].timeStamp
     else:
         prevTimeStamp = timedelta(seconds=0)
-    state["past_steps"].append(
-        myPastStep(
-            step=structured_response.summary, 
-            agent=name, 
-            timeStamp=timeElapsed,
-            timeSpent=str(timeElapsed-prevTimeStamp).split(".")[0]
-            )
+
+    # Cap this step's text on the way in. The median step is ~1,500 chars, but the
+    # worst one ever observed was 33,209 (~8,300 tokens) -- a single step able to
+    # eat a third of the history budget. The full text goes to the off-context
+    # archive, so nothing is actually lost.
+    step_text, was_truncated = truncate_step_text(
+        structured_response.summary, STEP_CHAR_CAP, archive_ref=f"step {step_no}"
+    )
+    if was_truncated:
+        _archive(
+            [{"kind": "step_full", "step": step_no, "agent": name,
+              "text": structured_response.summary}]
         )
-    
+
+    # Build a NEW list -- never mutate state["past_steps"] in place. LangGraph hands
+    # us the channel's own value; mutating it aliases the checkpointed list and makes
+    # time travel unsound.
+    ledger = list(state["past_steps"]) + [
+        myPastStep(
+            step=step_text,
+            agent=name,
+            timeStamp=timeElapsed,
+            timeSpent=str(timeElapsed - prevTimeStamp).split(".")[0],
+        )
+    ]
+
     print_stream(structured_response.summary)
-    
-    if var.reportName:
-        old_tasks_string = "\n".join(f"{i+1}. {step.agent}: {step.step}" for i, step in enumerate(state["past_steps"]))
-        task_formatted = f"""
-Here is the overall objective:
-{state["inputs"]}
 
-During the end of the last step, you just: 
-{structured_response.summary}
+    # --- Compaction -----------------------------------------------------------
+    # Wrapped whole: if the summariser 529s or the archive write fails, log it and
+    # carry on with an UNCOMPACTED ledger. The HARD watermark will simply try again
+    # next turn. A transient API error must never kill a 30-day campaign.
+    try:
+        ledger = _compact_ledger(
+            ledger,
+            steps_completed=step_no,
+            report_written=report_written,
+            report_name=report_name,
+            report_id=report_id,
+            summarizer=summarizer,
+            objective=state["inputs"],
+        )
+    except Exception:
+        print("Compaction failed; continuing with the uncompacted history.")
+        print(traceback.format_exc())
+        write_history("Compaction failed; continuing with the uncompacted history.\n")
 
-and generated the following report:
-{CANVAS.canvas[var.reportName]}
-
-Now, please summarize previous steps that has been done so far:
-{old_tasks_string}
-
-Please only do this task! Do not do anything else! The summarized old steps will be noted down by the system, and you don't have to worry about that.
-"""
-
-        print(task_formatted)
-        print(f"Summarize Agent is processing!!!!!")
-        write_history(task_formatted + "\n" + f"Summarize Agent is processing!!!!!\n")
-
-        config = var.OTHER_GLOBAL_VARIABLES
-        workerllm = ChatAnthropic(model="claude-sonnet-4-5-20250929", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-        response = workerllm.invoke(task_formatted)
-        
-        timeElapsed_tmp = time.time() - var.startTime
-        timeElapsed = timedelta(seconds=timeElapsed_tmp)
-        
-        state["past_steps"] = []
-        state["past_steps"].append(
-            myPastStep(
-                step= f"Summary of all previous steps: {response.content}\nDetailed previous steps can be found in CANVAS with key '{var.reportName}_compressed_steps'", 
-                agent=name, 
-                timeStamp=timeElapsed,
-                timeSpent=str(timeElapsed).split(".")[0]
-                )
-            )
-        CANVAS.canvas[f"{var.reportName}_compressed_steps"] = old_tasks_string
-        
-        print_stream(f"Summary of all previous steps: {response.content}")
-
-        var.reportName = ""
-        
     return {
-        "past_steps": state["past_steps"], 
+        "past_steps": ledger,
+        "steps_completed": step_no,
         "canvas":CANVAS.canvas,
          "artifacts": CANVAS.result_registry,
         "explog_candidates": EXPLOG.relational_frame.candidates.df,
         "explog_processes": EXPLOG.relational_frame.processes.df,
         "time": timeElapsed_tmp,
     }
-    
+
 def whos_next(state):
     return state["next"]
     
@@ -954,6 +1139,16 @@ def create_planning_graph(config: dict) -> StateGraph:
     # workerllm = ChatAnthropic(model="claude-haiku-4-5-20251001", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0, tool_choice="auto")
     llm = ChatAnthropic(model="claude-sonnet-4-5-20250929", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     workerllm = ChatAnthropic(model="claude-sonnet-4-5-20250929", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0, tool_choice="auto")
+    # Built ONCE and injected into worker_agent_node, rather than constructed inline
+    # per compaction as it used to be. It now runs on the HARD-watermark path (the
+    # agent ignored the report nudge), so it needs a retry and a bounded output --
+    # a transient 529 here must not take down a 30-day campaign.
+    summarizer_llm = ChatAnthropic(
+        model="claude-sonnet-4-5-20250929",
+        api_key=config['ANTHROPIC_API_KEY'],
+        temperature=0.0,
+        max_tokens=1500,
+    ).with_retry(stop_after_attempt=3)
     # workerllm = ChatAnthropic(model="claude-3-5-sonnet-20241022", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # llm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
     # workerllm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"], model_kwargs={'parallel_tool_calls': False})
@@ -990,7 +1185,12 @@ def create_planning_graph(config: dict) -> StateGraph:
     
 
 
-    boss_tools = []
+    # The boss used to have NO tools, which was fine while the full step history sat
+    # in its prompt. Now that older steps are compacted to digests, a tool-less boss
+    # would be reviewing the final answer against pointers -- gutting exactly the gate
+    # that is supposed to catch claims unsupported by data. Give it the two read paths
+    # the digests point at. It runs once per review, so this is cheap.
+    boss_tools = [read_my_canvas, query_explog]
     boss_agent = create_agent(
         model=llm, # <-- Same as supervisor
         tools=boss_tools,
@@ -1004,6 +1204,10 @@ def create_planning_graph(config: dict) -> StateGraph:
         inspect_my_canvas,
         read_my_canvas,
         query_explog,
+        # Added alongside compaction: once older steps collapse to digests, the
+        # supervisor can no longer see the reference IDs they mentioned. This is how
+        # it finds one again (by content) instead of guessing.
+        search_artifacts,
         ]
     
     supervisor_agent = create_agent(
@@ -1086,7 +1290,7 @@ def create_planning_graph(config: dict) -> StateGraph:
         response_format=ToolStrategy(wokerResponse),
         middleware=[StateSyncMiddleware(), DisableParallelToolCallsMiddleware(), prevent_redundant_polling, handle_tool_errors]
     )
-    oer_node = functools.partial(worker_agent_node, agent=oer_agent, name="OER_Agent")
+    oer_node = functools.partial(worker_agent_node, agent=oer_agent, name="OER_Agent", summarizer=summarizer_llm)
 
     ### HPC Agent
     # hpc_tools = [read_script, submit_and_monitor_job, read_energy_from_output]
