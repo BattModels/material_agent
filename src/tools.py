@@ -325,6 +325,33 @@ def inspect_my_canvas():
 @tool
 def read_my_canvas(key: Annotated[str, "Exact key to read. Returns that exact key's content"]):
     """Read a value from the working canvas."""
+    # --- read-once-per-turn guard ---
+    # Agents are instructed they may read each key at most ONCE per turn, but
+    # nothing used to enforce it. A model that slipped into a degenerate
+    # repetition loop could re-read the same key unboundedly, re-appending its
+    # (often large) content to context every step until the recursion_limit
+    # (1000) was hit — burning millions of tokens (see the read_my_canvas
+    # 'Worker_available_tools' loop). We track keys already read this turn in
+    # var.READ_KEYS_THIS_TURN (reset at the top of every supervisor / worker
+    # node) and, on a repeat, refuse to re-serve the content and nudge the
+    # agent to stop reading and take its next action.
+    seen = getattr(var, "READ_KEYS_THIS_TURN", None)
+    if seen is None:
+        seen = {}
+        var.READ_KEYS_THIS_TURN = seen
+    prior = seen.get(key, 0)
+    seen[key] = prior + 1
+    if prior:
+        _dbg(f"[read-once guard] key={key!r} already read {prior} time(s) this "
+             f"turn -> refusing to re-serve; nudging agent to proceed.")
+        return (
+            f"You have ALREADY read the key '{key}' earlier in THIS turn "
+            f"(this is read #{prior + 1}). Its content is already above in the "
+            f"conversation and has not changed, so it will not be served "
+            f"again. If you've already found information you need, stop reading "
+            f"and proceed to your next action. If you still want to find more information "
+            f"inspect_my_canvas and read a key you haven't read before."
+        )
     return CANVAS.read(key)
 
 

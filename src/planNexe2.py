@@ -1078,7 +1078,87 @@ verdict alone.
 """
 
 
-def supervisor_chain_node(state, agent, name):
+# =====================================================================
+# Structured-output retry (needed once adaptive thinking is on)
+#
+# create_agent's factory forces tool_choice="any" on every model call whenever a
+# ToolStrategy response_format is set. Anthropic rejects forced tool use while
+# thinking is enabled, so langchain-anthropic (>=1.4.2) DROPS that forced
+# tool_choice and warns. Consequence: the model is no longer *compelled* to emit
+# the structured-output tool call, so an agent turn can legitimately end with
+# plain text and no `structured_response` — which would KeyError at the call
+# sites below.
+#
+# On a miss we must NOT re-run the task from scratch: the worker's tools have
+# already executed (files written, jobs submitted), and replaying them would
+# duplicate that work. Instead we replay the conversation the agent just
+# produced, append a nudge, and ask ONLY for the structured response. The tool
+# results already in the history are reused as-is.
+# =====================================================================
+
+_SUPERVISOR_STRUCTURED_NUDGE = (
+    "You ended your turn without returning the required structured response. "
+    "Do NOT redo, repeat, or re-read anything — every tool call above has "
+    "already executed and its result is in this conversation. Respond NOW with "
+    "the structured Act: set `action` to Proceed (to execute step 1 of the "
+    "plan) or Response (only if the entire objective is complete). Do not call "
+    "any other tool."
+)
+
+_WORKER_STRUCTURED_NUDGE = (
+    "You ended your turn without returning the required structured response. "
+    "Do NOT redo or repeat any work — every tool call above has already "
+    "executed, and re-running it would duplicate files or resubmit jobs. "
+    "Respond NOW with the structured worker response: set `success` to whether "
+    "you completed the task, and `summary` to a concise description of what you "
+    "did. Do not call any other tool."
+)
+
+
+def _stream_agent_structured(agent, input_messages, config, nudge, name="", max_retries=2):
+    """Stream `agent`, print each chunk, and return its `structured_response`.
+
+    If the agent finishes without producing one (possible whenever thinking is
+    enabled — see the note above), replay the messages it just emitted, append
+    `nudge`, and ask again for the structured output only. Raises RuntimeError if
+    it still refuses after `max_retries` nudges.
+    """
+    messages = list(input_messages)
+    for attempt in range(max_retries + 1):
+        produced = []      # messages the agent emitted during THIS attempt
+        structured = None
+        for chunk in agent.stream({"messages": messages}, config):
+            # each chunk is {node_name: state_update}; keep the existing logging
+            update = next(iter(chunk.values()))
+            print_stream(update)
+            if isinstance(update, dict):
+                produced.extend(update.get("messages") or [])
+                if update.get("structured_response") is not None:
+                    structured = update["structured_response"]
+
+        if structured is not None:
+            if attempt:
+                _dbg(f"[structured-retry {name}] recovered on attempt {attempt + 1}.")
+            return structured
+
+        if attempt == max_retries:
+            break
+
+        _dbg(f"[structured-retry {name}] attempt {attempt + 1}/{max_retries + 1}: agent "
+             f"ended WITHOUT a structured_response (expected when thinking is on — the "
+             f"forced tool_choice is dropped). Replaying {len(produced)} message(s) + "
+             f"nudge; NOT re-running the task.")
+        # Replay what already happened, then ask for the structured output only.
+        messages = list(input_messages) + list(produced) + [("user", nudge)]
+
+    raise RuntimeError(
+        f"Agent [{name}] returned no structured response after {max_retries + 1} "
+        f"attempts. With thinking enabled the structured-output tool call is not "
+        f"guaranteed; disable thinking for this agent or strengthen the nudge."
+    )
+
+
+def supervisor_chain_node(state, agent, name): 
     # CANVAS.snap()
     # read "status.txt" in the working directory
     with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
@@ -1112,6 +1192,10 @@ def supervisor_chain_node(state, agent, name):
     # mutates (point 5). Same bridge pattern as WORKING_PLAN.
     var.WORKING_EXECUTED_STEPS = list(executed_steps)
     var.OVERALL_GOAL = state.get("inputs", "")
+    # Reset the per-turn read-once guard (see read_my_canvas): each key may be
+    # read at most once per supervisor turn, and the counter must start fresh
+    # so a new turn can re-read keys that changed since last turn.
+    var.READ_KEYS_THIS_TURN = {}
 
     history_block = _render_executed_section(executed_steps)
     plan_block = _render_plan_for_tool(plan)
@@ -1144,10 +1228,11 @@ There is no plan yet. Please inspect and extract related information from
 CANVAS, then build the initial plan by calling insert_plan_steps(at=1,
 steps=[...]) and then return Proceed.
 
-Important: you are a coordinator, not a domain expert. Before adding any
-execution steps to the plan (input file generation, job submission,
+Important: you are a coordinator, not a domain expert. If you haven't yet consult with the DFT agent,
+Before adding any execution steps to the plan (input file generation, job submission,
 calculations), consult with the DFT agent: what are the major calculations
-this objective requires? What known caveats apply to this system class?
+this objective requires? What known caveats apply to this system class? If you've already consulted with the DFT agent and have nothing further to discuss,
+you may proceed to build the plan:
 {_PLAN_EDIT_GUIDANCE}
 {_REPORT_QUANTITY_GUIDANCE}
 """
@@ -1160,8 +1245,8 @@ The overall goal is: {state['inputs']}.
 ## Current plan (step 1 below will be executed next unless you edit it):
 {plan_block}
 
-Please inspect and extract related information from CANVAS, Do not trust inferred numbers, ask worker to run calculations to prove them!
-update the plan with the plan-editing tools if needed, and return Proceed.
+Please inspect and extract related information from CANVAS. You can only read the same key exactly ONCE, so pay attention to the content. Do not trust inferred numbers, ask worker to run calculations to prove them!
+Once you've read all info you need, update the plan with the plan-editing tools if needed, and return Proceed.
 {_PLAN_EDIT_GUIDANCE}
 {_JUDGE_FEEDBACK_GUIDANCE}
 {_REPORT_QUANTITY_GUIDANCE}
@@ -1177,15 +1262,14 @@ need to update its list of required quantities:
 If you do, use modify_plan_steps(at=1, count=1, steps=[...]) with the
 corrected required_quantities.
 """
-    for agent_response in agent.stream(
-        {"messages": [("user", supervisorMessage)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
-    ):
-        # set agent_response to be the value of the first key of the dictionary
-        agent_response = next(iter(agent_response.values()))
-        print_stream(agent_response)
-
     # CANVAS.snap_save()
-    agent_response = agent_response['structured_response']
+    agent_response = _stream_agent_structured(
+        agent,
+        [("user", supervisorMessage)],
+        {"configurable": {"thread_id": "1"}, "recursion_limit": 1000},
+        nudge=_SUPERVISOR_STRUCTURED_NUDGE,
+        name=name,
+    )
 
     # The plan-editing tools (insert/modify/delete) have already validated
     # every step they accepted and mutated var.WORKING_PLAN in place, so by
@@ -1218,12 +1302,13 @@ corrected required_quantities.
             "schedule at least one step and then Proceed, or return Response "
             "if the whole objective is already complete."
         )
-        for agent_response in agent.stream(
-            {"messages": [("user", retry_msg)]}, {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
-        ):
-            agent_response = next(iter(agent_response.values()))
-            print_stream(agent_response)
-        agent_response = agent_response['structured_response']
+        agent_response = _stream_agent_structured(
+            agent,
+            [("user", retry_msg)],
+            {"configurable": {"thread_id": "1"}, "recursion_limit": 1000},
+            nudge=_SUPERVISOR_STRUCTURED_NUDGE,
+            name=name,
+        )
         new_plan = list(getattr(var, "WORKING_PLAN", []))
         if isinstance(agent_response.action, Response):
             _dbg("[SUPERVISOR] after empty-plan retry: Response -> FINISH.")
@@ -1377,6 +1462,9 @@ def worker_agent_node(state, agent, name):
     # Reset the per-round progress-note backstop overrides (Q1): an override
     # confirmed in one round must not grant a free pass in the next.
     var.NOTE_BACKSTOP_OVERRIDES = {}
+    # Reset the per-turn read-once guard (see read_my_canvas) so this worker
+    # round starts with a clean slate of already-read keys.
+    var.READ_KEYS_THIS_TURN = {}
     _dbg(f"[WORKER {name}] round start: reset var.reportName (PT3 full toolset) "
          f"and var.NOTE_BACKSTOP_OVERRIDES (PT2a). plan has {len(plan)} step(s).")
     plan_str = "\n".join(f"{i+1}. {step.step}" for i, step in enumerate(plan))
@@ -1436,17 +1524,13 @@ and do NOT substitute your own judgement for a tool's output.
     workerGood_patient = 2
     while not workerGood and workerGood_patient > 0:
         workerGood_patient -= 1
-        for agent_response in agent.stream(
-            {"messages": [("user", task_formatted)]},  {"configurable": {"thread_id": "1"}, "recursion_limit": 1000}
-        ):
-            # set agent_response to be the value of the first key of the dictionary
-            agent_response = next(iter(agent_response.values()))
-            print_stream(agent_response)
-        
-        # agent_response = agent.invoke(
-        #     {"messages": [("user", task_formatted)]},  {"configurable": {"thread_id": "1"}}
-        # )
-        structured_response = agent_response['structured_response']
+        structured_response = _stream_agent_structured(
+            agent,
+            [("user", task_formatted)],
+            {"configurable": {"thread_id": "1"}, "recursion_limit": 1000},
+            nudge=_WORKER_STRUCTURED_NUDGE,
+            name=name,
+        )
         if not structured_response.success:
             print(f"worker {name} didn't finish")
             workerGood = True # if the worker agent fails, we want the supervisor to know and make a new plan.
@@ -1802,12 +1886,40 @@ def create_planning_graph(config: dict) -> StateGraph:
     # Define the model
     # llm = ChatAnthropic(model="claude-opus-4-7", api_key=config['ANTHROPIC_API_KEY'])
     # workerllm = ChatAnthropic(model="claude-opus-4-7", api_key=config['ANTHROPIC_API_KEY'], tool_choice="auto")
+    # max_tokens is a per-response ceiling on total output (thinking + visible
+    # text/tool call), NOT a per-conversation budget. ChatAnthropic otherwise
+    # defaults to 1024, which is far too small once adaptive thinking shares the
+    # budget with a large tool-call / structured Act output -> mid-response
+    # truncation (stop_reason="max_tokens") and structured-output parse
+    # failures. 16384 clears the largest observed single-turn output (~3.2k) with
+    # ample thinking headroom. Watch response.stop_reason == "max_tokens" as the
+    # signal to raise it.
+    # Adaptive thinking (opus-4.x): the model decides when and how much to reason
+    # and interleaves thinking between tool calls. This is the required form on
+    # opus-4.8 — the older {"type":"enabled","budget_tokens":N} is rejected with a
+    # 400. Reasoning tokens are the deeper fix for the degenerate tool-repetition
+    # loops (the model deliberates instead of reflexively re-emitting the same
+    # call); the read-once guard in read_my_canvas is the hard backstop.
+    #
+    # REQUIRES langchain-anthropic >= 1.4.2. create_agent's factory forces
+    # tool_choice="any" on every call (ToolStrategy), which Anthropic rejects
+    # alongside thinking; >=1.4.2's bind_tools detects thinking of type "enabled"
+    # OR "adaptive" and drops the forced tool_choice (1.3.5-1.4.0 only matched
+    # "enabled", so adaptive would still 400). Because the forcing is dropped, the
+    # structured-output tool call is no longer guaranteed — _stream_agent_structured
+    # catches a missing structured_response and nudges the model to emit it.
+    #
+    # No temperature may be set alongside thinking, so this stays on the opus
+    # branch only (the else branch sets temperature=0.0). Thinking shares the
+    # max_tokens budget with the visible output. display defaults to "omitted"
+    # (thinking happens and is billed, but its text is not returned); add
+    # display="summarized" to surface the reasoning in his.txt for debugging.
     if 'opus' in config['ANTHROPIC_MODEL']:
-        llm = ChatAnthropic(model=config['ANTHROPIC_MODEL'], api_key=config['ANTHROPIC_API_KEY'])
-        workerllm = ChatAnthropic(model=config['ANTHROPIC_MODEL'], api_key=config['ANTHROPIC_API_KEY'], tool_choice="auto")
+        llm = ChatAnthropic(model=config['ANTHROPIC_MODEL'], api_key=config['ANTHROPIC_API_KEY'], max_tokens=12000, thinking={"type": "adaptive"})
+        workerllm = ChatAnthropic(model=config['ANTHROPIC_MODEL'], api_key=config['ANTHROPIC_API_KEY'], max_tokens=12000, thinking={"type": "adaptive"}, tool_choice="auto")
     else:
-        llm = ChatAnthropic(model=config['ANTHROPIC_MODEL'], api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-        workerllm = ChatAnthropic(model=config['ANTHROPIC_MODEL'], api_key=config['ANTHROPIC_API_KEY'],temperature=0.0, tool_choice="auto")
+        llm = ChatAnthropic(model=config['ANTHROPIC_MODEL'], api_key=config['ANTHROPIC_API_KEY'], max_tokens=12000, temperature=0.0)
+        workerllm = ChatAnthropic(model=config['ANTHROPIC_MODEL'], api_key=config['ANTHROPIC_API_KEY'], max_tokens=12000, temperature=0.0, tool_choice="auto")
     # workerllm = ChatAnthropic(model="claude-3-5-sonnet-20241022", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # llm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"])
     # workerllm = AzureChatOpenAI(model="gpt-4o", api_version="2024-08-01-preview", api_key=config["OpenAI_API_KEY"], azure_endpoint = config["OpenAI_BASE_URL"], model_kwargs={'parallel_tool_calls': False})

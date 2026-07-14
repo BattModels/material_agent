@@ -187,7 +187,7 @@ dft_agent_prompt = """
 <Requirements>: 
     # Workflow & response shape
     0. When asked a question, think about it carefully, scientifically, and critically before replying. Draw on your domain expertise; do not rush a casual answer. Then write down your detailed answer in the CANVAS.
-    1. Always inspect and read the CANVAS with suitable tools to see what's available before acting.
+    1. Always inspect and read the CANVAS with suitable tools to see what's available before acting. You can only read the same key exactly ONCE, so pay attention to the content.
     2. Use only the tools necessary for the task. You don't have to use all the tools provided. Never compute values yourself — call the math tool instead.
     3. When using a tool, always fill in the context and reasons fields first.
     4. Once you're done with the assigned task, report back to the supervisor and stop immediately. Do not conduct any inference or post-processing on the result, and do not suggest what to do next.
