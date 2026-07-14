@@ -1899,7 +1899,7 @@ def init_structure_data_for_none_adsorption_calculations(
     saveDir = os.path.join(WORKING_DIRECTORY, f"{element}-{lattice}.xyz")
     write(saveDir, atoms)
     result_id = CANVAS.register_tool_output(
-        tool_name="init_structure_data",
+        tool_name="init_structure_data_for_none_adsorption_calculations",
         args=_args,
         value=f"{element}-{lattice}.xyz",
         description=_desc,
