@@ -906,7 +906,7 @@ Output only the JSON object, nothing else."""
 
 
 def _compact_ledger(ledger, *, report_written, report_name,
-                    report_id, summarizer, objective):
+                    report_id, report_gist, summarizer, objective):
     """Enforce  past_steps == [digests] + [last K verbatim steps].
 
     Two ways in, and the difference is the whole point of the design:
@@ -943,7 +943,7 @@ def _compact_ledger(ledger, *, report_written, report_name,
         raw_steps_key = _stash_on_canvas(f"{report_name}__steps", raw_steps)
         digest_text = build_report_digest(
             report_name=report_name, report_id=report_id,
-            step_lo=lo_abs, step_hi=hi_abs, raw_steps_key=raw_steps_key,
+            step_lo=lo_abs, step_hi=hi_abs, gist=report_gist, raw_steps_key=raw_steps_key,
         )
         print(f"Compacted steps {lo_abs}-{hi_abs} into a pointer at report '{report_name}' "
               f"(raw steps on CANVAS: '{raw_steps_key}').")
@@ -1131,8 +1131,10 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
     report_written = bool(getattr(var, "reportName", ""))
     report_name = var.reportName if report_written else ""
     report_id = getattr(var, "reportId", "") if report_written else ""
+    report_gist = getattr(var, "reportGist", "") if report_written else ""
     var.reportName = ""
     var.reportId = ""
+    var.reportGist = ""
 
     # --- Compaction -----------------------------------------------------------
     # Wrapped whole: if the summariser 529s or the archive write fails, log it and
@@ -1144,6 +1146,7 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
             report_written=report_written,
             report_name=report_name,
             report_id=report_id,
+            report_gist=report_gist,
             summarizer=summarizer,
             objective=state["inputs"],
         )

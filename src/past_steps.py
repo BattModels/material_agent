@@ -330,18 +330,25 @@ def build_report_digest(
     report_id: str | None,
     step_lo: int,
     step_hi: int,
+    gist: str | None = None,
     raw_steps_key: str | None = None,
 ) -> str:
-    """The free, LLM-less digest: a pointer at a report already on CANVAS."""
+    """The free, LLM-less digest: a pointer at a report already on CANVAS.
+
+    `gist` is the worker's own one-sentence summary of the report (from the
+    write_report tool); it becomes the human-readable body of the digest, so the
+    compacted steps still say WHAT was accomplished at a glance, not just where to
+    look."""
     ref = f" (ID={report_id})" if report_id else ""
+    lead = f" {gist.strip()}" if gist and gist.strip() else ""
     raw = (
-        f" The raw step text is on CANVAS too: read_my_canvas(key='{raw_steps_key}')."
+        f" Raw step text: read_my_canvas(key='{raw_steps_key}')."
         if raw_steps_key else ""
     )
     return (
-        f"{_digest_head(step_lo, step_hi)} reviewed and distilled into report "
-        f"'{report_name}'{ref} on CANVAS. Read it with read_my_canvas(key='{report_name}') "
-        f"for their detail.{raw}"
+        f"{_digest_head(step_lo, step_hi)}{lead} Distilled into report "
+        f"'{report_name}'{ref} on CANVAS -- read_my_canvas(key='{report_name}') for "
+        f"full detail.{raw}"
     )
 
 

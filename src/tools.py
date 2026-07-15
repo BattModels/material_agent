@@ -2332,7 +2332,8 @@ def write_my_canvas(key: Annotated[str, "key"],
 def write_report(
     report: Annotated[str, "Intermediate/final report content in markdown format."],
     report_name: Annotated[str, "Name of the report."],
-    ref_list: Annotated[List[str], "Please provide the list of all reference IDs that you used when writing this report"], 
+    report_gist: Annotated[str, "A short one-sentence, plain-language summary of what this report covers and concludes (e.g. 'Screened 12 Ru/Ir oxides; IrO2 rutile is the most promising candidate so far, Co3O4 abandoned'). Used verbatim to label the compacted step history once these steps roll out of context, so make it self-contained and specific."],
+    ref_list: Annotated[List[str], "Please provide the list of all reference IDs that you used when writing this report"],
     ):
     """Note down your report on CANVAS and let the supervisor know you've generated a report"""
     
@@ -2362,6 +2363,7 @@ def write_report(
         args={
             "report": report,
             "report_name": report_name,
+            "report_gist": report_gist,
         },
         value=report,
         description=f"Writing report to canvas with key '{report_name}'",
@@ -2369,8 +2371,10 @@ def write_report(
         metadata={},
     )
     # Handed to worker_agent_node together with reportName so the compaction digest
-    # can cite the report's artifact id, not just its canvas key.
+    # can cite the report's artifact id and label the compacted steps with the
+    # worker's own one-line gist, not just the canvas key.
     var.reportId = id
+    var.reportGist = report_gist
 
     return outStr + f"\nReport_ID: {id}. Please refer to this ID if you want to reference this report later or use the information in the report for further analysis or decision making."
 
