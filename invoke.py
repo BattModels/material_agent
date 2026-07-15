@@ -455,7 +455,7 @@ You have a maximum of 1 hours to complete the entire study and make your final r
     """
     
     minimal_test_message_33 = """
-    do not do any literature search, just filter through the database and, in 100 round, enter 200 candidates into the experiment log, 2 per round. ask your worker to return extremly over detialed responses, the longer the better.
+    do not do any literature search, just filter through the database and, in 50 round, enter 100 candidates into the experiment log, 2 per round. ask your worker to return extremly over detialed responses, the longer the better. Do not discuss with your worker about anything. Create a plan consist of exactly 50 steps, 1 round per step. You must not merge rounds into less steps. 
     """
 
     revised_message_v6 = """

@@ -41,11 +41,10 @@ keeps zero serialization risk.
 """
 from __future__ import annotations
 
-import json
 import math
 import re
 from dataclasses import dataclass
-from typing import Any, Iterable, Sequence
+from typing import Any, Sequence
 
 # --- Tuning knobs -------------------------------------------------------------
 # Sized against the measured distribution (median step 1,481 chars, mean 2,813,
@@ -60,8 +59,8 @@ from typing import Any, Iterable, Sequence
 # so a bad combination fails the test suite rather than the campaign.
 
 K_VERBATIM = 10          # recent steps always kept in full
-SOFT_TOKENS = 30_00     # supervisor asks for a report at/above this
-HARD_TOKENS = 50_00     # compact unconditionally at/above this
+SOFT_TOKENS = 140_00     # supervisor asks for a report at/above this
+HARD_TOKENS = 200_00     # compact unconditionally at/above this
 STEP_CHAR_CAP = 3_000    # per-step ingestion cap; clips the fat tail only
 MIN_EVICT = 5            # never compact unless this many steps are evictable
 
@@ -253,7 +252,7 @@ def truncate_step_text(
         return text, False
     mark = _TRUNC_MARK.format(cap=cap)
     if archive_ref:
-        mark += f"; full text archived as {archive_ref}"
+        mark += f"; full text at {archive_ref}"
     mark += "]"
     keep = max(0, cap - len(mark))
     return text[:keep] + mark, True
@@ -319,7 +318,9 @@ def should_request_report(steps: Sequence[Any], *, soft: int = SOFT_TOKENS) -> b
     state and survives resume for free.
     """
     the_estimate_tokens = estimate_tokens(render_past_steps(steps))
-    print(the_estimate_tokens)
+    print("===================")
+    print("token estimation: ", the_estimate_tokens)
+    print("===================")
     return the_estimate_tokens >= soft
 
 
@@ -329,22 +330,32 @@ def build_report_digest(
     report_id: str | None,
     step_lo: int,
     step_hi: int,
+    raw_steps_key: str | None = None,
 ) -> str:
     """The free, LLM-less digest: a pointer at a report already on CANVAS."""
     ref = f" (ID={report_id})" if report_id else ""
+    raw = (
+        f" The raw step text is on CANVAS too: read_my_canvas(key='{raw_steps_key}')."
+        if raw_steps_key else ""
+    )
     return (
         f"{_digest_head(step_lo, step_hi)} reviewed and distilled into report "
         f"'{report_name}'{ref} on CANVAS. Read it with read_my_canvas(key='{report_name}') "
-        f"for their detail; the full raw step text is archived off-context."
+        f"for their detail.{raw}"
     )
 
 
-def build_summary_digest(*, summary: str, step_lo: int, step_hi: int) -> str:
+def build_summary_digest(
+    *, summary: str, step_lo: int, step_hi: int, raw_steps_key: str | None = None,
+) -> str:
     """The HARD-path digest: an LLM summary of steps no report ever covered."""
+    raw = (
+        f" Full raw step text: read_my_canvas(key='{raw_steps_key}')."
+        if raw_steps_key else ""
+    )
     return (
         f"{_digest_head(step_lo, step_hi)} summary (compacted to keep the context "
-        f"bounded; no report covered these, full raw step text archived off-context):\n"
-        f"{summary}"
+        f"bounded; no report covered these).{raw}\n{summary}"
     )
 
 
@@ -353,8 +364,8 @@ def fold_digests(digests: Sequence[str], *, cap: int = DIGEST_BLOCK_CHAR_CAP) ->
 
     Digests are cheap, but a 500-step campaign accumulates ~40 of them. Once the
     block exceeds `cap`, merge the oldest half into ONE digest that spans their whole
-    range -- so nothing becomes unreachable (detail is still on CANVAS / in the
-    archive), it just costs a lookup instead of sitting in context. The merged digest
+    range -- so nothing becomes unreachable (detail is still on CANVAS), it just costs
+    a read_my_canvas lookup instead of sitting in context. The merged digest
     keeps a canonical head covering [min lo, max hi] of what it absorbed, so
     steps_completed() still reads the right number back out.
     """
@@ -369,22 +380,7 @@ def fold_digests(digests: Sequence[str], *, cap: int = DIGEST_BLOCK_CHAR_CAP) ->
     hi = max((r[1] for r in ranges), default=0)
     merged = (
         f"{_digest_head(lo, hi)} earlier work, already compacted across {len(old)} "
-        f"report(s). Detail is on CANVAS (inspect_my_canvas lists the report keys) and "
-        f"in the off-context step archive."
+        f"report(s). Detail is on CANVAS -- inspect_my_canvas lists the report and "
+        f"raw-step keys."
     )
     return [merged] + list(keep)
-
-
-def archive_records(path: str, records: Iterable[dict]) -> None:
-    """Append evicted steps to a JSONL file.
-
-    Deliberately a plain file and NOT CANVAS. `full_state_snapshot()` deepcopies
-    the entire canvas after EVERY tool call and checkpoints it with
-    durability="sync" into a DB already pruned at 30 GB -- so anything parked on
-    CANVAS is re-copied and re-serialized thousands of times. Worse, the
-    supervisor holds `read_my_canvas`, so a canvas-resident archive would let it
-    pull the evicted tokens straight back into context and undo the compaction.
-    """
-    with open(path, "a", encoding="utf-8") as f:
-        for rec in records:
-            f.write(json.dumps(rec, default=str) + "\n")

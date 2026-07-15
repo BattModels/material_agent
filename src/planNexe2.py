@@ -44,7 +44,6 @@ from src.past_steps import (
     HARD_TOKENS,
     K_VERBATIM,
     STEP_CHAR_CAP,
-    archive_records,
     build_report_digest,
     build_summary_digest,
     count_leading_digests,
@@ -829,38 +828,61 @@ def supervisor_chain_node(state, config, agent=None, name=None):
     
     
 
-def _archive(records):
-    """Append evicted step text to WORKING_DIR/past_steps_archive.jsonl.
+def _unique_canvas_key(base: str) -> str:
+    """`base`, or `base_2`, `base_3`, ... -- the first not already on CANVAS."""
+    key, n = base, 2
+    while key in CANVAS.canvas:
+        key, n = f"{base}_{n}", n + 1
+    return key
 
-    A plain file, deliberately NOT CANVAS: full_state_snapshot() deepcopies the
-    whole canvas after every tool call and checkpoints it with durability="sync",
-    so anything parked there is re-serialised thousands of times into a DB we
-    already prune at 30 GB. And the supervisor holds read_my_canvas -- a
-    canvas-resident archive would let it pull the evicted tokens straight back
-    into context and undo the compaction.
+
+def _stash_on_canvas(base_key: str, value) -> str:
+    """Store evicted raw step text ON CANVAS (was a jsonl file) under a unique key,
+    and return the key.
+
+    On CANVAS deliberately, now that the agents are meant to be able to read the
+    archive back (via read_my_canvas): CANVAS is a checkpointed channel, so unlike
+    the old on-disk jsonl this REWINDS with resume/time-travel and cannot drift out
+    of sync with the run, and no duplicate/stale records accumulate across replays.
+    Direct dict assignment (not CANVAS.write) avoids the per-write disk pickle; the
+    value reaches the checkpoint via the worker node's returned "canvas".
+
+    Cost note: full_state_snapshot() deepcopies the whole canvas after every tool
+    call, so archived steps add to that per-call copy for the rest of the run --
+    accepted deliberately (size is fine) in exchange for making the archive
+    agent-readable and in-sync.
     """
-    archive_records(f"{var.my_WORKING_DIRECTORY}/past_steps_archive.jsonl", records)
+    key = _unique_canvas_key(base_key)
+    CANVAS.canvas[key] = value
+    return key
 
 
 def _summarize_evicted(summarizer, objective, evicted_text):
-    """The HARD-path summary: only reached when the agent ignored the SOFT nudge
-    and never wrote a report covering this work."""
+    """The HARD-path summary agent: only reached when the agent ignored the SOFT
+    nudge and never wrote a report covering this work. Returns (summary, key), where
+    `key` is the CANVAS key the agent itself names for this batch of compacted work
+    (empty string if it failed to, so the caller falls back to a deterministic key)."""
     prompt = f"""You are compacting the working memory of a long-running research agent.
 
 Here is the overall objective:
 {objective}
 
-Below are completed steps that are about to be dropped from the agent's context.
-No report covers them, so this summary is the ONLY thing that will survive.
+Below are completed steps that are about to be dropped from the agent's live context.
+No report covers them; your summary plus the raw steps will be stored on CANVAS under
+a key you choose, and the agent can read them back with read_my_canvas(key=...).
 
 {evicted_text}
 
-Write a compact summary (at most ~250 words) that preserves what is NOT recoverable
-from the experiment log: the strategy and how it evolved, hypotheses formed and
-whether they were confirmed or rejected, literature findings, what was tried and
-FAILED, and any CANVAS keys or reference IDs worth revisiting. Do NOT restate
-per-candidate numbers (G(O), G(OH), overpotentials) -- those live in EXPLOG and are
-retrievable with query_explog. Output only the summary."""
+Return ONLY a JSON object with exactly two string fields:
+  "key": a short, descriptive snake_case CANVAS key naming this batch of compacted
+         work (e.g. "compacted_ru_ir_oxide_screening"). No spaces.
+  "summary": a compact summary (at most ~250 words) preserving what is NOT recoverable
+         from the experiment log -- the strategy and how it evolved, hypotheses formed
+         and whether confirmed or rejected, literature findings, what was tried and
+         FAILED, and any CANVAS keys or reference IDs worth revisiting. Do NOT restate
+         per-candidate numbers (G(O), G(OH), overpotentials) -- those live in EXPLOG,
+         retrievable with query_explog.
+Output only the JSON object, nothing else."""
     response = summarizer.invoke(prompt)
     content = response.content
     if isinstance(content, list):  # Anthropic can return content blocks, not a str
@@ -868,7 +890,19 @@ retrievable with query_explog. Output only the summary."""
             block.get("text", "") if isinstance(block, dict) else str(block)
             for block in content
         )
-    return str(content).strip()
+    content = str(content).strip()
+    # Tolerate a fenced ```json block or leading/trailing prose around the object.
+    try:
+        start, end = content.index("{"), content.rindex("}") + 1
+        obj = json.loads(content[start:end])
+        key = str(obj.get("key", "")).strip().replace(" ", "_")
+        summary = str(obj.get("summary", "")).strip()
+        if summary:
+            return summary, key
+    except (ValueError, TypeError):
+        pass
+    # Parse failed -- keep the raw text as the summary, let the caller pick the key.
+    return content, ""
 
 
 def _compact_ledger(ledger, *, report_written, report_name,
@@ -895,27 +929,37 @@ def _compact_ledger(ledger, *, report_written, report_name,
     lo_abs = first_verbatim_index(ledger)
     hi_abs = lo_abs + plan.n_evicted - 1
 
-    _archive([
-        {"kind": "evicted_step", "step": lo_abs + i, "agent": s.agent,
-         "timeStamp": str(s.timeStamp), "timeSpent": s.timeSpent, "text": s.step,
-         "reason": plan.reason}
+    # The raw evicted steps, kept so the agents can read them back later.
+    raw_steps = [
+        {"step": lo_abs + i, "agent": s.agent, "timeStamp": str(s.timeStamp),
+         "timeSpent": s.timeSpent, "text": s.step}
         for i, s in enumerate(evicted)
-    ])
+    ]
 
     if plan.reason == "report":
+        # The report path already has a CANVAS key -- report_name, created by the
+        # worker's write_report call. Park the raw steps beside it under a derived
+        # key; recovery of the *substance* is the report itself.
+        raw_steps_key = _stash_on_canvas(f"{report_name}__steps", raw_steps)
         digest_text = build_report_digest(
             report_name=report_name, report_id=report_id,
-            step_lo=lo_abs, step_hi=hi_abs,
+            step_lo=lo_abs, step_hi=hi_abs, raw_steps_key=raw_steps_key,
         )
-        print(f"Compacted steps {lo_abs}-{hi_abs} into a pointer at report '{report_name}'.")
+        print(f"Compacted steps {lo_abs}-{hi_abs} into a pointer at report '{report_name}' "
+              f"(raw steps on CANVAS: '{raw_steps_key}').")
     else:
-        summary = _summarize_evicted(
+        # HARD path: the summary agent writes the summary AND names the CANVAS key.
+        summary, llm_key = _summarize_evicted(
             summarizer, objective,
             render_past_steps(evicted, with_timing=False, start_index=lo_abs),
         )
-        digest_text = build_summary_digest(summary=summary, step_lo=lo_abs, step_hi=hi_abs)
-        print(f"HARD watermark hit: mechanically summarized steps {lo_abs}-{hi_abs}. "
-              f"(A report would have done this better, and for free.)")
+        base_key = llm_key or f"compacted_steps_{lo_abs}_{hi_abs}"
+        raw_steps_key = _stash_on_canvas(base_key, {"summary": summary, "raw_steps": raw_steps})
+        digest_text = build_summary_digest(
+            summary=summary, step_lo=lo_abs, step_hi=hi_abs, raw_steps_key=raw_steps_key,
+        )
+        print(f"HARD watermark hit: mechanically summarized steps {lo_abs}-{hi_abs} "
+              f"(CANVAS: '{raw_steps_key}'). A report would have done this better, and free.")
 
     # Not routed through print_stream: that expects a graph stream event, and its
     # `"messages" not in s` guard is a substring test on a raw string.
@@ -962,16 +1006,6 @@ def worker_agent_node(state, config, agent=None, name=None, summarizer=None):
     # shrinks the ledger, which used to make the step_<N>_DAG.html filenames march
     # backwards and overwrite each other. No state channel is added for this.
     step_no = steps_completed(state["past_steps"]) + 1
-
-    # Consume-and-clear the report flag ONCE, at the top. var.reportName is set by
-    # the write_report tool and used to be cleared only inside the compaction block,
-    # so it LATCHED: once a report was written it stayed truthy, and every later turn
-    # would think a fresh report had just landed.
-    report_written = bool(getattr(var, "reportName", ""))
-    report_name = var.reportName if report_written else ""
-    report_id = getattr(var, "reportId", "") if report_written else ""
-    var.reportName = ""
-    var.reportId = ""
 
 #     task_formatted = f"""For the following plan:
 # {plan_str}\n\nYou are tasked with executing step {1}, {task}."""
@@ -1061,17 +1095,18 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
         prevTimeStamp = timedelta(seconds=0)
 
     # Cap this step's text on the way in. The median step is ~1,500 chars, but the
-    # worst one ever observed was 33,209 (~8,300 tokens) -- a single step able to
-    # eat a third of the history budget. The full text goes to the off-context
-    # archive, so nothing is actually lost.
+    # worst one ever observed was 33,209 (~8,300 tokens) -- a single step able to eat
+    # a third of the history budget. The full text goes to CANVAS under a
+    # deterministic per-step key, so nothing is lost and the agent can read it back;
+    # the in-ledger version points there. Deterministic key (no uniquify) -- a
+    # re-run just overwrites it with identical content, keeping CANVAS in sync.
+    _fulltext_key = f"step_{step_no}_fulltext"
     step_text, was_truncated = truncate_step_text(
-        structured_response.summary, STEP_CHAR_CAP, archive_ref=f"step {step_no}"
+        structured_response.summary, STEP_CHAR_CAP,
+        archive_ref=f"read_my_canvas(key='{_fulltext_key}')",
     )
     if was_truncated:
-        _archive(
-            [{"kind": "step_full", "step": step_no, "agent": name,
-              "text": structured_response.summary}]
-        )
+        CANVAS.canvas[_fulltext_key] = structured_response.summary
 
     # Build a NEW list -- never mutate state["past_steps"] in place. LangGraph hands
     # us the channel's own value; mutating it aliases the checkpointed list and makes
@@ -1086,6 +1121,18 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
     ]
 
     print_stream(structured_response.summary)
+
+    # Consume-and-clear the report flag HERE -- AFTER the agent has run, so it
+    # reflects a write_report THIS turn just made (var.reportName is set by the tool
+    # mid-stream), not last turn's leftover. Cleared UNCONDITIONALLY, whether or not
+    # compaction actually fires below: clearing only inside the compaction branch
+    # would let the flag LATCH when a compaction is skipped (e.g. under the MIN_EVICT
+    # floor), so the next turn would wrongly think a fresh report had landed.
+    report_written = bool(getattr(var, "reportName", ""))
+    report_name = var.reportName if report_written else ""
+    report_id = getattr(var, "reportId", "") if report_written else ""
+    var.reportName = ""
+    var.reportId = ""
 
     # --- Compaction -----------------------------------------------------------
     # Wrapped whole: if the summariser 529s or the archive write fails, log it and
