@@ -59,8 +59,8 @@ from typing import Any, Sequence
 # so a bad combination fails the test suite rather than the campaign.
 
 K_VERBATIM = 0          # recent steps always kept in full please keep 0!
-SOFT_TOKENS = 14_000     # supervisor asks for a report at/above this
-HARD_TOKENS = 20_000     # compact unconditionally at/above this
+SOFT_TOKENS = 11_000     # supervisor asks for a report at/above this
+HARD_TOKENS = 14_000     # compact unconditionally at/above this
 STEP_CHAR_CAP = 3_000    # per-step ingestion cap; clips the fat tail only
 MIN_EVICT = 5            # never compact unless this many steps are evictable
 
