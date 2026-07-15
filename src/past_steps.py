@@ -12,9 +12,13 @@ The ledger is now kept to the invariant
 
 where a *digest* is a short pointer standing in for a run of steps that has
 already been distilled elsewhere (normally into a report on CANVAS). Digests are
-ordinary step objects whose text starts with DIGEST_PREFIX -- that keeps the
-checkpoint schema unchanged and makes "is this a digest?" survive serialization
-without a new field.
+ordinary step objects whose text starts with a canonical, machine-parseable head
+("[COMPACTED] (steps LO-HI) ..."). That is deliberate: it keeps the LangGraph
+state schema (PlanExecute) BYTE-UNCHANGED -- no new channel -- so an old
+checkpoint still resumes, and it lets us recover the monotone total step count
+(steps_completed()) and the absolute step numbering straight out of `past_steps`
+itself instead of a dedicated field. An old checkpoint has no such digest, so the
+count falls back to len(past_steps), exactly the pre-change behaviour.
 
 Three cooperating thresholds, all recomputed from the ledger itself every turn
 (no process-global state, so this is resume-safe by construction):
@@ -39,6 +43,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from dataclasses import dataclass
 from typing import Any, Iterable, Sequence
 
@@ -55,8 +60,8 @@ from typing import Any, Iterable, Sequence
 # so a bad combination fails the test suite rather than the campaign.
 
 K_VERBATIM = 10          # recent steps always kept in full
-SOFT_TOKENS = 14_000     # supervisor asks for a report at/above this
-HARD_TOKENS = 20_000     # compact unconditionally at/above this
+SOFT_TOKENS = 30_00     # supervisor asks for a report at/above this
+HARD_TOKENS = 50_00     # compact unconditionally at/above this
 STEP_CHAR_CAP = 3_000    # per-step ingestion cap; clips the fat tail only
 MIN_EVICT = 5            # never compact unless this many steps are evictable
 
@@ -143,6 +148,49 @@ def count_leading_digests(steps: Sequence[Any]) -> int:
     return n
 
 
+# Every digest starts with this exact, machine-parseable head, e.g.
+# "[COMPACTED] (steps 25-38) ...". It is the ONLY place the absolute step range is
+# read back out of a digest -- which is how the monotone step counter survives
+# compaction WITHOUT a dedicated state channel (see steps_completed()). Human prose
+# follows the head; the head itself is never free text.
+_DIGEST_HEAD_RE = re.compile(re.escape(DIGEST_PREFIX) + r" \(steps (\d+)-(\d+)\)")
+
+
+def _digest_head(step_lo: int, step_hi: int) -> str:
+    return f"{DIGEST_PREFIX} (steps {step_lo}-{step_hi})"
+
+
+def _digest_range(text: Any) -> tuple[int, int] | None:
+    """(lo, hi) parsed from a digest's canonical head, or None if it has none."""
+    m = _DIGEST_HEAD_RE.match(str(text))
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def _digest_hi(text: Any) -> int:
+    r = _digest_range(text)
+    return r[1] if r else 0
+
+
+def _max_digest_hi(steps: Sequence[Any]) -> int:
+    """Highest absolute step number recorded by any digest in the ledger (0 if
+    none). Digests all lead, so this is the last real step the digest block covers."""
+    return max((_digest_hi(s.step) for s in steps if is_digest(s)), default=0)
+
+
+def steps_completed(steps: Sequence[Any]) -> int:
+    """Total steps EVER completed, recovered from the ledger alone.
+
+    = the last step the digest block accounts for, plus the verbatim steps kept
+    after it. This replaces a would-be `steps_completed` state channel: the count
+    is already latent in `past_steps` (a checkpointed channel), so no schema change
+    is needed and resume from an old checkpoint is unaffected -- an old ledger has
+    no `[COMPACTED]` digest, so `_max_digest_hi == 0` and this is exactly
+    `len(steps)`, the pre-change behaviour.
+    """
+    n_verbatim = sum(1 for s in steps if not is_digest(s))
+    return _max_digest_hi(steps) + n_verbatim
+
+
 def render_past_steps(
     steps: Sequence[Any],
     *,
@@ -180,10 +228,10 @@ def render_past_steps(
     return "\n".join(lines)
 
 
-def first_verbatim_index(steps: Sequence[Any], steps_completed: int) -> int:
-    """Absolute 1-based index of the first non-digest step in `steps`."""
-    n_verbatim = sum(1 for s in steps if not is_digest(s))
-    return max(1, steps_completed - n_verbatim + 1)
+def first_verbatim_index(steps: Sequence[Any]) -> int:
+    """Absolute 1-based index of the first non-digest step in `steps`, derived from
+    the digest block (the step after the last one the digests account for)."""
+    return _max_digest_hi(steps) + 1
 
 
 _TRUNC_MARK = "\n...[step text truncated at {cap} chars"
@@ -270,7 +318,9 @@ def should_request_report(steps: Sequence[Any], *, soft: int = SOFT_TOKENS) -> b
     flag from the worker, which is why the whole scheme carries no process-global
     state and survives resume for free.
     """
-    return estimate_tokens(render_past_steps(steps)) >= soft
+    the_estimate_tokens = estimate_tokens(render_past_steps(steps))
+    print(the_estimate_tokens)
+    return the_estimate_tokens >= soft
 
 
 def build_report_digest(
@@ -283,18 +333,18 @@ def build_report_digest(
     """The free, LLM-less digest: a pointer at a report already on CANVAS."""
     ref = f" (ID={report_id})" if report_id else ""
     return (
-        f"{DIGEST_PREFIX} Steps {step_lo}-{step_hi} were reviewed and distilled into the "
-        f"report '{report_name}'{ref}, stored on CANVAS. Read it with "
-        f"read_my_canvas(key='{report_name}') if you need their detail; the full raw step "
-        f"text is archived off-context."
+        f"{_digest_head(step_lo, step_hi)} reviewed and distilled into report "
+        f"'{report_name}'{ref} on CANVAS. Read it with read_my_canvas(key='{report_name}') "
+        f"for their detail; the full raw step text is archived off-context."
     )
 
 
 def build_summary_digest(*, summary: str, step_lo: int, step_hi: int) -> str:
     """The HARD-path digest: an LLM summary of steps no report ever covered."""
     return (
-        f"{DIGEST_PREFIX} Summary of steps {step_lo}-{step_hi} (compacted to keep the "
-        f"context bounded; full raw step text is archived off-context):\n{summary}"
+        f"{_digest_head(step_lo, step_hi)} summary (compacted to keep the context "
+        f"bounded; no report covered these, full raw step text archived off-context):\n"
+        f"{summary}"
     )
 
 
@@ -302,9 +352,11 @@ def fold_digests(digests: Sequence[str], *, cap: int = DIGEST_BLOCK_CHAR_CAP) ->
     """Keep the leading digest block itself bounded, LLM-free.
 
     Digests are cheap, but a 500-step campaign accumulates ~40 of them. Once the
-    block exceeds `cap`, merge the oldest half into a single line that still names
-    every report it stands for -- so nothing becomes unreachable, it just costs a
-    CANVAS read instead of sitting in context.
+    block exceeds `cap`, merge the oldest half into ONE digest that spans their whole
+    range -- so nothing becomes unreachable (detail is still on CANVAS / in the
+    archive), it just costs a lookup instead of sitting in context. The merged digest
+    keeps a canonical head covering [min lo, max hi] of what it absorbed, so
+    steps_completed() still reads the right number back out.
     """
     block = "\n".join(digests)
     if len(block) <= cap or len(digests) < 2:
@@ -312,16 +364,13 @@ def fold_digests(digests: Sequence[str], *, cap: int = DIGEST_BLOCK_CHAR_CAP) ->
 
     half = len(digests) // 2
     old, keep = digests[:half], digests[half:]
-    names = []
-    for d in old:
-        # Digests always name their step range; pull it back out for the merged line.
-        head = d[len(DIGEST_PREFIX):].strip().split(" were reviewed")[0].split(" (compacted")[0]
-        names.append(head.replace("Summary of steps", "Steps").strip())
+    ranges = [r for d in old if (r := _digest_range(d))]
+    lo = min((r[0] for r in ranges), default=0)
+    hi = max((r[1] for r in ranges), default=0)
     merged = (
-        f"{DIGEST_PREFIX} Earlier work, already compacted: "
-        + "; ".join(names)
-        + ". Detail is on CANVAS (inspect_my_canvas lists the report keys) and in the "
-        "off-context step archive."
+        f"{_digest_head(lo, hi)} earlier work, already compacted across {len(old)} "
+        f"report(s). Detail is on CANVAS (inspect_my_canvas lists the report keys) and "
+        f"in the off-context step archive."
     )
     return [merged] + list(keep)
 

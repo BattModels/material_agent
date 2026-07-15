@@ -694,10 +694,6 @@ You have a maximum of 1 hours to complete the entire study and make your final r
                 "inputs": f"{minimal_test_message_33}",
                 "plan": [],
                 "past_steps": [],
-                # Monotone; NOT len(past_steps), which compaction shrinks. Resumed
-                # runs from before this channel existed fall back to len(past_steps)
-                # in planNexe2.steps_completed_of().
-                "steps_completed": 0,
                 "draft_response": "",
                 "boss_feedback": "",
                 "response": "",

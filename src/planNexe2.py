@@ -54,6 +54,7 @@ from src.past_steps import (
     plan_compaction,
     render_past_steps,
     should_request_report,
+    steps_completed,
     truncate_step_text,
 )
 from src import var
@@ -204,14 +205,11 @@ class wokerResponse(BaseModel):
 class PlanExecute(TypedDict):
     inputs: str
     plan: List[myStep]
-    # past_steps is a BOUNDED ledger: [digest steps ...] + [last K_VERBATIM steps].
-    # It no longer grows with the run; see src/past_steps.py.
-    past_steps: List[myPastStep]
-    # Total steps EVER completed -- monotone, and deliberately NOT len(past_steps),
-    # which compaction shrinks. Drives the step_<N>_DAG.html filenames (which used
-    # to regress and overwrite each other after a compaction) and the absolute step
-    # numbering the supervisor sees.
-    steps_completed: int
+    # A BOUNDED ledger now: [digest steps ...] + [last K_VERBATIM steps]; see
+    # src/past_steps.py. NOTE: the schema (channel set) is intentionally left
+    # unchanged for resume compatibility -- the monotone step count is derived from
+    # the ledger via past_steps.steps_completed(), NOT stored in a new channel.
+    past_steps: List[myStep]
     draft_response: str
     boss_feedback: str
     response: str
@@ -490,28 +488,19 @@ def print_stream(s, DAG=None):
     write_history("\n")
 
 
-def steps_completed_of(state) -> int:
-    """Monotone count of steps ever completed.
-
-    Falls back to len(past_steps) so a checkpoint written before this channel
-    existed resumes with the right step number instead of restarting at 0.
-    """
-    return state.get("steps_completed") or len(state["past_steps"])
-
-
 def render_history(state, *, with_timing: bool = True) -> str:
     """The single rendering of past_steps, shared by the boss, supervisor and
     worker prompts (it used to be four copy-pasted f-strings that could drift).
 
     Numbering is ABSOLUTE, so after a compaction the supervisor still sees
     "27." rather than a list that restarts at "1." and implies the study is
-    younger than it is.
+    younger than it is. The absolute index is derived from the ledger's digest
+    block (past_steps.first_verbatim_index), not a stored counter.
     """
-    steps = state["past_steps"]
     return render_past_steps(
-        steps,
+        state["past_steps"],
         with_timing=with_timing,
-        start_index=first_verbatim_index(steps, steps_completed_of(state)),
+        start_index=first_verbatim_index(state["past_steps"]),
     )
 
 
@@ -882,7 +871,7 @@ retrievable with query_explog. Output only the summary."""
     return str(content).strip()
 
 
-def _compact_ledger(ledger, *, steps_completed, report_written, report_name,
+def _compact_ledger(ledger, *, report_written, report_name,
                     report_id, summarizer, objective):
     """Enforce  past_steps == [digests] + [last K verbatim steps].
 
@@ -901,7 +890,9 @@ def _compact_ledger(ledger, *, steps_completed, report_written, report_name,
         return ledger
 
     evicted = ledger[plan.evict_lo:plan.evict_hi]
-    lo_abs = first_verbatim_index(ledger, steps_completed)
+    # The first evicted step is the first verbatim step (eviction starts right after
+    # the leading digest block), so its absolute index is first_verbatim_index.
+    lo_abs = first_verbatim_index(ledger)
     hi_abs = lo_abs + plan.n_evicted - 1
 
     _archive([
@@ -966,10 +957,11 @@ def worker_agent_node(state, config, agent=None, name=None, summarizer=None):
     # defaults True when the supervisor omits it.
     var.enforce_queue_floor = getattr(task, "enforce_queue_floor", True)
 
-    # This step's absolute number. Derived from the monotone steps_completed
-    # channel, NOT len(past_steps) -- compaction shrinks the ledger, which used to
-    # make the step_<N>_DAG.html filenames march backwards and overwrite each other.
-    step_no = steps_completed_of(state) + 1
+    # This step's absolute number. Derived from the ledger (past_steps.steps_completed
+    # reads the digest block's step range back out), NOT len(past_steps) -- compaction
+    # shrinks the ledger, which used to make the step_<N>_DAG.html filenames march
+    # backwards and overwrite each other. No state channel is added for this.
+    step_no = steps_completed(state["past_steps"]) + 1
 
     # Consume-and-clear the report flag ONCE, at the top. var.reportName is set by
     # the write_report tool and used to be cleared only inside the compaction block,
@@ -1102,7 +1094,6 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
     try:
         ledger = _compact_ledger(
             ledger,
-            steps_completed=step_no,
             report_written=report_written,
             report_name=report_name,
             report_id=report_id,
@@ -1116,7 +1107,6 @@ Now, you are tasked with: {task}. Please only do this task! Do not do anything e
 
     return {
         "past_steps": ledger,
-        "steps_completed": step_no,
         "canvas":CANVAS.canvas,
          "artifacts": CANVAS.result_registry,
         "explog_candidates": EXPLOG.relational_frame.candidates.df,
