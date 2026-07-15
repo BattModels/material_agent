@@ -2333,7 +2333,7 @@ def write_report(
     report: Annotated[str, "Intermediate/final report content in markdown format."],
     report_name: Annotated[str, "Name of the report."],
     report_gist: Annotated[str, "A short one-sentence, plain-language summary of what this report covers and concludes (e.g. 'Screened 12 Ru/Ir oxides; IrO2 rutile is the most promising candidate so far, Co3O4 abandoned'). Used verbatim to label the compacted step history once these steps roll out of context, so make it self-contained and specific."],
-    ref_list: Annotated[List[str], "Please provide the list of all reference IDs that you used when writing this report"],
+    ref_list: Annotated[List[str], "Please provide the list of all 8-char reference IDs that you used when writing this report"],
     ):
     """Note down your report on CANVAS and let the supervisor know you've generated a report"""
     

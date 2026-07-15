@@ -58,9 +58,9 @@ from typing import Any, Sequence
 # tests/test_past_steps.py::test_knobs_satisfy_the_thrash_constraint enforces it,
 # so a bad combination fails the test suite rather than the campaign.
 
-K_VERBATIM = 10          # recent steps always kept in full
-SOFT_TOKENS = 140_00     # supervisor asks for a report at/above this
-HARD_TOKENS = 200_00     # compact unconditionally at/above this
+K_VERBATIM = 0          # recent steps always kept in full please keep 0!
+SOFT_TOKENS = 14_000     # supervisor asks for a report at/above this
+HARD_TOKENS = 20_000     # compact unconditionally at/above this
 STEP_CHAR_CAP = 3_000    # per-step ingestion cap; clips the fat tail only
 MIN_EVICT = 5            # never compact unless this many steps are evictable
 
