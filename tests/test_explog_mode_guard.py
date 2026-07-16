@@ -3,7 +3,12 @@
 
 import pytest
 
-from src.explog_mode_guard import MODE_MARKER_NAME, check_or_record_explog_mode
+from src.explog_mode_guard import (
+    MODE_MARKER_NAME,
+    check_or_record_explog_mode,
+    read_recorded_mode,
+    refuse_overwrite_of_production_run,
+)
 
 
 def test_first_call_records_the_mode(tmp_path):
@@ -59,3 +64,28 @@ def test_marker_file_content_is_whitespace_tolerant(tmp_path):
 
     with pytest.raises(RuntimeError):
         check_or_record_explog_mode(tmp_path, "test")
+
+
+def test_read_recorded_mode_is_none_before_any_init(tmp_path):
+    assert read_recorded_mode(tmp_path) is None
+
+
+def test_read_recorded_mode_returns_what_was_recorded(tmp_path):
+    check_or_record_explog_mode(tmp_path, "production")
+    assert read_recorded_mode(tmp_path) == "production"
+
+
+def test_refuse_overwrite_is_a_noop_when_never_initialized(tmp_path):
+    refuse_overwrite_of_production_run(tmp_path)  # must not raise -- nothing to protect
+
+
+def test_refuse_overwrite_is_a_noop_for_a_recorded_test_mode(tmp_path):
+    check_or_record_explog_mode(tmp_path, "test")
+    refuse_overwrite_of_production_run(tmp_path)  # must not raise
+
+
+def test_refuse_overwrite_raises_for_a_recorded_production_run(tmp_path):
+    check_or_record_explog_mode(tmp_path, "production")
+
+    with pytest.raises(RuntimeError, match="production"):
+        refuse_overwrite_of_production_run(tmp_path)

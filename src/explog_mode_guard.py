@@ -11,13 +11,22 @@ from pathlib import Path
 MODE_MARKER_NAME = ".explog_mode"
 
 
+def read_recorded_mode(working_directory):
+    """The mode recorded for `working_directory` by check_or_record_explog_mode,
+    or None if it was never initialized (marker doesn't exist yet)."""
+    marker = Path(working_directory) / MODE_MARKER_NAME
+    if marker.exists():
+        return marker.read_text().strip()
+    return None
+
+
 def check_or_record_explog_mode(working_directory, mode: str) -> None:
     """First call for a run directory records `mode` in a marker file.
     Every later call must pass the same `mode`, or this raises RuntimeError
     instead of silently letting the run start in a different mode."""
     marker = Path(working_directory) / MODE_MARKER_NAME
-    if marker.exists():
-        recorded = marker.read_text().strip()
+    recorded = read_recorded_mode(working_directory)
+    if recorded is not None:
         if recorded != mode:
             raise RuntimeError(
                 f"EXPLOG_MODE is '{mode}', but {marker} says this run "
@@ -27,3 +36,18 @@ def check_or_record_explog_mode(working_directory, mode: str) -> None:
             )
     else:
         marker.write_text(mode)
+
+
+def refuse_overwrite_of_production_run(working_directory) -> None:
+    """Raise RuntimeError if `working_directory` was previously recorded as a
+    'production' EXPLOG run -- it may hold real DFT results that an 'ow'
+    (delete-and-restart-fresh) launch must never destroy."""
+    if read_recorded_mode(working_directory) == "production":
+        marker = Path(working_directory) / MODE_MARKER_NAME
+        raise RuntimeError(
+            f"Refusing to overwrite {working_directory}: {marker} records "
+            f"this run directory as EXPLOG_MODE='production' -- it may hold "
+            f"real DFT results. 'ow' would permanently delete them with no "
+            f"way to recover. If this is truly intended, delete the "
+            f"directory yourself first."
+        )

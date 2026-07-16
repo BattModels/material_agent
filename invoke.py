@@ -25,7 +25,7 @@ import time
 from src.utils import load_config, save_graph_to_file,initialize_database
 from src.myCANVAS import CANVAS
 from src.history_log import write_history
-from src.explog_mode_guard import check_or_record_explog_mode
+from src.explog_mode_guard import check_or_record_explog_mode, refuse_overwrite_of_production_run
 from src import var
 
 import sqlite3
@@ -598,8 +598,9 @@ You have a maximum of 1 hours to complete the entire study and make your final r
     if overwrite:
         # check if working directory exists, if so delete it
         if os.path.exists(WORKING_DIRECTORY):
+            refuse_overwrite_of_production_run(WORKING_DIRECTORY)
             os.system(f"rm -rf {WORKING_DIRECTORY}")
-        
+
         os.makedirs(WORKING_DIRECTORY, exist_ok=False)
     
         # check if resource_suggestions.db exist in the working directory
