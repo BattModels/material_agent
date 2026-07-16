@@ -237,6 +237,30 @@ if __name__ == "__main__":
 #             )
             CANVAS.canvas = snap.values["canvas"]
             CANVAS.result_registry = snap.values["artifacts"]
+
+            # --- Resume-time migration patch --------------------------------
+            # Older generate_convergence_test artifacts (structural sweeps)
+            # were registered with "varying_parameter_values" as a named entry
+            # in parent_result_ids_w_args, pointing at a SINGLE structure ref
+            # while the arg value is the WHOLE list of structure paths. At
+            # report time the verifier's belt-and-braces check compares the
+            # whole list against that one artifact and always fails. The tool
+            # no longer records this source (per-element path<->structure
+            # matching is done deterministically in-tool). Strip the stale key
+            # from any already-registered artifact so resumed runs verify.
+            _patched_ids = []
+            for _rid, _art in CANVAS.result_registry.items():
+                if getattr(_art, "tool_name", None) != "generate_convergence_test":
+                    continue
+                _pria = getattr(_art, "parent_result_ids_w_args", None)
+                if isinstance(_pria, dict) and "varying_parameter_values" in _pria:
+                    del _pria["varying_parameter_values"]
+                    _patched_ids.append(_rid)
+            print(f"[resume patch] stripped 'varying_parameter_values' source "
+                  f"from {len(_patched_ids)} generate_convergence_test "
+                  f"artifact(s): {_patched_ids}")
+            # ----------------------------------------------------------------
+
             CANVAS.print()
             print(CANVAS)
             # read in previous All_Report_Names.txt, each line is a report name, create a list and var.All_Report_Names = that list

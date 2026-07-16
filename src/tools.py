@@ -3303,9 +3303,18 @@ def generate_convergence_test(
             this_parent_ids = [input_file_name_ref]
             if struct_bare_id:
                 this_parent_ids.append(struct_bare_id)
+            # NOTE: varying_parameter_values is deliberately NOT declared as a
+            # named provenance source here. Each entry's path<->structure match
+            # is already checked deterministically in-tool during resolution
+            # (CANVAS.verify_artifact per entry, in the 2-tuple / 3-tuple
+            # branches above). Declaring it as a single named source would make
+            # the report-time belt-and-braces check compare the WHOLE path list
+            # against ONE structure artifact (list-valued value vs single ref),
+            # which always fails. Lineage to each structure is preserved via
+            # this_parent_ids (struct_bare_id), so the recursive verifier still
+            # descends into and verifies every upstream structure artifact.
             this_param_sources = {
                 "input_file_name": input_file_name_ref,
-                "varying_parameter_values": struct_ref,
             }
         else:
             value = entry
