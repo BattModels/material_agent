@@ -24,7 +24,7 @@ from gnome_dreams_oer_screening.explog.explog import EXPLOG
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
-FORK_DIR = "/home/energy/matnis/projects/dreams_colab/v2/material_agent/production_run_27-05-2026_fork_02_07_2026"
+FORK_DIR = "/home/energy/matnis/projects/dreams_colab/v2/material_agent/production_run_27-05-2026_fork_16_07_2026"
 THREAD_ID = "1"
 
 # EDIT THIS before running: the real message to inject into the fork's state.
@@ -96,7 +96,7 @@ Please conduct an acidic OER screening study to identify the best catalytic cand
 """
 
 assert os.path.isdir(FORK_DIR), f"fork dir missing: {FORK_DIR}"
-assert FORK_DIR.endswith("_fork_02_07_2026"), "safety check: refusing to run against a non-fork path"
+assert FORK_DIR.endswith("_fork_16_07_2026"), "safety check: refusing to run against a non-fork path"
 
 os.environ["OMP_NUM_THREADS"] = "1"
 
