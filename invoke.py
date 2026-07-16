@@ -25,6 +25,7 @@ import time
 from src.utils import load_config, save_graph_to_file,initialize_database
 from src.myCANVAS import CANVAS
 from src.history_log import write_history
+from src.explog_mode_guard import check_or_record_explog_mode
 from src import var
 
 import sqlite3
@@ -611,7 +612,12 @@ You have a maximum of 1 hours to complete the entire study and make your final r
         if not os.path.exists(db_file):
             initialize_database(db_file)
 
-    EXPLOG_MODE = "test"  # "production" or "test"
+    EXPLOG_MODE = "production"  # "production" or "test"
+
+    # SAFETY: a run directory's EXPLOG mode must never silently change between
+    # resumes -- see src/explog_mode_guard.py for why.
+    check_or_record_explog_mode(WORKING_DIRECTORY, EXPLOG_MODE)
+
     EXPLOG.init(Path(WORKING_DIRECTORY)/"vasp_calcs",
                 EXPLOG_MODE,
                 reject_if_failed_exists = True,
