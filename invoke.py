@@ -459,7 +459,7 @@ You have a maximum of 1 hours to complete the entire study and make your final r
     do not do any literature search, just filter through the database and, in 20 round, enter 40 candidates into the experiment log, 2 per round. Do not discuss with your worker about anything. Create a plan consist of exactly 20 steps, 1 round per step. You must not merge rounds into less steps. 
     """
 
-    revised_message_v6 = """
+    revised_message_v6 = f"""
     Please conduct an acidic OER screening study to identify the best catalytic candidate
     for the oxygen evolution reaction (OER) in the Google DeepMind GNoME database.
     Please do an iterative multi-round screening, learning from each round and applying
@@ -520,10 +520,11 @@ You have a maximum of 1 hours to complete the entire study and make your final r
     - Any recommendations for future studies or next steps based on the findings and
     limitations of the current study.
 
-    You have a maximum of 30 days to complete the entire study and make your final report.
+    You have a maximum of {var.STUDY_BUDGET_DAYS} days to complete the entire study and make your final report.
     Try to make use of the available time.
     """
-    # TODO TODO TODO - adjust the time limit
+    # Time limit is var.STUDY_BUDGET_DAYS (single source of truth for the
+    # deadline-relative queue-floor windows too -- see src/var.py).
     
     # revised_message = "wait for 1 minutes. repeat 3 times"
     config = load_config(os.path.join('./config', "default.yaml"))

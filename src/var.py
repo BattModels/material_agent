@@ -26,9 +26,36 @@ reportName = ""
 reportId = ""
 reportGist = ""
 
-# HPC queue policy: if fewer than this many jobs are pending, tools recommend
-# submitting more ready work so the queue does not drain (agents decide).
+# --- Study deadline windows -----------------------------------------------------
+# Total study budget and the two deadline-relative windows for the queue floor,
+# defined in DAYS (the tunable knobs); the *_SECONDS forms below are what the
+# code reads. invoke.py's objective text derives its "maximum of N days" from
+# STUDY_BUDGET_DAYS, so prose and gates cannot drift apart.
+STUDY_BUDGET_DAYS = 30
+# enforce_queue_floor=False on a plan step is HONORED only when remaining time
+# < this many days; earlier it is coerced back to True (see worker_agent_node).
+FLOOR_DISARM_WINDOW_DAYS = 2
+# Path B (the "expand the study" refusal when no ready work exists) is disabled
+# when remaining time < this many days -- the wait then simply proceeds.
+PATH_B_CUTOFF_DAYS = 4
+
+_SECONDS_PER_DAY = 86400
+STUDY_BUDGET_SECONDS = STUDY_BUDGET_DAYS * _SECONDS_PER_DAY
+FLOOR_DISARM_WINDOW_SECONDS = FLOOR_DISARM_WINDOW_DAYS * _SECONDS_PER_DAY
+PATH_B_CUTOFF_SECONDS = PATH_B_CUTOFF_DAYS * _SECONDS_PER_DAY
+
+# HPC queue policy: the hard floor on QUEUED (SLURM-pending) jobs. If fewer than
+# this many jobs are queued, wait_for_update refuses to wait and tells the agent
+# (with the real numbers) to refill. Queued -- not running -- jobs are the target:
+# queued jobs are what feed nodes the instant they free up, and under fair-share
+# a near-empty queue means the cluster is absorbing everything we submit.
 QUEUE_MIN_PENDING = 15
+
+# Soft refill goal shown to agents when the queue is below QUEUE_MIN_PENDING:
+# the floor (hard, gates waiting) triggers the refill; this target is what the
+# refill should AIM for -- fill the queue well beyond the floor with the most
+# VALUABLE ready work (never padding with junk just to hit a number).
+QUEUE_REFILL_TARGET = 50
 
 # --- Disposition gate ---------------------------------------------------------
 # Runtime slot mirroring the CURRENT task's `myStep.enforce_queue_floor` (the
@@ -47,6 +74,13 @@ enforce_queue_floor = True
 # matching directive. Process-global (same mechanism as enforce_queue_floor); a
 # handback the supervisor never consumed is simply re-signalled next round.
 wait_handback = False
+
+# Runtime one-shot flag: worker_agent_node sets this when it coerced a plan
+# step's enforce_queue_floor=False back to True (disarm requested earlier than
+# the final FLOOR_DISARM_WINDOW_DAYS of the budget). supervisor_chain_node
+# consumes-and-clears it and tells the supervisor directly, so the rule is
+# learned from feedback at the moment it matters, not only from static prose.
+floor_coerce_notice = False
 
 # The fixed Decision vocabulary for a candidate disposition (single-valued).
 # Two TERMINAL tags (no further compute) bracket three ACTIVE priority levels:
