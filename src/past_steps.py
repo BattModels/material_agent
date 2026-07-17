@@ -60,7 +60,7 @@ from typing import Any, Sequence
 
 K_VERBATIM = 0          # recent steps always kept in full please keep 0!
 SOFT_TOKENS = 11_000     # supervisor asks for a report at/above this
-HARD_TOKENS = 14_000     # compact unconditionally at/above this
+HARD_TOKENS = 16_000     # compact unconditionally at/above this
 STEP_CHAR_CAP = 3_000    # per-step ingestion cap; clips the fat tail only
 MIN_EVICT = 5            # never compact unless this many steps are evictable
 
