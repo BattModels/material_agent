@@ -64,6 +64,7 @@ from src.disposition_messages import (
     evaluate_wait_entry,
     classify_wait_handback,
     evaluate_terminal_tag_gate,
+    _forgotten_job_line,
 )
 from src.forgotten_jobs import find_forgotten_jobs
 from src.history_log import write_history
@@ -287,25 +288,30 @@ def wait_for_update(
     # Entry gates (pure decision in src.disposition_messages.evaluate_wait_entry):
     #   Gate 1 (always): every finished result must be tied back to a disposition.
     #   Gate 2 (iff var.enforce_queue_floor and var.QUEUE_MIN_PENDING > 0): keep
-    #           the HPC queue at/above its pending floor.
-    # Either refusal -- or the legacy "nothing to wait for" message -- short-circuits.
+    #           the HPC queue at/above its QUEUED (pending) floor. Path A (ready
+    #           work listed) -> the worker submits it itself and re-calls wait;
+    #           Path B (nothing ready -> supervisor handback) is disabled in the
+    #           final PATH_B_CUTOFF_DAYS of the study budget.
+    # Either refusal -- or the "nothing to wait for" message -- short-circuits.
     # Inputs computed once and shared with classify_wait_handback (avoids calling
     # find_forgotten_jobs twice) so the message and the handback path agree.
     _gate_inputs = dict(
         candidates_need_disposition=EXPLOG.candidates_needing_disposition(),
         pending_count=EXPLOG.job_handler.count_pending(),
-        has_running=("running" in statusList),
+        running_count=statusList.count("running"),
         enforce_queue_floor=getattr(var, "enforce_queue_floor", True),
         queue_min_pending=var.QUEUE_MIN_PENDING,
+        remaining_seconds=var.STUDY_BUDGET_SECONDS - (time.time() - var.startTime),
         forgotten_jobs=find_forgotten_jobs(EXPLOG, var.GO_DEV_OH_THRESHOLD),
     )
     gate_msg = evaluate_wait_entry(**_gate_inputs)
-    # Raise the one-shot supervisor-handback flag whenever this refusal is one the
-    # SUPERVISOR must resolve (queue floor / idle -> classify returns a path). A
-    # Gate 1 disposition backlog (path None) is the worker's own job and does NOT
-    # set it. supervisor_chain_node consumes-and-clears the flag next turn and
-    # re-derives the path from live EXPLOG for the directive it injects.
-    if classify_wait_handback(**_gate_inputs) is not None:
+    # Raise the one-shot supervisor-handback flag only for the "expand" path --
+    # the refusal the SUPERVISOR must resolve (no ready work: expand / wind down /
+    # finalize). A Gate 1 disposition backlog and Path A (ready work the worker
+    # submits itself) are the worker's own job and do NOT set it.
+    # supervisor_chain_node consumes-and-clears the flag next turn and re-derives
+    # the path from live EXPLOG for the directive it injects.
+    if classify_wait_handback(**_gate_inputs) == "expand":
         var.wait_handback = True
     if gate_msg is not None:
         return gate_msg
@@ -370,6 +376,22 @@ def wait_for_update(
             # Name the candidates whose work finalized + how to disposition them.
             fin_cands = sorted({str(c) for c in fin["candidate_id"].tolist()})
             outText += format_wait_exit_disposition_hint(fin_cands)
+
+            # Standing-duty nudge: list the follow-up work these completions just
+            # opened (a finalized bulk -> surface, surface -> O, competitive O ->
+            # OH), so the worker submits it right after dispositioning instead of
+            # waiting for a floor refusal to point at it.
+            followups = [
+                j for j in find_forgotten_jobs(EXPLOG, var.GO_DEV_OH_THRESHOLD)
+                if str(j.get("candidate_id")) in set(fin_cands)
+            ]
+            if followups:
+                outText += (
+                    "\nReady follow-up work opened by these completions "
+                    "(disposition the finished results first, then submit these "
+                    "under your current task -- standing duty):\n"
+                    + "\n".join("  - " + _forgotten_job_line(j) for j in followups)
+                )
 
             id = CANVAS.register_tool_output(
                 tool_name="wait_for_update",

@@ -12,6 +12,7 @@
 # the fast tests): the @tool wiring, the agent-visible column hiding, tool
 # registration, and the myStep.enforce_queue_floor contract.
 
+import time
 from typing import get_args
 
 import pandas as pd
@@ -30,6 +31,9 @@ from gnome_dreams_oer_screening.explog.explog import EXPLOG
 def _setup(tmp_path):
     EXPLOG.init(tmp_path, mode="test")
     EXPLOG.job_handler.disposition_decisions = tuple(var.DISPOSITION_DECISIONS)
+    # The wait gates read var.startTime for the deadline-relative windows
+    # (remaining time). "Now" = a fresh study, comfortably before every cutoff.
+    var.startTime = time.time()
 
 
 def _add_candidate(cid):
@@ -371,13 +375,16 @@ def test_wait_refuses_when_queue_below_floor(tmp_path):
     out = T.wait_for_update.invoke({"patience": 1})        # Gate 2 fires -> Path A refusal
     assert isinstance(out, str)
     assert "matX" in out                                   # lists matX's forgotten work
-    assert "supervisor" in out.lower()                     # hands back to the supervisor
-    assert "submit" in out.lower()                         # asks for an immediate submit step
+    assert "submit" in out.lower()                         # worker submits it itself...
+    assert "standing duty" in out.lower()                  # ...as a standing duty
+    assert "call wait_for_update again" in out.lower()     # then re-waits
+    assert f"hard floor: {var.QUEUE_MIN_PENDING}" in out   # real numbers shown
 
 
-def test_wait_sets_handback_flag_on_queue_floor(tmp_path):
-    # A queue-floor (Path A/B) refusal must raise the one-shot supervisor-handback
-    # flag so supervisor_chain_node injects a directive on its next turn.
+def test_wait_leaves_handback_flag_false_on_path_a(tmp_path):
+    # A Path A refusal (ready work listed) is now the WORKER's own job -- it
+    # submits the jobs itself and re-calls wait -- so the supervisor-handback
+    # flag must stay False.
     _setup(tmp_path)
     var.enforce_queue_floor = True
     var.QUEUE_MIN_PENDING = 12
@@ -393,6 +400,30 @@ def test_wait_sets_handback_flag_on_queue_floor(tmp_path):
     })
     _inject("matX", "surface_relaxation", "pending", termination_index=1)
     T.wait_for_update.invoke({"patience": 1})              # Gate 2 -> Path A refusal
+    assert var.wait_handback is False
+
+
+def test_wait_sets_handback_flag_on_expand_path(tmp_path):
+    # A Path B refusal (queue below floor, NOTHING ready to submit) is the
+    # supervisor's to resolve -> the one-shot handback flag must be raised so
+    # supervisor_chain_node injects the expand directive on its next turn.
+    _setup(tmp_path)
+    var.enforce_queue_floor = True
+    var.QUEUE_MIN_PENDING = 12
+    var.wait_handback = False
+    _add_candidate("matX")
+    pb = _inject("matX", "bulk_relaxation", "completed")
+    T.get_disposition_info.invoke({"candidate_id": "matX"})
+    T.update_disposition_info.invoke({
+        "candidate_id": "matX", "Analysis_and_implications": "s",
+        "Analyzed_process_id": [pb], "Future_plan": "f",
+        "Decision": "Medium priority",
+    })
+    # Surface already STARTED (pending) -> no forgotten frontier work; queue of 1
+    # is below the floor of 12 -> Path B (expand) -> flag raised.
+    _inject("matX", "surface_relaxation", "pending", termination_index=1)
+    out = T.wait_for_update.invoke({"patience": 1})        # Gate 2 -> Path B refusal
+    assert "supervisor" in out.lower()
     assert var.wait_handback is True
 
 

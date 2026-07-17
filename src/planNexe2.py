@@ -102,7 +102,7 @@ class myStep(BaseModel):
                             "search_artifacts",
                             ""
                 ]] = Field(f"must-use tools for this step, should be a subset of the tools available to the agent. read the CANVAS with key Worker_available_tools to see more details about each tools.")
-    enforce_queue_floor: bool = Field(True, description="Whether the worker must keep the HPC queue stocked with ready work before it may wait for current jobs to finish. Keep True to ensure maximum HPC utilization (generally desirable): if the queue falls below the floor while HPC resources are free and the worker has no more ready work to submit, the worker returns to the supervisor to discuss expanding the study, rather than being allowed to pause and wait. Set False only when genuinely winding the study down -- when the remaining time is too short for newly-submitted jobs to finish -- so the worker may instead wait for and finalize the in-flight results.")
+    enforce_queue_floor: bool = Field(True, description=f"Whether the worker must keep the HPC queue stocked (at least {var.QUEUE_MIN_PENDING} QUEUED jobs) before it may wait for current jobs to finish. Keep True to ensure maximum HPC utilization: the worker submits ready continuation work itself, and only returns to the supervisor to discuss expanding the study when no ready work remains. Set False only when genuinely winding the study down -- when the remaining time is too short for newly-submitted jobs to finish -- so the worker may instead wait for and finalize the in-flight results. False is honored only within the final {var.FLOOR_DISARM_WINDOW_DAYS} days of the {var.STUDY_BUDGET_DAYS}-day study budget; set earlier, it is ignored (coerced back to True) and the worker is told so.")
 
 class myPastStep(BaseModel):
     """Step in the plan."""
@@ -665,14 +665,15 @@ def supervisor_chain_node(state, config, agent=None, name=None):
         """
 
     # --- Queue-floor handback -------------------------------------------------
-    # wait_for_update raises var.wait_handback when it refuses on a queue-floor
-    # (Path A/B) or idle handback -- a situation only the supervisor can resolve.
-    # Consume-and-clear it here (one-shot) and inject a path-specific directive so
-    # the handback is ACTED on instead of reaching the supervisor only as ignorable
-    # worker prose. The path is re-derived from live EXPLOG (self-correcting: if the
-    # queue refilled since the worker's turn, classify returns None and nothing is
-    # injected). Uses only the pure gate -- never the real wait tool, whose loop
-    # sleeps regardless of patience.
+    # wait_for_update raises var.wait_handback when it refuses on the "expand"
+    # path (queue below floor with nothing ready, or idle) -- a situation only
+    # the supervisor can resolve (Path A ready work is the worker's own standing
+    # duty and raises no handback). Consume-and-clear it here (one-shot) and
+    # inject the expand directive so the handback is ACTED on instead of reaching
+    # the supervisor only as ignorable worker prose. The path is re-derived from
+    # live EXPLOG (self-correcting: if the queue refilled since the worker's
+    # turn, classify returns None and nothing is injected). Uses only the pure
+    # gate -- never the real wait tool, whose loop sleeps regardless of patience.
     if getattr(var, "wait_handback", False):
         var.wait_handback = False
         _hb_forgotten = find_forgotten_jobs(EXPLOG, var.GO_DEV_OH_THRESHOLD)
@@ -680,9 +681,10 @@ def supervisor_chain_node(state, config, agent=None, name=None):
         _hb_path = classify_wait_handback(
             candidates_need_disposition=EXPLOG.candidates_needing_disposition(),
             pending_count=EXPLOG.job_handler.count_pending(),
-            has_running=("running" in _hb_status),
+            running_count=_hb_status.count("running"),
             enforce_queue_floor=getattr(var, "enforce_queue_floor", True),
             queue_min_pending=var.QUEUE_MIN_PENDING,
+            remaining_seconds=var.STUDY_BUDGET_SECONDS - (time.time() - var.startTime),
             forgotten_jobs=_hb_forgotten,
         )
         if _hb_path is not None:
@@ -691,6 +693,26 @@ def supervisor_chain_node(state, config, agent=None, name=None):
                 + "\n\n"
                 + format_supervisor_handback_directive(_hb_path, _hb_forgotten)
             )
+
+    # --- Early floor-disarm notice ---------------------------------------------
+    # worker_agent_node raises var.floor_coerce_notice when it ignored a plan
+    # step's enforce_queue_floor=False (requested before the final disarm
+    # window). Consume-and-clear it and tell the supervisor DIRECTLY -- the rule
+    # must be learned from feedback at the moment it matters, not only from the
+    # myStep field description.
+    if getattr(var, "floor_coerce_notice", False):
+        var.floor_coerce_notice = False
+        _notice_remaining = var.STUDY_BUDGET_SECONDS - (time.time() - var.startTime)
+        supervisorMessage += (
+            f"\n\nNOTE -- QUEUE FLOOR: your last plan set enforce_queue_floor="
+            f"False on a step, but the study still has "
+            f"{_notice_remaining / 86400:.1f} days remaining, so it was IGNORED "
+            f"(the floor stayed armed). enforce_queue_floor=False is honored "
+            f"only within the final {var.FLOOR_DISARM_WINDOW_DAYS} days of the "
+            f"{var.STUDY_BUDGET_DAYS}-day budget -- you cannot disarm the floor "
+            f"at will before then, so do not plan around an early disarm; plan "
+            f"submit/expansion steps instead."
+        )
 
     # --- Context budget (SOFT watermark) --------------------------------------
     # The step history used to grow ~666 tokens/step forever and was injected into
@@ -999,7 +1021,18 @@ def worker_agent_node(state, config, agent=None, name=None, summarizer=None):
     # Bridge the per-task queue-floor flag to the global wait_for_update tool
     # (Gate 2, Step 6). Re-derived from plan[0] every turn, so it survives resume;
     # defaults True when the supervisor omits it.
-    var.enforce_queue_floor = getattr(task, "enforce_queue_floor", True)
+    # False is honored only inside the final FLOOR_DISARM_WINDOW_DAYS of the
+    # study budget; requested earlier, it is coerced back to True and both
+    # agents are told (worker note below + supervisor notice next planning turn).
+    # Running every worker turn, this also re-arms False steps already sitting
+    # in a resumed checkpoint -- no checkpoint surgery needed.
+    _floor = getattr(task, "enforce_queue_floor", True)
+    _remaining = var.STUDY_BUDGET_SECONDS - (time.time() - var.startTime)
+    _floor_coerced = (not _floor) and _remaining >= var.FLOOR_DISARM_WINDOW_SECONDS
+    if _floor_coerced:
+        _floor = True
+        var.floor_coerce_notice = True  # one-shot; supervisor told next turn
+    var.enforce_queue_floor = _floor
 
     # This step's absolute number. Derived from the ledger (past_steps.steps_completed
     # reads the digest block's step range back out), NOT len(past_steps) -- compaction
@@ -1017,9 +1050,18 @@ Here are what has been done so far:
 Here is the overall objective:
 {state["inputs"]}
 
-Now, you are tasked with: {task}. Please only do this task! Do not do anything else! Please note down important information on CANVAS together with their reference id before you end.
+Now, you are tasked with: {task}. Focus on this task. Your standing duties are always in scope regardless of the task: recording dispositions for finished results, submitting pipeline-continuation jobs (e.g. a finalized bulk -> surface relaxation, a finalized surface -> O adsorption on its sites, a competitive O site -> OH adsorption), and complying with instructions returned by tools. Do not otherwise go beyond the task -- no new candidates, no reports, no study-scope changes unless the task asks for them. Please note down important information on CANVAS together with their reference id before you end.
 """
-    
+    if _floor_coerced:
+        task_formatted += (
+            f"\nNOTE: this step requested enforce_queue_floor=False, but the "
+            f"study still has {_remaining / 86400:.1f} days remaining -- the "
+            f"disarm is honored only within the final "
+            f"{var.FLOOR_DISARM_WINDOW_DAYS} days of the "
+            f"{var.STUDY_BUDGET_DAYS}-day budget. The queue floor remains ARMED "
+            f"for this step.\n"
+        )
+
     old_task_formatted = task_formatted
     # On a mid-round resume, this node re-executes from the top while the
     # inner agent continues after its last completed tool call — so the
