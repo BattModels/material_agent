@@ -197,16 +197,26 @@ def format_update_disposition(
 # nested EXPLOG helpers + var) and returns whatever message this hands back.
 # ===========================================================================
 
-# Returned (unchanged from the original tool) when there is genuinely nothing to
-# wait for: no pending and no running work, and no analysis owed.
+# Returned when there is genuinely nothing to wait for: no pending and no
+# running work, and no analysis owed. Batch size comes from the refill target.
 MSG_NOTHING_TO_WAIT_FOR = (
     "Nothing is pending or running and there is nothing ready to submit. Do NOT "
     "keep polling: END YOUR TURN and return to the supervisor to discuss how to "
     "move the study forward and queue a large batch of new jobs (on the order of "
-    "40-50) -- which candidates, if any, warrant more calculations "
-    "(more surfaces / sites, O/OH jobs), whether to add more candidates, and how "
-    "to ground these choices in your current findings and the literature -- or "
-    "conclude the study if it is genuinely complete."
+    f"{var.QUEUE_REFILL_TARGET}) -- which candidates, if any, warrant more "
+    "calculations (more surfaces / sites, O/OH jobs), whether to add more "
+    "candidates, and how to ground these choices in your current findings and "
+    "the literature -- or conclude the study if it is genuinely complete."
+)
+
+# Final-days variant of the above: with less than PATH_B_CUTOFF_DAYS remaining,
+# a fresh batch could not finish, so the idle worker is steered to finalization
+# instead of expansion.
+MSG_NOTHING_TO_WAIT_FOR_FINAL_DAYS = (
+    "Nothing is pending or running and the study is in its final days -- a new "
+    "batch of jobs could not finish in time. Do NOT keep polling: END YOUR TURN "
+    "and return to the supervisor to finalize the results and produce the final "
+    "report."
 )
 
 
@@ -252,58 +262,63 @@ def _forgotten_job_line(item: Dict[str, Any]) -> str:
     return f"{cid}: ready unstarted work ({kind})."
 
 
-def format_wait_gate2_refusal(forgotten_jobs: Iterable[Dict[str, Any]] = ()) -> str:
+def format_wait_gate2_refusal(
+    forgotten_jobs: Iterable[Dict[str, Any]] = (),
+    *,
+    running_count: int = 0,
+    pending_count: int = 0,
+) -> str:
     """Gate 2 refusal: analysis is current but the HPC queue is below its floor.
 
-    DELIBERATELY states no pending count / floor / headroom (a precise deficit is a
-    target the agent would game). Two paths, BOTH ending the worker's turn and
-    handing back to the supervisor (the worker never submits under its own task):
-      - Path A (ready/forgotten work exists): the worker must return to the
-        supervisor and ask for an IMMEDIATE plan step to SUBMIT the listed jobs.
-        Unconditional whenever jobs exist.
-      - Path B (no ready work): hand back to expand the study or wind down
-        (enforce_queue_floor=False).  [rewritten in Step 5]
+    States the REAL numbers (running / queued / floor / deficit) plus, in short
+    terms, why QUEUED jobs are the target -- the old message hid them and the
+    agents responded to the opacity by distrusting and disarming the gate. Two
+    paths:
+      - Path A (ready/forgotten work exists): the worker submits the listed jobs
+        ITSELF under its current task (standing duty), then re-calls wait. No
+        supervisor round-trip.
+      - Path B (no ready work): end the turn and hand back to the supervisor to
+        expand the study or wind down (enforce_queue_floor=False, honored only
+        in the final FLOOR_DISARM_WINDOW_DAYS).
     """
     jobs = list(forgotten_jobs)
+    deficit = max(var.QUEUE_MIN_PENDING - pending_count, 1)
 
-    # Path A: ready continuation work -> hand back requesting an immediate submit step.
+    # Path A: ready continuation work -> the worker submits it NOW, then re-waits.
     if jobs:
         shown = jobs[:10]
         listing = "\n".join("  - " + _forgotten_job_line(j) for j in shown)
         extra = len(jobs) - len(shown)
-        more = (
-            f"\n  ... and {extra} more once these are queued." if extra > 0 else ""
-        )
+        more = f"\n  ... and {extra} more." if extra > 0 else ""
         return (
-            "The HPC queue is under-utilized (below its floor) and there is READY "
-            "continuation work waiting. Do NOT submit it yourself under your "
-            "current task, and do NOT wait: END YOUR TURN NOW and return to the "
-            "supervisor requesting an IMMEDIATE plan step to submit these ready "
-            "jobs. They continue candidates already started, so they are "
-            "effectively free while the cluster is under-utilized.\n\n"
-            "Ready-but-unstarted work (ask the supervisor to plan a step "
-            "submitting these):\n" + listing + more + "\n\n"
-            f"Return to the supervisor now with: \"Queue below floor; {len(jobs)} "
-            "ready continuation job(s) waiting -- please add a plan step to submit "
-            "them immediately.\" Do NOT re-call wait_for_update."
+            f"HPC queue below floor: {running_count} running but only "
+            f"{pending_count} queued (hard floor: {var.QUEUE_MIN_PENDING} queued "
+            "-- queued jobs feed nodes the instant they free up, and a near-empty "
+            "queue under fair-share means the cluster is absorbing all we give "
+            "it: free capacity). While under-utilized, submissions are "
+            "effectively free: submit the most valuable ready continuation jobs "
+            "below NOW under your current task (standing duty), guided by your "
+            f"dispositions' priorities. Clear the floor at minimum ({deficit} "
+            "more queued), and prefer refilling toward "
+            f"~{var.QUEUE_REFILL_TARGET} queued where the work justifies it; "
+            "then call wait_for_update again.\n\n"
+            "Ready-but-unstarted continuation work:\n" + listing + more
         )
 
     # Path B: no ready work -> end the turn and return to the supervisor to DISCUSS
-    # how to expand the study (or wind down). No verbatim script; the worker is told
-    # what to bring to the discussion. States no pending count / floor / headroom.
+    # how to expand the study (or wind down).
     return (
-        "The HPC queue is under-utilized. Do NOT wait: END YOUR TURN and return to "
-        "the supervisor to discuss how best to expand the study so a large batch of "
-        "new jobs (on the order of 40-50) can be queued. Bring your current "
-        "findings, and let the discussion cover (at least): which candidates, if "
-        "any, look interesting enough to warrant more calculations (more surfaces / "
-        "terminations, more O or OH adsorption sites); whether more candidates "
-        "should be added (e.g. a fresh AQ-GNoME query); and how to ground these "
-        "choices in both your current findings and the literature (e.g. "
-        "arXiv_search). If instead the study is winding down -- new jobs could not "
-        "finish in time -- ask the supervisor to set enforce_queue_floor=False so "
-        "you may wait for and finalize the in-flight results. Do NOT re-call "
-        "wait_for_update."
+        f"HPC queue below floor: {running_count} running, {pending_count} queued "
+        f"(floor: {var.QUEUE_MIN_PENDING}) and no ready continuation work "
+        "remains. Do NOT wait: END YOUR TURN and return to the supervisor to "
+        "discuss expanding the study so the queue can be refilled toward "
+        f"~{var.QUEUE_REFILL_TARGET} queued jobs -- under-utilization makes new "
+        "submissions effectively free. Discuss which candidates deserve more "
+        "surfaces/terminations/sites and whether to add new candidates (e.g. a "
+        "fresh AQ-GNoME query), grounded in your findings and the literature "
+        "(arXiv_search). If the study is genuinely winding down instead, ask the "
+        "supervisor to set enforce_queue_floor=False (honored only in the final "
+        f"{var.FLOOR_DISARM_WINDOW_DAYS} days). Do NOT re-call wait_for_update."
     )
 
 
@@ -315,37 +330,11 @@ def format_supervisor_handback_directive(
 
     Unlike ``format_wait_gate2_refusal`` -- addressed to the worker, telling it to
     end its turn -- this tells the SUPERVISOR which plan step to make, so the
-    handback is acted on rather than discounted as worker prose:
-
-      - ``"submit_ready"`` (Path A): ready continuation work exists -> plan an
-        IMMEDIATE submit step for it (it is effectively free while the cluster is
-        under-utilized); the jobs are listed so the supervisor can scope the step.
-        Keep the floor armed unless genuinely winding down.
-      - ``"expand"`` (Path B / idle): no ready work -> plan a step that opens a
-        DISCUSSION with the OER_agent (which alone can explore the current results
-        and search the literature) covering four minimum points (results,
-        literature, which active candidates to push further, whether to add more);
-        or, only if genuinely winding down, disarm the floor to finalize in-flight
-        work.
+    handback is acted on rather than discounted as worker prose. Only the
+    ``"expand"`` path remains (Path B / idle): ready continuation work is now the
+    worker's standing duty, submitted under its own task without a handback.
+    ``forgotten_jobs`` is kept in the signature for call-site compatibility.
     """
-    if path == "submit_ready":
-        jobs = list(forgotten_jobs)
-        shown = jobs[:10]
-        listing = "\n".join("  - " + _forgotten_job_line(j) for j in shown)
-        extra = len(jobs) - len(shown)
-        more = f"\n  ... and {extra} more." if extra > 0 else ""
-        return (
-            "HANDBACK -- QUEUE FLOOR: a worker returned to you because the HPC "
-            f"queue fell below its floor while {len(jobs)} READY continuation "
-            "job(s) are waiting. This work continues candidates already started "
-            "and the HPC is under-utilized, so submitting work for these "
-            "candidates is effectively free. Add a plan step now that SUBMITS "
-            "these ready jobs; do NOT set enforce_queue_floor=False unless the "
-            "study is genuinely winding down (the remaining time is too short for "
-            "newly-submitted jobs to finish).\n"
-            "Ready work to submit:\n" + listing + more
-        )
-
     # path == "expand" (also the idle "nothing to wait for" handback)
     return (
         "HANDBACK -- QUEUE FLOOR: a worker returned to you because the HPC queue "
@@ -361,11 +350,15 @@ def format_supervisor_handback_directive(
         "decide which active candidates, if any, are interesting enough to explore "
         "further (more surfaces / terminations, more O or OH adsorption sites); "
         "and (4) whether more candidates should be added (e.g. a fresh AQ-GNoME "
-        "query) if that is the best course of action. Only if the study is "
-        "genuinely winding down (the remaining time is too short for "
-        "newly-submitted jobs to finish) set enforce_queue_floor=False on the next "
-        "step so the worker may instead wait for and finalize the in-flight "
-        "results, or conclude the study if it is genuinely complete."
+        "query) if that is the best course of action -- the goal is a queue "
+        f"refilled toward ~{var.QUEUE_REFILL_TARGET} queued jobs of the most "
+        "valuable work. Only if the study is genuinely winding down (the "
+        "remaining time is too short for newly-submitted jobs to finish) set "
+        "enforce_queue_floor=False on the next step so the worker may instead "
+        "wait for and finalize the in-flight results (note: honored only within "
+        f"the final {var.FLOOR_DISARM_WINDOW_DAYS} days of the "
+        f"{var.STUDY_BUDGET_DAYS}-day budget), or conclude the study if it is "
+        "genuinely complete."
     )
 
 
@@ -389,9 +382,10 @@ def evaluate_wait_entry(
     *,
     candidates_need_disposition: List[str],
     pending_count: int,
-    has_running: bool,
+    running_count: int,
     enforce_queue_floor: bool,
     queue_min_pending: int,
+    remaining_seconds: float,
     forgotten_jobs: Iterable[Dict[str, Any]] = (),
 ) -> str:
     """Decide whether wait_for_update may proceed. Returns a refusal message, or
@@ -401,17 +395,20 @@ def evaluate_wait_entry(
       2. Nothing in flight (no pending, no running): "nothing to wait for" --
          UNLESS the floor is armed AND there is detectable ready work, in which
          case the (more actionable) Gate 2 refill message wins. A genuinely idle
-         worker with no detectable work is therefore NOT pushed to submit a large
-         batch, even with the floor on (that case routes to the supervisor).
+         worker with no detectable work is routed to the supervisor -- to expand,
+         or (in the final PATH_B_CUTOFF_DAYS) to finalize and report.
       3. Something in flight but the queue is below its floor (and the floor is
-         armed) -> Gate 2 refill.
+         armed) -> Gate 2: Path A (ready work listed; the worker submits it
+         itself then re-waits) whenever ready work exists; Path B (hand back to
+         the supervisor to expand) only while more than PATH_B_CUTOFF_DAYS
+         remain -- inside that window a wait with nothing ready simply proceeds.
       4. Otherwise -> proceed (None).
 
-    The numeric inputs (pending_count, queue_min_pending) drive the Gate 2
-    DECISION only; they are never shown to the agent (the Gate 2 message states no
-    deficit, to avoid making the floor a gameable target). ``forgotten_jobs``
-    (from find_forgotten_jobs) is passed through to the Gate 2 message. A
-    non-positive floor or enforce_queue_floor=False disarms Gate 2 entirely.
+    The numeric inputs (pending_count, running_count, queue_min_pending) drive
+    the Gate 2 decision AND are shown to the agent with the deficit -- the old
+    opacity taught agents to distrust the gate. ``forgotten_jobs`` (from
+    find_forgotten_jobs) is passed through to the Gate 2 message. A non-positive
+    floor or enforce_queue_floor=False disarms Gate 2 entirely.
     """
     if candidates_need_disposition:
         return format_wait_gate1_refusal(candidates_need_disposition)
@@ -422,16 +419,23 @@ def evaluate_wait_entry(
         and queue_min_pending > 0
         and pending_count < queue_min_pending
     )
+    path_b_active = remaining_seconds >= var.PATH_B_CUTOFF_SECONDS
 
-    if pending_count == 0 and not has_running:
+    if pending_count == 0 and running_count == 0:
         # Nothing to wait for. Only push to refill if the floor is armed AND we
         # actually have ready work to point the worker at.
         if gate2_armed and jobs:
-            return format_wait_gate2_refusal(jobs)
-        return MSG_NOTHING_TO_WAIT_FOR
+            return format_wait_gate2_refusal(
+                jobs, running_count=running_count, pending_count=pending_count
+            )
+        if path_b_active:
+            return MSG_NOTHING_TO_WAIT_FOR
+        return MSG_NOTHING_TO_WAIT_FOR_FINAL_DAYS
 
-    if gate2_armed:
-        return format_wait_gate2_refusal(jobs)
+    if gate2_armed and (jobs or path_b_active):
+        return format_wait_gate2_refusal(
+            jobs, running_count=running_count, pending_count=pending_count
+        )
     return None
 
 
@@ -439,24 +443,25 @@ def classify_wait_handback(
     *,
     candidates_need_disposition: List[str],
     pending_count: int,
-    has_running: bool,
+    running_count: int,
     enforce_queue_floor: bool,
     queue_min_pending: int,
+    remaining_seconds: float,
     forgotten_jobs: Iterable[Dict[str, Any]] = (),
 ) -> Optional[str]:
     """Classify a wait_for_update refusal into the SUPERVISOR handback path it
     warrants -- the path token behind the directive the supervisor injects, as
     opposed to ``evaluate_wait_entry``'s worker-facing message.
 
-      - ``None``           -> not a supervisor handback: a Gate 1 disposition
-                              backlog (the worker clears it itself) or "proceed
-                              to wait" (queue healthy).
-      - ``"submit_ready"`` -> Path A: queue below its floor AND ready continuation
-                              work exists -> the supervisor should plan an
-                              immediate submit step.
-      - ``"expand"``       -> Path B: queue below its floor with no ready work, OR
-                              nothing in flight at all (idle) -> the supervisor
-                              should expand the study or wind it down.
+      - ``None``     -> not a supervisor handback: a Gate 1 disposition backlog
+                        (the worker clears it itself), a Path A refusal (the
+                        worker submits the listed ready work ITSELF -- standing
+                        duty, no supervisor round-trip), or "proceed to wait".
+      - ``"expand"`` -> Path B: queue below its floor with no ready work (while
+                        more than PATH_B_CUTOFF_DAYS remain), OR nothing in
+                        flight at all (idle) -> the supervisor should expand the
+                        study, wind it down, or (idle in the final days)
+                        finalize and report.
 
     Kept in lock-step with ``evaluate_wait_entry`` (same precedence + off-switches)
     so the flag the wait tool raises and the path the supervisor re-derives from
@@ -471,14 +476,15 @@ def classify_wait_handback(
         and queue_min_pending > 0
         and pending_count < queue_min_pending
     )
+    path_b_active = remaining_seconds >= var.PATH_B_CUTOFF_SECONDS
 
-    if pending_count == 0 and not has_running:
+    if pending_count == 0 and running_count == 0:
         if gate2_armed and jobs:
-            return "submit_ready"
-        return "expand"
+            return None    # Path A: worker self-serves
+        return "expand"    # idle: expansion or (final days) finalize-and-report
 
-    if gate2_armed:
-        return "submit_ready" if jobs else "expand"
+    if gate2_armed and not jobs and path_b_active:
+        return "expand"
     return None
 
 

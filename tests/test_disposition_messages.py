@@ -218,34 +218,20 @@ def test_get_message_unknown_candidate():
 
 # ---------------------------------------------------------------------------
 # format_supervisor_handback_directive: the SUPERVISOR-facing instruction the
-# supervisor node injects on a queue-floor handback. Path A (submit_ready) tells
-# the supervisor to plan an immediate submit step + lists the ready jobs; Path B
-# (expand) tells it to open a discussion with the OER_agent covering four points.
-# Neither addresses the worker or tells anyone to "wait".
+# supervisor node injects on a queue-floor handback. Only the "expand" path
+# remains: ready continuation work (the old Path A / submit_ready handback) is
+# now the worker's own standing duty, submitted under its task with no
+# supervisor round-trip, so the directive never plans a submit step. It does
+# not address the worker or tell anyone to "wait".
 # ---------------------------------------------------------------------------
 
-def test_handback_directive_submit_ready_plans_submit_and_lists_jobs():
-    jobs = [{"candidate_id": "matZ", "kind": "bulk",
-             "termination_index": None, "site_index": None},
-            {"candidate_id": "matY", "kind": "surface",
-             "termination_index": None, "site_index": None}]
-    msg = format_supervisor_handback_directive("submit_ready", jobs)
-    assert "submit" in msg.lower()               # plan a submit step
-    assert "plan step" in msg.lower()            # ... as a plan step
-    assert "matZ" in msg and "matY" in msg       # the ready jobs are named
-    assert "2 " in msg                           # the count of ready jobs
-    assert "effectively free" in msg.lower()     # frames the submit as free
-    # It steers the supervisor, not the worker (no worker "end your turn" script).
-    assert "END YOUR TURN" not in msg
-
-
-def test_handback_directive_submit_ready_guards_the_floor_disarm():
-    msg = format_supervisor_handback_directive("submit_ready", [
-        {"candidate_id": "matZ", "kind": "bulk",
-         "termination_index": None, "site_index": None}])
-    # Disarming the floor is reserved for a genuine wind-down, not the default.
+def test_handback_directive_expand_guards_the_floor_disarm():
+    msg = format_supervisor_handback_directive("expand")
+    # Disarming the floor is reserved for a genuine wind-down, not the default,
+    # and the directive states the structural rule (final-days window).
     assert "enforce_queue_floor=False" in msg
     assert "winding down" in msg.lower()
+    assert "final" in msg.lower() and "days" in msg.lower()
 
 
 def test_handback_directive_expand_opens_discussion_with_oer_agent():
