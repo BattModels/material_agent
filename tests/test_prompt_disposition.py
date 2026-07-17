@@ -31,17 +31,36 @@ def test_supervisor_prompt_keeps_enforce_queue_floor_guidance():
 
 
 def test_worker_prompt_has_queue_floor_handback_rule():
-    # A refused wait due to the queue floor is a return-to-supervisor event, not a
-    # retry; the worker must not submit outside its task (Path A / Path B handback).
+    # A refused wait with ready jobs listed (Path A) is the worker's own job:
+    # submit them under the current task, then re-call wait. Only a no-ready-work
+    # refusal (Path B) is a return-to-supervisor event.
     p = oer_agent_prompt.lower()
-    assert "return-to-supervisor event" in p
-    assert "not a retry" in p
+    assert "submit them now" in p
+    assert "call wait_for_update again" in p
+    assert "no supervisor round-trip" in p
+    assert "return-to-supervisor event" in p       # Path B still hands back
 
 
-def test_supervisor_prompt_plans_submit_step_on_ready_work_handback():
-    # On a ready-work handback the supervisor is guided to submit those jobs
-    # (usually immediately, with discretion to hold off / wind down).
-    assert "submit those jobs immediately" in supervisor_prompt.lower()
+def test_worker_prompt_defines_the_standing_duty():
+    # The pipeline-continuation standing duty must be spelled out: what follows
+    # what, disposition-guided priority, and the supervisor-only boundary.
+    p = oer_agent_prompt.lower()
+    assert "standing duty" in p
+    assert "bulk relaxation leads to surface relaxation" in p
+    assert "surface relaxation leads to o adsorption" in p
+    assert "oh adsorption" in p
+    assert "supervisor decision" in p              # new candidates stay with the supervisor
+
+
+def test_supervisor_prompt_states_floor_semantics_and_disarm_window():
+    # The supervisor must be told the floor is on QUEUED jobs, the refill target,
+    # that workers self-serve ready work, and the final-days disarm rule.
+    s = supervisor_prompt.lower()
+    assert "queued" in s
+    assert str(var.QUEUE_MIN_PENDING) in s
+    assert str(var.QUEUE_REFILL_TARGET) in s
+    assert "standing duty" in s
+    assert f"final {var.FLOOR_DISARM_WINDOW_DAYS} days" in s
 
 
 def test_worker_prompt_states_the_terminal_tag_gate():
