@@ -106,7 +106,7 @@ if __name__ == "__main__":
     Please use PBE pseudopotential and Bayesian Error Estimation Functional (BEEF) exchange correlation function."""
     
     userMessage_13 = """please find the accurate adsorption energy difference between the most favorable configurations (different adsorbate orientations 0, 90, 180) at fcc site and most favorable configuration (different adsorbate orientations 0, 90, 180) at ontop site for CO on Pt(111) surface with p(2x2) adsorbate overlayer (1/4 coverage).
-    Please use PBE pseudopotential."""
+    Please use LDA pseudopotential."""
     
     testMessage = '''
     please generate a Pt(111) surface structure for p(2x2) adsorbate overlayer (1/4 coverage).
@@ -223,7 +223,7 @@ if __name__ == "__main__":
             # assert False
             snap = history[timeTravelToXFrameBefore]
             print("\n\n\n\n\n\n")
-            print(snap)
+            # print(snap)
             print("\n\n\n\n\n\n")
             inputs = None
             llm_config = snap.config
@@ -237,6 +237,8 @@ if __name__ == "__main__":
 #             )
             CANVAS.canvas = snap.values["canvas"]
             CANVAS.result_registry = snap.values["artifacts"]
+            
+            # exit()
 
             # --- Resume-time migration patch --------------------------------
             # Older generate_convergence_test artifacts (structural sweeps)
@@ -263,6 +265,7 @@ if __name__ == "__main__":
 
             CANVAS.print()
             print(CANVAS)
+            print(CANVAS.result_registry.keys())
             # read in previous All_Report_Names.txt, each line is a report name, create a list and var.All_Report_Names = that list
             if os.path.exists(f"{WORKING_DIRECTORY}/All_Report_Names.txt"):
                 with open(f"{WORKING_DIRECTORY}/All_Report_Names.txt", "r") as f:

@@ -2007,7 +2007,7 @@ def generateSurface_and_getPossibleSite(
     if _pblock:
         return _pblock
 
-    a_dict = {'Pt': 3.92}
+    a_dict = {'Pt': 3.91}
     supercell_dim = [supercell_dim_xy[0], supercell_dim_xy[1], supercell_dim_z]
     surface_dict = generate_surface_structures(
         species_list=[species],
