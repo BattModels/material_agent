@@ -110,11 +110,19 @@ def _find_round_boundaries(path, start_turn: int, end_turn: int,
         bar.close()
 
     if not range_closed:
-        if current is not None:
-            found.append(current)
-        raise ValueError(
-            f"turn {end_turn} not found -- only {round_idx} round(s) "
-            f"in {path}")
+        # range_closed only goes True when a round AFTER end_turn appears, so a
+        # live run whose current (still-open) round IS end_turn never sets it --
+        # even though that round's content (through EOF) is exactly what was
+        # asked for. Distinguish that from a genuinely out-of-range request:
+        # round_idx <= end_turn always holds here (round_idx only ever exceeds
+        # end_turn in the same step that sets range_closed), so round_idx ==
+        # end_turn (with current populated, i.e. round_idx >= start_turn too)
+        # is the only way to reach this point with a real match in hand.
+        if current is None or round_idx < end_turn:
+            raise ValueError(
+                f"turn {end_turn} not found -- only {round_idx} round(s) "
+                f"in {path}")
+        found.append(current)
 
     return found
 

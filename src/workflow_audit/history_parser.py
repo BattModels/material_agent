@@ -9,11 +9,13 @@ agent changes (supervisor -> worker -> supervisor -> boss -> ...). Consecutive
 markers for the same agent (the worker banner is printed twice per turn, and
 more on a retry) do NOT start a new round. Only supervisor and boss turns carry
 a timestamp in his.txt; worker turns have none, so their time fields are left
-blank.
+blank. The round counter never resets on a restart (a "Session started" banner
+does not close the round it lands in), so restarts show up as the `session`
+column changing while `round` stays put.
 
-The parser is a small state machine over the lines of his.txt; the 6 rules
-are marked inline below. his.txt holds the agent dialogue only (no @@@
-redundant-polling echoes), so every tool call appears exactly once.
+The parser is a small state machine over the lines of his.txt; rule S and
+rules 1-6 are marked inline below. his.txt holds the agent dialogue only (no
+@@@ redundant-polling echoes), so every tool call appears exactly once.
 """
 from __future__ import annotations
 
@@ -41,6 +43,13 @@ RE_BOSS = re.compile(r"^(\S+) is processing!!!!! Current time:\s*(.+?)\s*$")
 RE_TOOL = re.compile(r"^\s{2}([A-Za-z_]\w*) \(toolu")     # pretty "Tool Calls" line
 RE_CALC = re.compile(r"^\s+calculation_type:\s*(\w+)")    # pretty Args block
 RE_NAME = re.compile(r"^Name:\s*(\w+)")                   # Tool Message header
+
+# invoke.py writes this unconditionally on every launch (fresh, "ow", digit
+# time-travel, "replay", or plain resume) -- see write_history() call right
+# before the main graph.stream() loop. Session numbering starts at 1 and
+# bumps on each occurrence, so it survives crash/relaunch cycles without any
+# new logging: the marker was already there, this just stops discarding it.
+RE_SESSION = re.compile(r"^=== Session started at (.+) ===\s*$")
 
 # timedelta repr: "8 days, 23:07:17.605402" or "0:10:06.123456"
 _ELAPSED = re.compile(r"(?:(\d+)\s+days?,\s*)?(\d+):(\d{2}):(\d{2})(?:\.\d+)?\s*$")
@@ -83,13 +92,22 @@ def parse_history(path, progress: bool = True) -> pd.DataFrame:
     progress: show a byte-accurate tqdm progress bar while streaming.
 
     Returns a DataFrame with one row per real tool call (plus one
-    placeholder row per tool-call-free round), columns: round, agent, tool,
-    calc_type, outcome, round_start_h, round_start_raw, line_no -- see the
-    module docstring / README for what each means.
+    placeholder row per tool-call-free round), columns: round, session,
+    agent, tool, calc_type, outcome, round_start_h, round_start_raw,
+    line_no -- see the module docstring / README for what each means.
+    `session` counts restarts: 1 for the first session (everything up to and
+    including the first "Session started" banner, if any -- most his.txt
+    files open with one, since invoke.py writes it as literally its first
+    line), +1 each time a LATER banner appears (df.groupby("session")["round"]
+    .min() gives the round each session resumed into).
     """
     files = _resolve_sources(path)
     rows = []
     round_idx = 0            # rules 1-3: increments when the active agent changes
+    session = 1               # rule S: increments on each "Session started" banner
+                              # that follows real content (round_idx > 0) -- a
+                              # banner before any round has even started is just
+                              # session 1 announcing itself, not a restart
     agent = None             # supervisor / worker / boss
     start_h = None           # current round's elapsed start-time, hours (blank on worker turns)
     start_raw = ""           # ... and its raw string (blank on worker turns)
@@ -103,8 +121,8 @@ def parse_history(path, progress: bool = True) -> pd.DataFrame:
         placeholder row (blank `tool`) so the round still appears in the table
         with a zero tool-call count instead of being missing entirely."""
         if agent is not None and not round_has_rows:
-            rows.append(dict(round=round_idx, agent=agent, tool="",
-                             calc_type="", outcome="",
+            rows.append(dict(round=round_idx, session=session, agent=agent,
+                             tool="", calc_type="", outcome="",
                              round_start_h=start_h, round_start_raw=start_raw,
                              line_no=round_marker_line))
 
@@ -120,6 +138,15 @@ def parse_history(path, progress: bool = True) -> pd.DataFrame:
                 if bar:
                     bar.update(len(raw))
                 line = raw.decode("utf-8", "replace").rstrip("\n")
+
+                # rule S -- session-restart banner: bump the session counter,
+                #           unless no round has started yet (that's session 1
+                #           announcing itself, not a restart). Independent of
+                #           the round/agent state machine below.
+                if RE_SESSION.match(line):
+                    if round_idx > 0:
+                        session += 1
+                    continue
 
                 # rule 1 -- supervisor marker: new round only if the agent changed;
                 #           carries the timestamp.
@@ -173,8 +200,8 @@ def parse_history(path, progress: bool = True) -> pd.DataFrame:
                     if tool in CONTROL_TOOLS:
                         open_call = None
                         continue
-                    open_call = dict(round=round_idx, agent=agent, tool=tool,
-                                     calc_type="", outcome="",
+                    open_call = dict(round=round_idx, session=session, agent=agent,
+                                     tool=tool, calc_type="", outcome="",
                                      round_start_h=start_h, round_start_raw=start_raw,
                                      line_no=lineno)
                     rows.append(open_call)
@@ -209,8 +236,8 @@ def parse_history(path, progress: bool = True) -> pd.DataFrame:
     if bar:
         bar.close()
 
-    return pd.DataFrame(rows, columns=["round", "agent", "tool", "calc_type",
-                                       "outcome", "round_start_h",
+    return pd.DataFrame(rows, columns=["round", "session", "agent", "tool",
+                                       "calc_type", "outcome", "round_start_h",
                                        "round_start_raw", "line_no"])
 
 
