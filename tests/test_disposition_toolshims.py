@@ -356,10 +356,10 @@ def test_wait_refuses_until_finished_work_is_dispositioned(tmp_path):
     assert "get_disposition_info" in out and "update_disposition_info" in out
 
 
-def test_wait_refuses_when_queue_below_floor(tmp_path):
+def test_wait_refuses_when_queue_below_floor(tmp_path, monkeypatch):
     _setup(tmp_path)
     var.enforce_queue_floor = True
-    var.QUEUE_MIN_PENDING = 12        # distinctive floor; asserted via var, not a literal
+    monkeypatch.setattr(var, "QUEUE_MIN_PENDING", 12)  # distinctive floor; asserted via var, not a literal
     _add_candidate("matX")
     # bulk+surface finished and dispositioned -> Gate 1 satisfied; O not started
     # (forgotten at O) with a job pending but below the floor -> Gate 2 Path A.
@@ -381,13 +381,13 @@ def test_wait_refuses_when_queue_below_floor(tmp_path):
     assert f"hard floor: {var.QUEUE_MIN_PENDING}" in out   # real numbers shown
 
 
-def test_wait_leaves_handback_flag_false_on_path_a(tmp_path):
+def test_wait_leaves_handback_flag_false_on_path_a(tmp_path, monkeypatch):
     # A Path A refusal (ready work listed) is now the WORKER's own job -- it
     # submits the jobs itself and re-calls wait -- so the supervisor-handback
     # flag must stay False.
     _setup(tmp_path)
     var.enforce_queue_floor = True
-    var.QUEUE_MIN_PENDING = 12
+    monkeypatch.setattr(var, "QUEUE_MIN_PENDING", 12)
     var.wait_handback = False
     _add_candidate("matX")
     pb = _inject("matX", "bulk_relaxation", "completed")
@@ -403,13 +403,13 @@ def test_wait_leaves_handback_flag_false_on_path_a(tmp_path):
     assert var.wait_handback is False
 
 
-def test_wait_sets_handback_flag_on_expand_path(tmp_path):
+def test_wait_sets_handback_flag_on_expand_path(tmp_path, monkeypatch):
     # A Path B refusal (queue below floor, NOTHING ready to submit) is the
     # supervisor's to resolve -> the one-shot handback flag must be raised so
     # supervisor_chain_node injects the expand directive on its next turn.
     _setup(tmp_path)
     var.enforce_queue_floor = True
-    var.QUEUE_MIN_PENDING = 12
+    monkeypatch.setattr(var, "QUEUE_MIN_PENDING", 12)
     var.wait_handback = False
     _add_candidate("matX")
     pb = _inject("matX", "bulk_relaxation", "completed")
