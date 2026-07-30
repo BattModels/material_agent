@@ -44,6 +44,13 @@ RE_TOOL = re.compile(r"^\s{2}([A-Za-z_]\w*) \(toolu")     # pretty "Tool Calls" 
 RE_CALC = re.compile(r"^\s+calculation_type:\s*(\w+)")    # pretty Args block
 RE_NAME = re.compile(r"^Name:\s*(\w+)")                   # Tool Message header
 
+# wait_for_update's two "genuinely waited" return paths (src/tools.py) embed
+# fixed, unambiguous phrasing -- neither appears in any of its refusal
+# messages (src/disposition_messages.py), so matching these two and falling
+# back to "refused" needs no enumeration of refusal text.
+RE_WAIT_DONE    = re.compile(r"time waited:\s*(\d+)\s*hours?\s*and\s*(\d+)\s*minutes")
+RE_WAIT_TIMEOUT = re.compile(r"waiting for\s*(\d+)\s*minutes with no update")
+
 # invoke.py writes this unconditionally on every launch (fresh, "ow", digit
 # time-travel, "replay", or plain resume) -- see write_history() call right
 # before the main graph.stream() loop. Session numbering starts at 1 and
@@ -62,6 +69,22 @@ def parse_elapsed_hours(text: str):
         return None
     days, hh, mm, ss = m.groups()
     return (int(days or 0) * 86400 + int(hh) * 3600 + int(mm) * 60 + int(ss)) / 3600.0
+
+
+def _parse_wait_result(line: str):
+    """Classify a wait_for_update result line: ("waited", minutes),
+    ("timeout", minutes), or ("refused", None).
+
+    `timeout`'s minutes is the requested `patience` value baked into the log
+    text, not an independently re-measured elapsed time -- the only number
+    the tool's own log ever records for that case."""
+    m = RE_WAIT_DONE.search(line)
+    if m:
+        return "waited", int(m.group(1)) * 60 + int(m.group(2))
+    m = RE_WAIT_TIMEOUT.search(line)
+    if m:
+        return "timeout", int(m.group(1))
+    return "refused", None
 
 
 def _resolve_sources(path) -> list[Path]:
@@ -93,13 +116,18 @@ def parse_history(path, progress: bool = True) -> pd.DataFrame:
 
     Returns a DataFrame with one row per real tool call (plus one
     placeholder row per tool-call-free round), columns: round, session,
-    agent, tool, calc_type, outcome, round_start_h, round_start_raw,
-    line_no -- see the module docstring / README for what each means.
+    agent, tool, calc_type, outcome, wait_status, wait_minutes,
+    round_start_h, round_start_raw, line_no -- see the module docstring /
+    README for what each means.
     `session` counts restarts: 1 for the first session (everything up to and
     including the first "Session started" banner, if any -- most his.txt
     files open with one, since invoke.py writes it as literally its first
     line), +1 each time a LATER banner appears (df.groupby("session")["round"]
     .min() gives the round each session resumed into).
+    `wait_status`/`wait_minutes` are populated only for wait_for_update rows
+    (blank/NaN elsewhere, like `calc_type`): "waited"/"timeout" with the
+    minutes actually waited, or "refused" (no wait happened, minutes is NaN)
+    -- see _parse_wait_result.
     """
     files = _resolve_sources(path)
     rows = []
@@ -123,6 +151,7 @@ def parse_history(path, progress: bool = True) -> pd.DataFrame:
         if agent is not None and not round_has_rows:
             rows.append(dict(round=round_idx, session=session, agent=agent,
                              tool="", calc_type="", outcome="",
+                             wait_status="", wait_minutes=None,
                              round_start_h=start_h, round_start_raw=start_raw,
                              line_no=round_marker_line))
 
@@ -202,6 +231,7 @@ def parse_history(path, progress: bool = True) -> pd.DataFrame:
                         continue
                     open_call = dict(round=round_idx, session=session, agent=agent,
                                      tool=tool, calc_type="", outcome="",
+                                     wait_status="", wait_minutes=None,
                                      round_start_h=start_h, round_start_raw=start_raw,
                                      line_no=lineno)
                     rows.append(open_call)
@@ -228,6 +258,8 @@ def parse_history(path, progress: bool = True) -> pd.DataFrame:
                 if expect_result and open_call is not None and line.strip():
                     open_call["outcome"] = ("error" if line.lstrip().startswith("Tool error")
                                             else "success")
+                    if open_call["tool"] == "wait_for_update":
+                        open_call["wait_status"], open_call["wait_minutes"] = _parse_wait_result(line)
                     expect_result = False
                     continue
 
@@ -237,7 +269,8 @@ def parse_history(path, progress: bool = True) -> pd.DataFrame:
         bar.close()
 
     return pd.DataFrame(rows, columns=["round", "session", "agent", "tool",
-                                       "calc_type", "outcome", "round_start_h",
+                                       "calc_type", "outcome", "wait_status",
+                                       "wait_minutes", "round_start_h",
                                        "round_start_raw", "line_no"])
 
 
@@ -259,6 +292,11 @@ def main(argv=None):
     if len(sub):
         print("submit_dft_job calc_type:", dict(sub.calc_type.value_counts()))
         print("submit_dft_job outcome :", dict(sub.outcome.value_counts()))
+    wf = df[df.tool == "wait_for_update"]
+    if len(wf):
+        print("wait_for_update status:", dict(wf.wait_status.value_counts()))
+        print("wait_for_update avg minutes by status:",
+              wf.groupby("wait_status")["wait_minutes"].mean().round(1).to_dict())
     return 0
 
 
