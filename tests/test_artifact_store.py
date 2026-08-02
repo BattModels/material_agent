@@ -1,0 +1,177 @@
+"""Tests for the durable artifact registry (src/artifact_store.py + myCANVAS wiring).
+
+Fast suite: imports only src.myCANVAS / src.artifact_store, never src.tools, so
+it does not pay the ~109 s GNoME database import.
+
+What matters here is that the registry survives a process restart from the
+SQLite table ALONE -- once `artifacts` is dropped from the LangGraph graph state
+this table is the only copy of the provenance record that `verify_artifact` and
+every report citation depend on.
+"""
+
+import pytest
+
+from src.artifact_store import ArtifactStore
+from src.myCANVAS import myCANVAS
+
+
+@pytest.fixture
+def canvas(tmp_path):
+    c = myCANVAS()
+    c.set_working_directory(str(tmp_path))
+    return c
+
+
+def _numeric(c, value=42.0, tool="submit_dft_job"):
+    return c.register_tool_output(
+        tool_name=tool, args={"a": 1}, value=value,
+        description="d", reasons={"r": "why"},
+    )
+
+
+def test_registering_persists_to_sqlite(canvas):
+    rid = _numeric(canvas)
+    assert canvas.result_registry[rid].value == 42.0      # in memory
+    assert canvas._artifact_store.count() == 1            # and on disk
+    assert canvas._artifact_store.get(rid).value == 42.0
+
+
+def test_registry_rehydrates_from_disk_alone(tmp_path):
+    """The restart path: a fresh CANVAS must recover the full registry."""
+    c1 = myCANVAS(); c1.set_working_directory(str(tmp_path))
+    rid = _numeric(c1, 3.5)
+    other = c1.register_tool_output(
+        tool_name="query_explog", args={}, value="a rendered table",
+        description="d", reasons={},
+    )
+
+    c2 = myCANVAS(); c2.set_working_directory(str(tmp_path))
+    assert set(c2.result_registry) == {rid, other}
+    assert c2.get_artifact(rid).value == 3.5
+    assert c2.get_artifact(other).tool_name == "query_explog"
+
+
+def test_verify_artifact_works_after_reload(tmp_path):
+    """verify_artifact is the anti-hallucination gate -- it must still accept a
+    genuine citation, and still reject a wrong one, after a restart."""
+    c1 = myCANVAS(); c1.set_working_directory(str(tmp_path))
+    rid = _numeric(c1, 7.25)
+
+    c2 = myCANVAS(); c2.set_working_directory(str(tmp_path))
+    assert c2.verify_artifact(7.25, rid)[0] is True
+    assert c2.verify_artifact(9.99, rid)[0] is False
+    assert c2.verify_artifact(7.25, "nosuchid")[0] is False
+
+
+def test_listed_artifact_nested_values_survive(tmp_path):
+    """submit_dft_job returns a ListedArtifact whose NumericArtifacts are nested
+    one level down; verify_artifact matches against any of them."""
+    c1 = myCANVAS(); c1.set_working_directory(str(tmp_path))
+    rid = c1.register_tool_output(
+        tool_name="submit_dft_job", args={}, value=[11.0, 12.0],
+        description="d", reasons={}, listed_value=True,
+    )
+
+    c2 = myCANVAS(); c2.set_working_directory(str(tmp_path))
+    assert c2.verify_artifact(12.0, rid)[0] is True
+    assert c2.verify_artifact(13.0, rid)[0] is False
+
+
+def test_open_is_idempotent(tmp_path):
+    """invoke.py calls set_working_directory twice; the second call must not
+    re-open the store or re-load ~100 MB of artifacts."""
+    c = myCANVAS(); c.set_working_directory(str(tmp_path))
+    _numeric(c)
+    store = c._artifact_store
+    c.set_working_directory(str(tmp_path))
+    assert c._artifact_store is store
+    assert len(c.result_registry) == 1
+
+
+def test_curr_round_ids_track_registrations(canvas):
+    """check_required_tool_use reads curr_round_result_ids; the single write
+    path must keep appending to it."""
+    a = _numeric(canvas, tool="submit_dft_job")
+    b = _numeric(canvas, tool="query_explog")
+    assert canvas.curr_round_result_ids == [a, b]
+    canvas.rest_curr_round_result_ids()
+    assert canvas.curr_round_result_ids == []
+
+
+def test_store_survives_reopen_without_canvas(tmp_path):
+    """ArtifactStore on its own round-trips -- the audit notebooks read it
+    directly without going through CANVAS."""
+    c = myCANVAS(); c.set_working_directory(str(tmp_path))
+    _numeric(c, 1.5)
+    s = ArtifactStore(str(tmp_path / "artifacts.sqlite"))
+    assert s.count() == 1
+    (rid, art), = s.load_all().items()
+    assert art.value == 1.5
+    assert art.tool_name == "submit_dft_job"
+
+
+def test_registration_works_without_a_store():
+    """The module-level CANVAS singleton exists before any run directory is
+    known (_artifact_store is None until set_working_directory). Registering
+    then must still work, memory-only -- otherwise importing CANVAS in a test
+    or a helper script would blow up."""
+    c = myCANVAS()
+    assert c._artifact_store is None
+    rid = _numeric(c, 5.0)
+    assert c.result_registry[rid].value == 5.0
+    assert c.verify_artifact(5.0, rid)[0] is True
+
+
+def test_new_artifacts_append_to_an_existing_table(tmp_path):
+    """Reopening must not truncate: a resumed run keeps adding to the log it
+    just rehydrated."""
+    c1 = myCANVAS(); c1.set_working_directory(str(tmp_path))
+    first = _numeric(c1, 1.0)
+
+    c2 = myCANVAS(); c2.set_working_directory(str(tmp_path))
+    second = _numeric(c2, 2.0)
+
+    assert c2._artifact_store.count() == 2
+    c3 = myCANVAS(); c3.set_working_directory(str(tmp_path))
+    assert set(c3.result_registry) == {first, second}
+
+
+def test_reregistering_same_id_is_idempotent(tmp_path):
+    """Crash-replay: a resumed run may re-run the tool call that was in flight.
+    Re-putting the same result_id must overwrite, not raise or duplicate."""
+    c = myCANVAS(); c.set_working_directory(str(tmp_path))
+    rid = _numeric(c, 4.0)
+    art = c.result_registry[rid]
+    c._artifact_store.put(rid, art)
+    c._artifact_store.put(rid, art)
+    assert c._artifact_store.count() == 1
+
+
+def test_put_many_matches_put(tmp_path):
+    """The migration path (migrate_artifacts.py) uses put_many; it must produce
+    rows indistinguishable from the live put() path."""
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    src = myCANVAS(); src.set_working_directory(str(tmp_path / "a"))
+    ids = [_numeric(src, float(i)) for i in range(5)]
+
+    dest = ArtifactStore(str(tmp_path / "b" / "artifacts.sqlite"))
+    assert dest.put_many(src.result_registry.items()) == 5
+    assert dest.count() == 5
+    reloaded = dest.load_all()
+    for rid in ids:
+        assert reloaded[rid].__dict__ == src.result_registry[rid].__dict__
+
+
+def test_get_missing_id_returns_none(tmp_path):
+    s = ArtifactStore(str(tmp_path / "artifacts.sqlite"))
+    assert s.get("nosuchid") is None
+    assert s.count() == 0
+    assert s.load_all() == {}
+
+
+def test_missing_directory_fails_clearly(tmp_path):
+    """A mis-set WORKING_DIR should say so, not surface sqlite's opaque
+    'unable to open database file'."""
+    with pytest.raises(FileNotFoundError, match="directory does not exist"):
+        ArtifactStore(str(tmp_path / "no" / "such" / "dir" / "artifacts.sqlite"))

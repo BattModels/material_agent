@@ -105,12 +105,17 @@ class myCANVAS():
         # authoritative provenance registry for numeric tool outputs
         self.result_registry = {}
         self.curr_round_result_ids: List[str] = []
+        # Durable backing for result_registry (src/artifact_store.py). Opened by
+        # set_working_directory once the run directory is known; None until then
+        # (and in unit tests), in which case the registry is memory-only.
+        self._artifact_store = None
 
         # optional tool-specific validators
         self.tool_validators: Dict[str, Callable[[NumericArtifact, "myCANVAS"], tuple[bool, str]]] = {}
     
     def set_working_directory(self, working_directory, ckp=0):
         self.working_directory = working_directory
+        self._open_artifact_store()
         # writeDir = os.path.join(self.working_directory, 'canvas.pickle')
         # ckpDir = os.path.join(self.working_directory, 'canvas_checkpoints.pickle')
         # if not os.path.exists(writeDir):
@@ -128,7 +133,41 @@ class myCANVAS():
         #     print("##################### CANVAS #######################")
         #     myDictPP(self.canvas, toDisk=True, filename=writeDir+'.txt')
         #     print("################### CANVAS END #####################")
-    
+
+    def _open_artifact_store(self):
+        """Open (or re-open) the run's artifacts.sqlite and rehydrate the registry.
+
+        IDEMPOTENT: invoke.py calls set_working_directory twice (once before the
+        overwrite branch, once after), and re-loading ~100 MB of artifacts a
+        second time would be pure waste -- so a store already open on the SAME
+        path is left alone.
+
+        The registry is append-only, so loading the table is a straight
+        replacement of the in-memory dict, not a merge.
+        """
+        from src.artifact_store import ArtifactStore
+
+        path = os.path.join(self.working_directory, "artifacts.sqlite")
+        if self._artifact_store is not None and self._artifact_store.path == path:
+            return
+        self._artifact_store = ArtifactStore(path)
+        loaded = self._artifact_store.load_all()
+        if loaded:
+            self.result_registry = loaded
+            print(f"[CANVAS] rehydrated {len(loaded)} artifacts from {path}")
+
+    def _register_artifact(self, result_id, artifact):
+        """Single write path for the registry: memory + durable store + round list.
+
+        All three call sites in register_tool_output funnel through here so the
+        persistence can never be forgotten on one branch.
+        """
+        self.result_registry[result_id] = artifact
+        self.curr_round_result_ids.append(result_id)
+        if self._artifact_store is not None:
+            self._artifact_store.put(result_id, artifact)
+        return result_id
+
     def print(self):
         print("##################### CANVAS #######################")
         myDictPP(self.canvas)
@@ -235,9 +274,7 @@ class myCANVAS():
                 metadata=metadata or {},
             )
             # add duplication check
-            self.result_registry[result_id] = artifact
-            self.curr_round_result_ids.append(result_id)
-            return result_id
+            return self._register_artifact(result_id, artifact)
         except:
             if listed_value:
                 artifactList = []
@@ -276,9 +313,7 @@ class myCANVAS():
                     parent_result_ids=parent_result_ids or [],
                     metadata=metadata or {},
                 )
-                self.result_registry[result_id] = artifact
-                self.curr_round_result_ids.append(result_id)
-                return result_id
+                return self._register_artifact(result_id, artifact)
             else:
                 artifact = OtherArtifact(
                     result_id=result_id,
@@ -290,10 +325,8 @@ class myCANVAS():
                     parent_result_ids=parent_result_ids or [],
                     metadata=metadata or {},
                 )
-                self.result_registry[result_id] = artifact
-                self.curr_round_result_ids.append(result_id)
-                return result_id
-        
+                return self._register_artifact(result_id, artifact)
+
     def get_artifact(self, result_id: str):
         return self.result_registry.get(result_id, None)
     
