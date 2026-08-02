@@ -48,6 +48,12 @@ from src.aq_gnome_candidate_sync import sync_reduced_formula, sync_decomposition
 # Checkpoint retention
 # =====================================================================
 THREAD_ID = "1"
+
+# Default source for `python invoke.py continue [path]`. Kept as a file rather
+# than a CLI string because this is the single message the supervisor receives
+# when a finished run is restarted: it wants to be long, edited over several
+# passes, diffable, and preserved as the record of what the operator instructed.
+CONTINUE_DIRECTIVE_FILE = "continue_directive.md"
 MAX_CHECKPOINT_DB_BYTES = 20 * 1024**3   # prune once sqlite (+wal) exceeds 20 GB
 KEEP_ROUNDS = 50                         # newest big-round checkpoints to keep
 
@@ -580,17 +586,31 @@ You have a maximum of 1 hours to complete the entire study and make your final r
         # next="Supervisor"), which is both the honest description of what is
         # happening and the channel supervisor_chain_node already renders as
         # "your draft final answer was reviewed and rejected ... feedback: ...".
-        if len(sys.argv) < 3 or not sys.argv[2].strip():
+        # The directive is read from a FILE, not the command line: it is the one
+        # shot you get at the supervisor, so it wants to be long, edited, diffed
+        # and kept as a record of the intervention -- none of which survives being
+        # typed as a shell argument (quoting, $, backticks, newlines).
+        _directive_path = sys.argv[2] if len(sys.argv) > 2 else CONTINUE_DIRECTIVE_FILE
+        if not os.path.isfile(_directive_path):
             raise SystemExit(
-                'usage: python invoke.py continue "<directive for the supervisor>"\n'
-                "The directive is delivered as boss feedback, so say why the study "
-                "is resuming and what should happen next."
+                f"continue: no directive file at {_directive_path}\n"
+                f"  usage: python invoke.py continue [path/to/directive.md]\n"
+                f"  (defaults to {CONTINUE_DIRECTIVE_FILE})\n"
+                "Write the message the SUPERVISOR should receive. It is delivered "
+                "as boss feedback -- i.e. as a rejection of its final answer -- so "
+                "say why the study is resuming and what must happen next."
             )
-        continue_directive = sys.argv[2]
+        with open(_directive_path, "r", encoding="utf-8") as _f:
+            continue_directive = _f.read().strip()
+        if not continue_directive:
+            raise SystemExit(f"continue: {_directive_path} is empty.")
         print()
         print("################################################################")
         print("# CONTINUE: injecting an operator directive as boss feedback    #")
         print("# so a finished run hands control back to the supervisor.       #")
+        print(f"# source: {_directive_path}")
+        print(f"# length: {len(continue_directive)} chars, "
+              f"{len(continue_directive.splitlines())} lines")
         print("################################################################")
         print()
     elif len(sys.argv) > 1:
