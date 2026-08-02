@@ -544,9 +544,11 @@ You have a maximum of 1 hours to complete the entire study and make your final r
     # set environment variable
     os.environ["OMP_NUM_THREADS"] = "1"
 
-    timeTravelToXFrameBefore = 0
     overwrite = False
-    replay_handback = False
+    # Set by `python invoke.py continue "<directive>"`: the operator's text,
+    # injected as a boss REJECTION so a finished run hands control back to the
+    # supervisor. See the update_state call further down.
+    continue_directive = None
     if len(sys.argv) > 1 and sys.argv[1] == "ow":
         print()
         print("####################")
@@ -570,6 +572,27 @@ You have a maximum of 1 hours to complete the entire study and make your final r
         print("##############################################################")
         print()
         overwrite = True
+    elif len(sys.argv) > 1 and sys.argv[1] == "continue":
+        # Un-finish a run that ENDED cleanly. When the boss approves, the head
+        # checkpoint has next=() and a plain resume executes zero super-steps --
+        # so there is no way back in without putting a task back on the graph.
+        # We inject the operator's text as a boss REJECTION (as_node="Boss_Agent",
+        # next="Supervisor"), which is both the honest description of what is
+        # happening and the channel supervisor_chain_node already renders as
+        # "your draft final answer was reviewed and rejected ... feedback: ...".
+        if len(sys.argv) < 3 or not sys.argv[2].strip():
+            raise SystemExit(
+                'usage: python invoke.py continue "<directive for the supervisor>"\n'
+                "The directive is delivered as boss feedback, so say why the study "
+                "is resuming and what should happen next."
+            )
+        continue_directive = sys.argv[2]
+        print()
+        print("################################################################")
+        print("# CONTINUE: injecting an operator directive as boss feedback    #")
+        print("# so a finished run hands control back to the supervisor.       #")
+        print("################################################################")
+        print()
     elif len(sys.argv) > 1:
         # TIME TRAVEL IS NO LONGER SOUND. CANVAS / EXPLOG / the artifact registry
         # are not checkpointed any more (see planNexe2.full_state_snapshot):
@@ -583,12 +606,13 @@ You have a maximum of 1 hours to complete the entire study and make your final r
                 f"'{sys.argv[1]}' is no longer supported: graph state no longer "
                 "carries CANVAS/EXPLOG, so rewinding would restore an old "
                 "conversation against current globals.\n"
-                "  python invoke.py          -> resume where the run stopped\n"
-                "  python invoke.py ow       -> start fresh (guarded)\n"
-                "To restart a run that FINISHED (boss approved, next=()), inject "
-                "a boss rejection with graph.update_state(..., as_node='Boss_Agent')."
+                "  python invoke.py                     -> resume where the run stopped\n"
+                '  python invoke.py continue "<why>"    -> restart a FINISHED run\n'
+                "  python invoke.py ow                  -> start fresh (guarded)"
             )
-        assert False, "Invalid argument. Use 'ow' for overwrite, or leave blank to resume."
+        assert False, ('Invalid argument. Use "ow" to overwrite, '
+                       '"continue \'<directive>\'" to restart a finished run, '
+                       "or leave blank to resume.")
     else:
         print()
         print("############")
@@ -716,83 +740,7 @@ You have a maximum of 1 hours to complete the entire study and make your final r
             history = list(graph.get_state_history(llm_config))
             # print(history)
 
-            # --- Replay handback -------------------------------------------------
-            # get_state_history() is reverse-chronological: history[0] is the
-            # NEWEST checkpoint (this is exactly why `timeTravelToXFrameBefore`
-            # indexes it as "N frames back" above). So enumerating forward walks
-            # newest -> oldest, and the FIRST next == ('Supervisor',) match is the
-            # MOST RECENT worker->supervisor handover -- the disregarded one, since
-            # the head is already past it. (A reverse loop would find the oldest
-            # handover, which is wrong.) We fork from that boundary so the
-            # supervisor re-runs that decision. var.wait_handback is a process
-            # global (never checkpointed), so a bare revert would NOT re-raise it --
-            # we force it on just before graph.stream below, and the supervisor
-            # re-derives the queue-floor path from the hydrated EXPLOG.
-            if replay_handback:
-                handover_idx = None
-                for _i, _s in enumerate(history):
-                    if tuple(_s.next) == ("Supervisor",):
-                        handover_idx = _i
-                        break
-                assert handover_idx is not None, (
-                    "replay: no worker->supervisor handover found (no checkpoint "
-                    "with next == ('Supervisor',)) in this run's history."
-                )
-                _hs = history[handover_idx]
-                _ps = _hs.values.get("past_steps", [])
-                _tag = (_ps[-1].step[:120] if _ps else "")
-                _t = _hs.values.get("time")
-                _t_str = f"{_t:.0f}s" if isinstance(_t, (int, float)) else str(_t)
-                print()
-                print("##################################################################")
-                print("# REPLAY HANDBACK: reverting to the last worker->supervisor       #")
-                print("# handover; the supervisor will be re-prompted with the directive #")
-                print("##################################################################")
-                print(f"# chosen frame index  : {handover_idx}  (history[0] = newest)")
-                print(f"# frame .next         : {tuple(_hs.next)}")
-                print(f"# elapsed at frame    : {_t_str}")
-                print(f"# last worker summary  : {_tag}")
-                print("# (Ctrl-C now if this is NOT the handback you meant to replay.)")
-                print("##################################################################")
-                print()
-                timeTravelToXFrameBefore = handover_idx
-
-                # Clear any COMPLETED inner react-loop for the supervisor task that
-                # already ran from this handover. Re-running the supervisor from X
-                # re-uses the SAME deterministic task id -> if its Supervisor:<task_id>
-                # subgraph is already finished, agent.stream yields nothing and
-                # supervisor_chain_node crashes (UnboundLocalError at line ~713). We
-                # look up the task id(s) that produced writes FROM X (i.e. the
-                # supervisor that ran) and drop only their inner namespace. Targeted
-                # + idempotent: deletes nothing if the supervisor never ran here, and
-                # also stops these ~hundreds-of-MB react-loop snapshots from
-                # accumulating in the (already huge) checkpoint db on every replay.
-                _x_ckpt_id = _hs.config["configurable"]["checkpoint_id"]
-                _sup_name = _hs.next[0] if _hs.next else "Supervisor"
-                _stale_task_ids = [
-                    r[0] for r in checkpointer.conn.execute(
-                        "SELECT DISTINCT task_id FROM writes "
-                        "WHERE checkpoint_ns='' AND checkpoint_id=?",
-                        (_x_ckpt_id,),
-                    ).fetchall()
-                ]
-                _del_ck = _del_w = 0
-                for _tid in _stale_task_ids:
-                    _prefix = f"{_sup_name}:{_tid}"
-                    _del_ck += checkpointer.conn.execute(
-                        "DELETE FROM checkpoints WHERE checkpoint_ns LIKE ? || '%'",
-                        (_prefix,),
-                    ).rowcount
-                    _del_w += checkpointer.conn.execute(
-                        "DELETE FROM writes WHERE checkpoint_ns LIKE ? || '%'",
-                        (_prefix,),
-                    ).rowcount
-                checkpointer.conn.commit()
-                print(f"# cleared stale supervisor subgraph for task(s) {_stale_task_ids}:")
-                print(f"#   deleted {_del_ck} checkpoint row(s) + {_del_w} write row(s)")
-                print()
-
-            snap = history[timeTravelToXFrameBefore]
+            snap = history[0]   # newest checkpoint; time travel removed
             # print("\n\n\n")
             # print(snap)
             # print("\n\n\n")
@@ -903,21 +851,47 @@ You have a maximum of 1 hours to complete the entire study and make your final r
             print("Resuming with the above snapshot. If you want to start fresh, please run with 'ow' argument. If you want to time travel x frame back, run 'python invoke.py x'.")
             print("########################################################################################################")
             
-        # assert False
-        # Replay handback: raise the (non-checkpointed) handback flag so the
-        # supervisor node consumes it this turn and injects the queue-floor
-        # directive. Safe/self-correcting: if the hydrated EXPLOG is not actually
-        # in a handback state, classify_wait_handback returns None and nothing is
-        # injected. Only set on the explicit `replay` arg -- a normal resume leaves
-        # it False, so this whole feature is inert unless invoked.
-        if replay_handback:
-            var.wait_handback = True
-            print()
+        # --- `continue`: un-finish a run that ended cleanly --------------------
+        # When the boss approves, whos_next routes to END and the head checkpoint
+        # has next=() -- graph.stream then executes ZERO super-steps, so a plain
+        # resume cannot restart the study. Put a task back on the graph by
+        # writing the operator's directive as if the boss had REJECTED the draft:
+        # next="Supervisor" + boss_feedback=<directive>, as_node="Boss_Agent".
+        #
+        # update_state appends a NEW checkpoint (fresh checkpoint_id -> fresh
+        # task id), so nothing is rewound and the finished run stays in the
+        # history. The supervisor then wakes on its boss_feedback branch, which
+        # renders as "your draft final answer was reviewed and rejected ...".
+        if continue_directive is not None:
+            if overwrite:
+                raise SystemExit("`continue` cannot be combined with a fresh run.")
+            _before = graph.get_state(llm_config)
+            if tuple(_before.next):
+                raise SystemExit(
+                    f"This run is not finished -- next={tuple(_before.next)}. "
+                    "`continue` is only for a run that ENDED (next=()); to carry "
+                    "on an interrupted run just use `python invoke.py`."
+                )
+            llm_config = {
+                **graph.update_state(
+                    llm_config,
+                    {"next": "Supervisor", "boss_feedback": continue_directive},
+                    as_node="Boss_Agent",
+                ),
+                "recursion_limit": 2000,
+            }
+            _after = graph.get_state(llm_config)
+            assert tuple(_after.next) == ("Supervisor",), (
+                f"continue: expected next=('Supervisor',), got {tuple(_after.next)}"
+            )
             print("################################################################")
-            print("# REPLAY HANDBACK: var.wait_handback = True -> supervisor will  #")
-            print("# re-derive the queue-floor path and inject the directive.      #")
+            print(f"# CONTINUE injected. next = {tuple(_after.next)}")
+            print("# directive delivered to the supervisor as boss feedback:")
+            for _line in continue_directive.splitlines():
+                print(f"#   {_line}")
             print("################################################################")
             print()
+            write_history("=== OPERATOR CONTINUE ===\n" + continue_directive + "\n\n")
 
         # durability="sync": the checkpoint (parent round OR inner tool-level)
         # is committed to sqlite BEFORE execution continues, so a hard kill at
