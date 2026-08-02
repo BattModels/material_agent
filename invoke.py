@@ -571,23 +571,24 @@ You have a maximum of 1 hours to complete the entire study and make your final r
         print()
         overwrite = True
     elif len(sys.argv) > 1:
-        if sys.argv[1].isdigit():
-            timeTravelToXFrameBefore = int(sys.argv[1])
-            print()
-            print("############################################################")
-            print(f"# Time traveling {timeTravelToXFrameBefore} frames back")
-            print("############################################################")
-            print()
-        elif sys.argv[1] in ("replay", "rh"):
-            replay_handback = True
-            print()
-            print("############################################################")
-            print("# Replay handback: revert to the last worker->supervisor")
-            print("# handover and re-prompt the supervisor with the new directive")
-            print("############################################################")
-            print()
-        else:
-            assert False, "Invalid argument. Use 'ow' for overwrite, a number for time travel, 'replay' to replay the last worker->supervisor handback, or leave blank to resume."
+        # TIME TRAVEL IS NO LONGER SOUND. CANVAS / EXPLOG / the artifact registry
+        # are not checkpointed any more (see planNexe2.full_state_snapshot):
+        # they are hydrated from canvas.pickle, vasp_calcs/explog.pkl and
+        # artifacts.sqlite, which always hold the LATEST state. Rewinding to an
+        # older frame would therefore replay an old conversation against
+        # present-day globals -- silently incoherent. Refuse instead of
+        # pretending, and say what to do instead.
+        if sys.argv[1].isdigit() or sys.argv[1] in ("replay", "rh"):
+            raise SystemExit(
+                f"'{sys.argv[1]}' is no longer supported: graph state no longer "
+                "carries CANVAS/EXPLOG, so rewinding would restore an old "
+                "conversation against current globals.\n"
+                "  python invoke.py          -> resume where the run stopped\n"
+                "  python invoke.py ow       -> start fresh (guarded)\n"
+                "To restart a run that FINISHED (boss approved, next=()), inject "
+                "a boss rejection with graph.update_state(..., as_node='Boss_Agent')."
+            )
+        assert False, "Invalid argument. Use 'ow' for overwrite, or leave blank to resume."
     else:
         print()
         print("############")
@@ -705,10 +706,9 @@ You have a maximum of 1 hours to complete the entire study and make your final r
                 "draft_response": "",
                 "boss_feedback": "",
                 "response": "",
-                "canvas": CANVAS.canvas,
-                "artifacts": CANVAS.result_registry,
-                "explog_candidates": EXPLOG.relational_frame.candidates.df,
-                "explog_processes": EXPLOG.relational_frame.processes.df,
+                # canvas / artifacts / explog_* are no longer graph channels --
+                # they live in canvas.pickle, artifacts.sqlite and
+                # vasp_calcs/explog.pkl (see planNexe2.full_state_snapshot).
                 "time": 0
             }
             llm_config = llm_config
@@ -816,17 +816,22 @@ You have a maximum of 1 hours to complete the entire study and make your final r
             # checkpoint_id}; merging keeps our recursion_limit (otherwise it
             # silently falls back to the default of 25 and long runs die).
             llm_config = {**snap.config, "recursion_limit": 2000}
-            CANVAS.canvas = snap.values["canvas"]
-            CANVAS.result_registry = snap.values.get("artifacts", {})
-            EXPLOG.relational_frame.candidates.df = snap.values["explog_candidates"]
-            EXPLOG.relational_frame.processes.df = snap.values["explog_processes"]
+            # CANVAS / EXPLOG are NOT restored from the checkpoint any more.
+            # They were hydrated from their own files before we got here:
+            #   canvas.pickle       -> CANVAS.canvas          )  both loaded by
+            #   artifacts.sqlite    -> CANVAS.result_registry )  set_working_directory
+            #   vasp_calcs/explog.pkl -> EXPLOG frames        (EXPLOG.init)
+            # Those files are written at the moment of mutation, so on resume
+            # they are at-or-AHEAD of the checkpoint -- the safe direction. The
+            # checkpoint now only carries the conversation and the small
+            # graph-scoped channels (see planNexe2.full_state_snapshot).
 
             # ----------------------------------------------------------------
-            # Tool-level resume: on a plain resume (frame 0), the interrupted
-            # round may have fresher state in the inner agent's namespaced
-            # checkpoints (StateSyncMiddleware writes canvas/explog/time into
-            # the subgraph state after every tool call). Overlay it so the
-            # globals match the point the subgraph will continue from.
+            # Tool-level resume: the interrupted round's newest namespaced
+            # (inner-agent) checkpoint still carries the two SMALL channels that
+            # no file owns -- curr_round_result_ids and time. Without them a
+            # resumed round resets its round-id list and check_required_tool_use
+            # wrongly fails the round for "not using" tools that already ran.
             #
             # NOTE: after a hard crash (no interrupt), get_state(subgraphs=True)
             # does NOT hydrate task.state, and get_state on a namespace fails
@@ -836,53 +841,37 @@ You have a maximum of 1 hours to complete the entire study and make your final r
             # the namespaced checkpoint is NEWER than the parent round
             # checkpoint (a crash between rounds leaves older inner
             # checkpoints whose data the round checkpoint already contains).
-            # Old-format checkpoints (pre tool-level era) have no namespaced
-            # rows at all -> the round-level restore above stands.
-            # When time traveling (frame > 0) we deliberately skip this and
-            # fork from the round boundary.
             # ----------------------------------------------------------------
-            if timeTravelToXFrameBefore == 0:
-                parent_ckpt_id = snap.config["configurable"].get("checkpoint_id", "")
-                row = checkpointer.conn.execute(
-                    "SELECT checkpoint_ns, checkpoint_id FROM checkpoints "
-                    "WHERE thread_id = ? AND checkpoint_ns != '' "
-                    "ORDER BY checkpoint_id DESC LIMIT 1",
-                    (THREAD_ID,),
-                ).fetchone()
-                deepest = None
-                if row is not None and row[1] > parent_ckpt_id:
-                    sub_tuple = checkpointer.get_tuple(
-                        {"configurable": {"thread_id": THREAD_ID, "checkpoint_ns": row[0]}}
-                    )
-                    if sub_tuple is not None:
-                        vals = sub_tuple.checkpoint.get("channel_values", {}) or {}
-                        if vals.get("canvas"):
-                            deepest = vals
-                if deepest is not None:
+            parent_ckpt_id = snap.config["configurable"].get("checkpoint_id", "")
+            row = checkpointer.conn.execute(
+                "SELECT checkpoint_ns, checkpoint_id FROM checkpoints "
+                "WHERE thread_id = ? AND checkpoint_ns != '' "
+                "ORDER BY checkpoint_id DESC LIMIT 1",
+                (THREAD_ID,),
+            ).fetchone()
+            if row is not None and row[1] > parent_ckpt_id:
+                sub_tuple = checkpointer.get_tuple(
+                    {"configurable": {"thread_id": THREAD_ID, "checkpoint_ns": row[0]}}
+                )
+                vals = (sub_tuple.checkpoint.get("channel_values", {}) or {}) if sub_tuple else {}
+                if vals.get("curr_round_result_ids") or vals.get("time"):
                     print()
                     print("##################################################################")
-                    print("# Found mid-round (tool-level) checkpoint in the interrupted    #")
+                    print("# Found mid-round (tool-level) checkpoint in the interrupted     #")
                     print(f"# step (ns: {row[0]}).")
-                    print("# Restoring the fresher state from it; the inner agent will     #")
-                    print("# resume after its last completed tool call.                    #")
+                    print("# The inner agent will resume after its last completed tool call.#")
                     print("##################################################################")
                     print()
-                    CANVAS.canvas = deepest["canvas"]
-                    CANVAS.result_registry = deepest.get("artifacts", CANVAS.result_registry)
-                    if deepest.get("explog_candidates") is not None:
-                        EXPLOG.relational_frame.candidates.df = deepest["explog_candidates"]
-                    if deepest.get("explog_processes") is not None:
-                        EXPLOG.relational_frame.processes.df = deepest["explog_processes"]
-                    if deepest.get("time"):
-                        var.startTime = time.time() - deepest["time"]
+                    if vals.get("time"):
+                        var.startTime = time.time() - vals["time"]
                     # one-shot handoff: worker_agent_node consumes this instead
                     # of resetting curr-round ids, so check_required_tool_use
                     # still sees the tools that ran before the crash
-                    var.resume_curr_round_result_ids = deepest.get("curr_round_result_ids")
+                    var.resume_curr_round_result_ids = vals.get("curr_round_result_ids")
 
-            # The canvas restore above reverts Worker_available_tools to the
-            # checkpointed (possibly outdated) tool list; re-write it from the
-            # yaml so resumed agents see the current tool set.
+            # Re-write the tool list from the yaml so resumed agents see the
+            # current tool set (canvas.pickle carries whatever was current when
+            # the previous session last wrote it).
             CANVAS.write("Worker_available_tools", Worker_available_tools, overwrite=True)
 
             # Part 3: reconcile legacy dispositions against the new vocabulary +

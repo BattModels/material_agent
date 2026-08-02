@@ -177,6 +177,27 @@ def test_missing_directory_fails_clearly(tmp_path):
         ArtifactStore(str(tmp_path / "no" / "such" / "dir" / "artifacts.sqlite"))
 
 
+def test_state_snapshot_carries_no_bulk_state():
+    """REGRESSION GUARD. canvas / artifacts / explog_* must never be put back
+    into the per-tool-call state sync: each is persisted by its own owner, and
+    carrying them here cost ~376 MB per tool call (measured on the 27-05 run)
+    to record a ~12 KB delta.
+
+    Imported lazily -- src.planNexe2 pulls in src.tools and the GNoME database.
+    """
+    pytest.importorskip("gnome_dreams_oer_screening")
+    from src.planNexe2 import full_state_snapshot, SyncedAgentState, PlanExecute
+    from src import var
+
+    # var.startTime is "" until invoke.py sets it; the snapshot subtracts it.
+    var.startTime = 0.0
+
+    banned = {"canvas", "artifacts", "explog_candidates", "explog_processes"}
+    assert banned.isdisjoint(SyncedAgentState.__annotations__)
+    assert banned.isdisjoint(PlanExecute.__annotations__)
+    assert set(full_state_snapshot()) == {"curr_round_result_ids", "time"}
+
+
 # --- canvas.pickle: atomic write + startup restore --------------------------
 
 def test_canvas_persists_and_restores(tmp_path):

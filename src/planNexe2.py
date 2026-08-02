@@ -212,10 +212,13 @@ class PlanExecute(TypedDict):
     draft_response: str
     boss_feedback: str
     response: str
-    canvas: Dict
-    artifacts: Dict
-    explog_candidates: pd.DataFrame
-    explog_processes: pd.DataFrame
+    # NOTE: canvas / artifacts / explog_candidates / explog_processes used to
+    # live here too. They were removed: each is persisted by its own owner
+    # (canvas.pickle, artifacts.sqlite, vasp_calcs/explog.pkl) and carrying
+    # them here re-serialized ~375 MB into EVERY tool-level checkpoint to
+    # record a ~12 KB delta. The globals are now rehydrated from those files at
+    # startup instead. Consequence: TIME TRAVEL IS GONE -- rewinding would give
+    # an old conversation against current globals. Resume is unaffected.
     time: float
     next: str
 
@@ -242,25 +245,41 @@ class PlanExecute(TypedDict):
 # ---------------------------------------------------------------------------
 
 class SyncedAgentState(AgentState):
-    canvas: NotRequired[Dict]
-    artifacts: NotRequired[Dict]
+    # Only the small, genuinely graph-scoped values. CANVAS / EXPLOG are NOT
+    # mirrored here any more -- see full_state_snapshot below.
     curr_round_result_ids: NotRequired[List[str]]
-    explog_candidates: NotRequired[pd.DataFrame]
-    explog_processes: NotRequired[pd.DataFrame]
     time: NotRequired[float]
 
 
 def full_state_snapshot():
-    """Snapshot the global CANVAS / EXPLOG / elapsed time as state-channel
-    values. deepcopy/copy so later in-place mutation of the globals cannot
-    alias into an already-taken checkpoint."""
+    """The per-tool-call state sync: what a mid-round checkpoint must carry
+    that is not already durable on disk.
+
+    This used to deepcopy the whole CANVAS (canvas + artifact registry) and both
+    EXPLOG dataframes into every tool-level checkpoint. Measured on the 27-05
+    run that was ~375 MB written per tool call -- to record a delta of about
+    12 KB (one new artifact, maybe an EXPLOG row).
+
+    All of that is now persisted by its owner as it changes:
+        canvas            -> canvas.pickle          (CANVAS._save_canvas)
+        artifact registry -> artifacts.sqlite       (CANVAS._register_artifact)
+        EXPLOG frames     -> vasp_calcs/explog.pkl  (EXPLOG._save_pickle)
+    and rehydrated from there at startup, so duplicating them here bought
+    nothing except I/O. What remains is genuinely graph state:
+
+      curr_round_result_ids -- backs CANVAS.check_required_tool_use after a
+          mid-round resume; it is per-ROUND, so no file owns it.
+      time -- elapsed study seconds; invoke.py rebuilds var.startTime from it.
+
+    NOTE on crash consistency: the disk sources are written at the moment of
+    mutation, so on resume they are at-or-AHEAD of the checkpoint. That is the
+    safe direction -- the worst case is the agent repeating an action it does
+    not remember (and submit_dft_job's duplicate guard now actually sees the
+    earlier submission, which it could not when EXPLOG came from the lagging
+    checkpoint).
+    """
     return {
-        "canvas": copy.deepcopy(CANVAS.canvas),
-        "artifacts": copy.deepcopy(CANVAS.result_registry),
-        # backs CANVAS.check_required_tool_use after a mid-round resume
         "curr_round_result_ids": list(CANVAS.curr_round_result_ids),
-        "explog_candidates": EXPLOG.relational_frame.candidates.df.copy(),
-        "explog_processes": EXPLOG.relational_frame.processes.df.copy(),
         "time": time.time() - var.startTime,
     }
 
@@ -565,20 +584,12 @@ def boss_node(state, config, agent=None, name=None):
             "response": state["draft_response"],
             "boss_feedback": "",
             "next": "FINISH",
-            "canvas": CANVAS.canvas,
-            "artifacts": CANVAS.result_registry,
-            "explog_candidates": EXPLOG.relational_frame.candidates.df,
-            "explog_processes": EXPLOG.relational_frame.processes.df,
         }
     elif agent_response.decision == "revise":
         return {
             # Boss rejection stores concrete review feedback and hands control back to the supervisor.
             "boss_feedback": agent_response.feedback,
             "next": "Supervisor",
-            "canvas": CANVAS.canvas,
-            "artifacts": CANVAS.result_registry,
-            "explog_candidates": EXPLOG.relational_frame.candidates.df,
-            "explog_processes": EXPLOG.relational_frame.processes.df,
         }
     else:
         raise ValueError(f"Unexpected boss decision: {agent_response.decision}")
@@ -815,10 +826,6 @@ def supervisor_chain_node(state, config, agent=None, name=None):
         return {
             "draft_response": agent_response.action.response,
             "next": "Boss_Agent", 
-            "canvas":CANVAS.canvas, 
-            "artifacts": CANVAS.result_registry,
-            "explog_candidates": EXPLOG.relational_frame.candidates.df, 
-            "explog_processes": EXPLOG.relational_frame.processes.df,
             }
     # elif isinstance(output.action, Response):
     #     return {"response": "Plan is not finished! Do not use response!", "next": "Supervisor"}
@@ -830,10 +837,6 @@ def supervisor_chain_node(state, config, agent=None, name=None):
         return {
             "plan": plan[1:],
             "next": plan[1].agent,
-            "canvas":CANVAS.canvas,
-            "artifacts": CANVAS.result_registry,
-            "explog_candidates": EXPLOG.relational_frame.candidates.df,
-            "explog_processes": EXPLOG.relational_frame.processes.df,
             }
     else:
         plan_str = "\n".join(f"{i+1}. {step.step}, agent={step.agent}, required_tools: {step.required_tools}" for i, step in enumerate(agent_response.action.steps))
@@ -842,10 +845,6 @@ def supervisor_chain_node(state, config, agent=None, name=None):
         return {
             "plan": agent_response.action.steps, 
             "next": agent_response.action.steps[0].agent, 
-            "canvas":CANVAS.canvas,
-            "artifacts": CANVAS.result_registry,
-            "explog_candidates": EXPLOG.relational_frame.candidates.df,
-            "explog_processes": EXPLOG.relational_frame.processes.df,
             }
     
     
@@ -862,20 +861,26 @@ def _stash_on_canvas(base_key: str, value) -> str:
     """Store evicted raw step text ON CANVAS (was a jsonl file) under a unique key,
     and return the key.
 
-    On CANVAS deliberately, now that the agents are meant to be able to read the
-    archive back (via read_my_canvas): CANVAS is a checkpointed channel, so unlike
-    the old on-disk jsonl this REWINDS with resume/time-travel and cannot drift out
-    of sync with the run, and no duplicate/stale records accumulate across replays.
-    Direct dict assignment (not CANVAS.write) avoids the per-write disk pickle; the
-    value reaches the checkpoint via the worker node's returned "canvas".
+    On CANVAS deliberately, so the agents can read the archive back via
+    read_my_canvas instead of it living in an on-disk jsonl that drifts out of
+    sync with the run.
 
-    Cost note: full_state_snapshot() deepcopies the whole canvas after every tool
-    call, so archived steps add to that per-call copy for the rest of the run --
-    accepted deliberately (size is fine) in exchange for making the archive
-    agent-readable and in-sync.
+    MUST persist through CANVAS._save_canvas(). This used to be a bare
+    ``CANVAS.canvas[key] = value`` -- skipping the disk write was safe only
+    because the canvas was a checkpointed channel and the value reached durable
+    storage via the worker node's returned "canvas". The canvas is no longer
+    checkpointed (see full_state_snapshot), so a bare dict assignment would keep
+    the archived step text in memory only and lose it on the next restart --
+    silently, since nothing reads it until an agent asks for that key.
+
+    Assigning + saving directly rather than calling CANVAS.write() keeps the
+    existing behaviour of overwriting without the "key already exists" guard
+    (_unique_canvas_key has already made the key unique) and without the
+    multi-MB pretty-print dump that write() also triggers.
     """
     key = _unique_canvas_key(base_key)
     CANVAS.canvas[key] = value
+    CANVAS._save_canvas()
     return key
 
 
@@ -1148,7 +1153,12 @@ Now, you are tasked with: {task}. Focus on this task. Your standing duties are a
         archive_ref=f"read_my_canvas(key='{_fulltext_key}')",
     )
     if was_truncated:
+        # _save_canvas(): the canvas is no longer a checkpointed channel, so a
+        # bare dict assignment would keep this full text in memory only and lose
+        # it on restart -- and it is exactly what the truncation notice tells the
+        # agent to read back via read_my_canvas(key='step_<N>_fulltext').
         CANVAS.canvas[_fulltext_key] = structured_response.summary
+        CANVAS._save_canvas()
 
     # Build a NEW list -- never mutate state["past_steps"] in place. LangGraph hands
     # us the channel's own value; mutating it aliases the checkpointed list and makes
@@ -1199,10 +1209,6 @@ Now, you are tasked with: {task}. Focus on this task. Your standing duties are a
 
     return {
         "past_steps": ledger,
-        "canvas":CANVAS.canvas,
-         "artifacts": CANVAS.result_registry,
-        "explog_candidates": EXPLOG.relational_frame.candidates.df,
-        "explog_processes": EXPLOG.relational_frame.processes.df,
         "time": timeElapsed_tmp,
     }
 
