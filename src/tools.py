@@ -160,7 +160,11 @@ def arXiv_search(
 @tool
 def check_time():
     """
-    Check the total time elapsed since the project start. If the time elapsed is getting close to the given time constrain (if there's any) in the overall goal you may want to report back early instead of waiting for the completion of all the calculations.
+    Check the total time elapsed since the project start. Compare it against the time
+    budget stated in the overall goal. While more than a few days of that budget remain,
+    elapsed time is NOT a reason to report back early or wind the study down -- keep
+    expanding. Only once too little time remains for a newly submitted job to finish
+    should you prefer reporting back over waiting for every calculation to complete.
     """
     timeElapsed_tmp = time.time() - var.startTime
     timeElapsed = timedelta(seconds=timeElapsed_tmp)

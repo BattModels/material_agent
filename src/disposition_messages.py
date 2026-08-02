@@ -199,14 +199,24 @@ def format_update_disposition(
 
 # Returned when there is genuinely nothing to wait for: no pending and no
 # running work, and no analysis owed. Batch size comes from the refill target.
+#
+# NOTE: this message deliberately offers NO "conclude the study" option. An idle
+# queue means the cluster is free, not that the study is over -- the candidate
+# pool is orders of magnitude larger than any run can exhaust. Concluding is
+# governed by the clock alone (MSG_NOTHING_TO_WAIT_FOR_FINAL_DAYS below, and the
+# finish gate in boss_node), never by having temporarily run out of ready work.
 MSG_NOTHING_TO_WAIT_FOR = (
-    "Nothing is pending or running and there is nothing ready to submit. Do NOT "
-    "keep polling: END YOUR TURN and return to the supervisor to discuss how to "
-    "move the study forward and queue a large batch of new jobs (on the order of "
-    f"{var.QUEUE_REFILL_TARGET}) -- which candidates, if any, warrant more "
-    "calculations (more surfaces / sites, O/OH jobs), whether to add more "
-    "candidates, and how to ground these choices in your current findings and "
-    "the literature -- or conclude the study if it is genuinely complete."
+    "Nothing is pending or running and there is nothing ready to submit. The "
+    "cluster is idle and the study has time left. Do NOT keep polling: END YOUR "
+    "TURN and return to the supervisor to queue a large batch of new jobs (on "
+    f"the order of {var.QUEUE_REFILL_TARGET}). The FIRST thing to discuss is "
+    "registering more candidates -- a fresh database query with criteria refined "
+    "by what you have learned so far -- since the candidate pool is far larger "
+    "than this study can exhaust and broad coverage is a standing objective. "
+    "Then: which existing candidates warrant more calculations (more surfaces / "
+    "terminations / sites, O and OH jobs), and how to ground both choices in "
+    "your current findings and the literature. Running out of ready work does "
+    "NOT mean the study is complete."
 )
 
 # Final-days variant of the above: with less than PATH_B_CUTOFF_DAYS remaining,
@@ -302,7 +312,12 @@ def format_wait_gate2_refusal(
             "more queued), and prefer refilling toward "
             f"~{var.QUEUE_REFILL_TARGET} queued where the work justifies it; "
             "then call wait_for_update again.\n\n"
-            "Ready-but-unstarted continuation work:\n" + listing + more
+            "Ready-but-unstarted continuation work:\n" + listing + more + "\n\n"
+            "If submitting all of the above would still leave the queue well "
+            f"short of ~{var.QUEUE_REFILL_TARGET}, say so in your end-of-turn "
+            "report. Do NOT register new candidates yourself -- that is the "
+            "supervisor's decision -- but it can only make that decision if it "
+            "learns that the pipeline can no longer fill the cluster on its own."
         )
 
     # Path B: no ready work -> end the turn and return to the supervisor to DISCUSS
@@ -313,12 +328,17 @@ def format_wait_gate2_refusal(
         "remains. Do NOT wait: END YOUR TURN and return to the supervisor to "
         "discuss expanding the study so the queue can be refilled toward "
         f"~{var.QUEUE_REFILL_TARGET} queued jobs -- under-utilization makes new "
-        "submissions effectively free. Discuss which candidates deserve more "
-        "surfaces/terminations/sites and whether to add new candidates (e.g. a "
-        "fresh AQ-GNoME query), grounded in your findings and the literature "
-        "(arXiv_search). If the study is genuinely winding down instead, ask the "
-        "supervisor to set enforce_queue_floor=False (honored only in the final "
-        f"{var.FLOOR_DISARM_WINDOW_DAYS} days). Do NOT re-call wait_for_update."
+        "submissions effectively free. Lead that discussion with ADDING NEW "
+        "CANDIDATES: a fresh AQ-GNoME query with criteria refined by your "
+        "findings and the literature (arXiv_search). The pool is far larger than "
+        "this study can exhaust and broad coverage is a standing objective, so "
+        "having no ready work is a reason to widen the study, not to end it. "
+        "Then discuss which existing candidates deserve more "
+        "surfaces/terminations/sites. If the study is genuinely winding down on "
+        "the CLOCK instead -- the remaining time being too short for new jobs to "
+        "finish -- ask the supervisor to set enforce_queue_floor=False (honored "
+        f"only in the final {var.FLOOR_DISARM_WINDOW_DAYS} days). Do NOT re-call "
+        "wait_for_update."
     )
 
 
@@ -339,26 +359,77 @@ def format_supervisor_handback_directive(
     return (
         "HANDBACK -- QUEUE FLOOR: a worker returned to you because the HPC queue "
         "is under-utilized and there is no ready continuation work left to submit. "
+        "This means the study needs to be WIDENED, not that it is finished: the "
+        "candidate pool is far larger than this study can exhaust, and broad "
+        "coverage of it is a standing objective. "
         "Plan a step that opens a DISCUSSION with the OER_agent on how best to "
-        "expand the study (or whether to wind it down) -- not a hand-off for it to "
-        "decide alone, and not a decision you make alone: the OER_agent is the "
-        "only agent that can explore the current results directly and search the "
-        "literature (arXiv), so its input is essential while the direction is "
-        "settled together. The discussion must cover, at a minimum, these four "
-        "points: (1) review the current results of the active candidates; (2) "
-        "consult the literature (e.g. arXiv_search) for relevant guidance; (3) "
-        "decide which active candidates, if any, are interesting enough to explore "
-        "further (more surfaces / terminations, more O or OH adsorption sites); "
-        "and (4) whether more candidates should be added (e.g. a fresh AQ-GNoME "
-        "query) if that is the best course of action -- the goal is a queue "
+        "expand -- not a hand-off for it to decide alone, and not a decision you "
+        "make alone: the OER_agent is the only agent that can explore the current "
+        "results directly and search the literature (arXiv), so its input is "
+        "essential while the direction is settled together. The discussion must "
+        "cover, at a minimum, these four points, IN THIS ORDER OF PRIORITY: "
+        "(1) how many new candidates to add and on what criteria -- a fresh "
+        "AQ-GNoME query refined by what the study has learned; this is the "
+        "primary lever and registering candidates plus their bulk relaxations is "
+        "the cheapest way to refill the queue; (2) review the current results of "
+        "the active candidates; (3) consult the literature (e.g. arXiv_search) "
+        "for guidance on where those results point next; and (4) which active "
+        "candidates are interesting enough to explore deeper (more surfaces / "
+        "terminations, more O or OH adsorption sites). The goal is a queue "
         f"refilled toward ~{var.QUEUE_REFILL_TARGET} queued jobs of the most "
-        "valuable work. Only if the study is genuinely winding down (the "
-        "remaining time is too short for newly-submitted jobs to finish) set "
+        "valuable work. Only if the study is winding down ON THE CLOCK -- the "
+        "remaining time being too short for newly-submitted jobs to finish -- set "
         "enforce_queue_floor=False on the next step so the worker may instead "
         "wait for and finalize the in-flight results (note: honored only within "
         f"the final {var.FLOOR_DISARM_WINDOW_DAYS} days of the "
-        f"{var.STUDY_BUDGET_DAYS}-day budget), or conclude the study if it is "
-        "genuinely complete."
+        f"{var.STUDY_BUDGET_DAYS}-day budget). An empty queue is not by itself a "
+        "reason to conclude the study."
+    )
+
+
+def format_study_status_block(
+    *,
+    elapsed_seconds: float,
+    pending_count: Optional[int] = None,
+    running_count: Optional[int] = None,
+) -> str:
+    """The STUDY STATUS block handed to the BOSS with every review request.
+
+    boss_node used to pass only ``Current time: <elapsed>`` -- so the reviewer
+    that decides whether a study is finished was never told the budget, how much
+    of it remained, or whether the cluster was doing anything. The 27-05 run was
+    approved as complete at 14.68 of 30 study-days with 0 jobs running and 0
+    queued; none of those three numbers was in front of the boss.
+
+    There is NO hard gate on finishing -- the boss's decision stands. This block
+    exists so that decision is made on the facts. ``pending_count`` /
+    ``running_count`` may be None when EXPLOG cannot be read; that is reported as
+    unavailable rather than silently rendered as zero, which would read as an
+    idle cluster and argue for exactly the wrong conclusion.
+    """
+    elapsed_days = elapsed_seconds / 86400
+    remaining_days = var.STUDY_BUDGET_DAYS - elapsed_days
+    spent_pct = 100 * elapsed_days / var.STUDY_BUDGET_DAYS if var.STUDY_BUDGET_DAYS else 0.0
+
+    if pending_count is None or running_count is None:
+        queue_line = "  HPC queue:      unavailable (EXPLOG could not be read)"
+    else:
+        queue_line = (
+            f"  HPC queue:      {running_count} running, {pending_count} queued "
+            f"(floor: {var.QUEUE_MIN_PENDING}, refill target: "
+            f"~{var.QUEUE_REFILL_TARGET})"
+        )
+
+    return (
+        "STUDY STATUS (facts, not the supervisor's account of them):\n"
+        f"  Time budget:    {var.STUDY_BUDGET_DAYS:.1f} days\n"
+        f"  Elapsed:        {elapsed_days:.2f} days ({spent_pct:.0f}% of budget)\n"
+        f"  REMAINING:      {remaining_days:.2f} days\n"
+        f"{queue_line}\n"
+        f"  Note: a newly submitted DFT job needs roughly "
+        f"{var.PATH_B_CUTOFF_DAYS} days to be worth starting. With more than "
+        "that remaining, concluding the study means leaving budget and cluster "
+        "capacity unused -- weigh that against the draft's own justification."
     )
 
 

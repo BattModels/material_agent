@@ -33,11 +33,25 @@ class _S(TypedDict):
     next: str
 
 
-def _build(boss_decision="approve"):
+def _build(boss_decision="approve", supervisor_action="respond"):
     """Mirror of the real routing. The boss approves by default, so the graph
-    runs straight to END -- the state `continue` has to rescue."""
+    runs straight to END -- the state `continue` has to rescue.
+
+    supervisor_action="plan" models the supervisor's NORMAL behaviour: it hands
+    work to the worker instead of proposing a final answer, so the boss does not
+    run at all. Both real paths consume boss_feedback themselves (planNexe2's
+    supervisor_chain_node returns boss_feedback="" on every exit), which is what
+    makes the directive genuinely one-shot -- reaching the boss is NOT what
+    clears it."""
     def supervisor(state):
-        return {"draft_response": "final report", "next": "Boss_Agent"}
+        # "plan" mode: delegate to the worker whenever there is feedback to act
+        # on, and only propose a draft once there is none left. That is the real
+        # shape in miniature -- work first, answer later -- and it keeps the mock
+        # terminating instead of ping-ponging with the worker forever.
+        if supervisor_action == "plan" and state["boss_feedback"].strip():
+            return {"boss_feedback": "", "next": "OER_Agent"}
+        return {"draft_response": "final report", "boss_feedback": "",
+                "next": "Boss_Agent"}
 
     def oer(state):
         return {}
@@ -116,6 +130,100 @@ def test_finished_response_is_preserved():
     graph.update_state(cfg, {"next": "Supervisor", "boss_feedback": "more"},
                        as_node="Boss_Agent")
     assert graph.get_state(cfg).values["response"] == "final report"
+
+
+def test_continue_can_replace_the_objective():
+    """`inputs` is a plain LastValue channel, so the same update_state that
+    injects the directive can swap the objective outright."""
+    graph, cfg = _build()
+    _run_to_finish(graph, cfg)
+    assert graph.get_state(cfg).values["inputs"] == "obj"
+
+    new_objective = "Cover the database broadly; do not stop while budget remains."
+    graph.update_state(
+        cfg,
+        {"next": "Supervisor", "boss_feedback": "resumed", "inputs": new_objective},
+        as_node="Boss_Agent")
+
+    st = graph.get_state(cfg)
+    assert st.next == ("Supervisor",)
+    assert st.values["inputs"] == new_objective
+
+
+def test_the_objective_outlives_the_directive():
+    """THE reason continue_objective.md exists as a separate file.
+
+    `inputs` is re-rendered into every supervisor and boss prompt for the rest of
+    the run; boss_feedback is consumed by the supervisor round that reads it.
+    Standing policy put in the directive is heard once; standing policy put in the
+    objective is heard always. This pins that asymmetry, so a refactor that made
+    `inputs` consumable (or boss_feedback sticky again) fails loudly.
+
+    NOTE: the supervisor here PLANS rather than proposing a draft, which is what
+    the real one does for weeks at a time. An earlier version of this test used a
+    supervisor that answered immediately, so the boss ran and cleared the field --
+    and the test passed while the real graph leaked the directive into every
+    round for the rest of the run, because nothing on the planning path cleared
+    it. The clearing must be the SUPERVISOR's, not a side effect of reaching the
+    boss."""
+    graph, cfg = _build(supervisor_action="plan")
+    _run_to_finish(graph, cfg)
+
+    new_objective = "Broad coverage is a primary goal."
+    graph.update_state(
+        cfg,
+        {"next": "Supervisor", "boss_feedback": "one-shot text", "inputs": new_objective},
+        as_node="Boss_Agent")
+
+    # one supervisor round that PLANS -- the boss never runs
+    it = graph.stream(None, cfg, durability="sync")
+    next(it)
+    it.close()
+
+    st = graph.get_state(cfg)
+    assert st.values["boss_feedback"] == "", (
+        "the supervisor must consume boss_feedback when it plans; otherwise the "
+        "directive is re-shown every round until the boss next approves"
+    )
+    assert st.values["inputs"] == new_objective, "the objective must persist"
+
+
+def test_directive_does_not_survive_into_later_planning_rounds():
+    """The failure this guards against is silent: the supervisor keeps being told
+    'your previous draft final answer has been rejected' with one-time marching
+    orders attached, every round, for the rest of the study."""
+    graph, cfg = _build(supervisor_action="plan")
+    _run_to_finish(graph, cfg)
+    graph.update_state(
+        cfg, {"next": "Supervisor", "boss_feedback": "INGEST THE FINISHED RESULTS"},
+        as_node="Boss_Agent")
+
+    seen = []
+    it = graph.stream(None, cfg, durability="sync")
+    for _ in range(4):
+        try:
+            next(it)
+        except StopIteration:
+            break
+        seen.append(graph.get_state(cfg).values["boss_feedback"])
+    it.close()
+
+    assert seen, "the graph did not advance"
+    assert all(f == "" for f in seen[1:]), (
+        f"directive persisted across rounds: {seen}"
+    )
+
+
+def test_omitting_the_objective_leaves_it_untouched():
+    """No continue_objective.md -> invoke.py omits the key entirely, and the run
+    keeps the objective it started with."""
+    graph, cfg = _build()
+    _run_to_finish(graph, cfg)
+
+    graph.update_state(cfg, {"next": "Supervisor", "boss_feedback": "resumed"},
+                       as_node="Boss_Agent")
+
+    assert graph.get_state(cfg).values["inputs"] == "obj"
 
 
 def test_continue_is_refused_on_an_unfinished_run():

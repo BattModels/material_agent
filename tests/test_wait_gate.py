@@ -580,7 +580,10 @@ def test_gate2_path_a_orders_self_service_submit():
     assert "call wait_for_update again" in msg.lower()   # then re-waits
     assert "end your turn" not in msg.lower()            # no supervisor round-trip
     assert "7 running" in msg and "only 4 queued" in msg  # real numbers shown
-    assert "11 more queued" in msg                       # deficit = 15 - 4
+    # deficit is derived from the floor, so read it from var rather than pinning
+    # the arithmetic of whatever QUEUE_MIN_PENDING happened to be when this was
+    # written (it was 15; tuning it to 25 broke this line, not the code).
+    assert f"{var.QUEUE_MIN_PENDING - 4} more queued" in msg
     assert f"~{var.QUEUE_REFILL_TARGET}" in msg          # refill well beyond the floor
 
 

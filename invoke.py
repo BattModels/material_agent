@@ -26,9 +26,11 @@ from src.utils import load_config, save_graph_to_file,initialize_database
 from src.myCANVAS import CANVAS
 from src.history_log import write_history
 from src.explog_mode_guard import check_or_record_explog_mode, refuse_overwrite_of_production_run
+from src.explog_restore import restore_explog, assert_restored
 from src import var
 
 import sqlite3
+import pandas as pd   # only for the empty frames that clear the vestigial channels
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
@@ -54,6 +56,45 @@ THREAD_ID = "1"
 # when a finished run is restarted: it wants to be long, edited over several
 # passes, diffable, and preserved as the record of what the operator instructed.
 CONTINUE_DIRECTIVE_FILE = "continue_directive.md"
+
+# OPTIONAL companion to the directive: a replacement for state["inputs"], the
+# study objective. Absent -> the run keeps the objective it was started with.
+#
+# It needs its own channel because the two have different lifetimes. The
+# directive lands in boss_feedback and is ONE-SHOT (the supervisor round that
+# reads it clears it); the objective is re-rendered into every supervisor and boss prompt for
+# the rest of the run. Standing policy that must outlive one round -- scope,
+# coverage targets, when the study may conclude -- has to go here, or it is
+# heard once and then contradicted forever by the original text.
+#
+# And it cannot simply be edited in this file: on resume `inputs` is None and
+# the objective comes from the CHECKPOINT (see the else-branch below), so
+# minimal_test_message_33 is dead text for any run that already started.
+CONTINUE_OBJECTIVE_FILE = "continue_objective.md"
+
+
+def read_operator_message(path):
+    """Read an operator message file, dropping its leading '#' comment header.
+
+    Both continue_*.md files open with a block of '#' lines explaining what the
+    file is and how it is delivered. Those notes are for the OPERATOR. Without
+    this they are handed to the agents verbatim -- the supervisor's objective
+    would literally begin "The overall goal is: # REPLACEMENT USER PROMPT
+    (state["inputs"]) for a resumed run # # This is the OBJECTIVE ..." -- and
+    keep saying it every round, since the objective is re-rendered into every
+    prompt.
+
+    Only the CONTIGUOUS LEADING block of '#' lines (and blank lines among them)
+    is removed, so a '#' inside the message body is untouched. Consequence worth
+    knowing: do NOT open the body itself with a markdown heading, or it will be
+    eaten along with the header.
+    """
+    with open(path, "r", encoding="utf-8") as f:
+        lines = f.read().splitlines()
+    i = 0
+    while i < len(lines) and (lines[i].lstrip().startswith("#") or not lines[i].strip()):
+        i += 1
+    return "\n".join(lines[i:]).strip()
 MAX_CHECKPOINT_DB_BYTES = 20 * 1024**3   # prune once sqlite (+wal) exceeds 20 GB
 KEEP_ROUNDS = 50                         # newest big-round checkpoints to keep
 
@@ -496,15 +537,35 @@ You have a maximum of 1 hours to complete the entire study and make your final r
     during the study using refined selection criteria based on emerging insights, to
     explore new candidates.
 
-    To leverage the available HPC resources best, aim to have relevant DFT jobs
-    pending/queued most of the time, and do not wait for all jobs to finish within one
-    round before submitting new jobs. If all jobs are running, aim to submit more
-    relevant jobs. If many jobs are pending (more than 50), hold off on submitting more to
-    allow for flexibility later when you want to prioritize specific jobs. Consider that,
-    when you are nearing the end of the study, you may not have time to wait for all jobs
-    to finish. We recommend starting by submitting about 40 diverse candidates and then
-    adjusting the number of jobs based on how many jobs are pending vs running. Note
-    that surface and adsorption jobs will take much longer than bulk jobs.
+    Scope and coverage:
+    BROAD COVERAGE OF THE DATABASE IS A PRIMARY GOAL OF THIS STUDY, alongside depth on
+    the most promising systems. The filtered candidate pool is far larger than this study
+    can exhaust, so examining a large number of candidates -- prioritised by relevance
+    rather than swept indiscriminately -- is itself a deliverable, not a means to one.
+    Keep widening the study for as long as budget remains: revisit the database
+    repeatedly with selection criteria refined by what you have learned, and register new
+    candidates in substantial batches rather than a few at a time. Running out of ready
+    continuation work NEVER means the study is finished; it means it is time to add more
+    candidates. Do not wind the study down, and do not propose a final answer, until too
+    little time remains for newly submitted DFT jobs to finish. Concluding early with
+    cluster capacity and budget unused is a failure of the study, not an efficient
+    completion of it. Balance this against quality: every candidate you register should be
+    justifiable from your findings and the literature, and breadth must never become
+    padding.
+
+    To leverage the available HPC resources best, keep relevant DFT jobs pending/queued at
+    all times, and do not wait for all jobs to finish within one round before submitting
+    new jobs. Submit in LARGE BATCHES rather than a trickle: whenever the cluster has
+    spare capacity, submissions are effectively free, and bulk relaxations in particular
+    are cheap and are the natural way to buy breadth. How much spare capacity exists
+    changes over the study, so judge it from the live running/queued counts rather than
+    assuming. If the queue is running low, the first remedy
+    is to register more candidates and submit their bulk relaxations; the second is more
+    terminations and adsorption sites on the candidates that have earned them. Note that
+    surface and adsorption jobs take much longer than bulk jobs, so start them as soon as
+    their prerequisites land. Only when the remaining time is too short for a newly
+    submitted job to finish should you stop submitting and move to finalizing the
+    in-flight results.
 
     Report:
     At the end of EACH ROUND as well as the end of the study, produce an extensive report structured as a mini scientific
@@ -555,6 +616,9 @@ You have a maximum of 1 hours to complete the entire study and make your final r
     # injected as a boss REJECTION so a finished run hands control back to the
     # supervisor. See the update_state call further down.
     continue_directive = None
+    # Optional replacement objective read alongside it; None -> leave the run's
+    # existing state["inputs"] untouched.
+    continue_objective = None
     if len(sys.argv) > 1 and sys.argv[1] == "ow":
         print()
         print("####################")
@@ -600,10 +664,25 @@ You have a maximum of 1 hours to complete the entire study and make your final r
                 "as boss feedback -- i.e. as a rejection of its final answer -- so "
                 "say why the study is resuming and what must happen next."
             )
-        with open(_directive_path, "r", encoding="utf-8") as _f:
-            continue_directive = _f.read().strip()
+        continue_directive = read_operator_message(_directive_path)
         if not continue_directive:
-            raise SystemExit(f"continue: {_directive_path} is empty.")
+            raise SystemExit(
+                f"continue: {_directive_path} has no message body (only the "
+                "'#' header, or nothing at all)."
+            )
+        # The replacement objective is OPTIONAL -- absent means "keep the
+        # objective this run started with" -- but an EMPTY file is an error, not
+        # a silent no-op: it would otherwise blank state["inputs"] and leave both
+        # agents with no goal at all.
+        _objective_path = CONTINUE_OBJECTIVE_FILE
+        if os.path.isfile(_objective_path):
+            continue_objective = read_operator_message(_objective_path)
+            if not continue_objective:
+                raise SystemExit(
+                    f"continue: {_objective_path} has no message body (only the "
+                    "'#' header, or nothing at all). Delete the file to keep the "
+                    "current objective, or write the replacement."
+                )
         print()
         print("################################################################")
         print("# CONTINUE: injecting an operator directive as boss feedback    #")
@@ -611,6 +690,11 @@ You have a maximum of 1 hours to complete the entire study and make your final r
         print(f"# source: {_directive_path}")
         print(f"# length: {len(continue_directive)} chars, "
               f"{len(continue_directive.splitlines())} lines")
+        if continue_objective is None:
+            print(f"# objective: UNCHANGED (no {_objective_path})")
+        else:
+            print(f"# objective: REPLACED from {_objective_path} "
+                  f"({len(continue_objective)} chars)")
         print("################################################################")
         print()
     elif len(sys.argv) > 1:
@@ -672,6 +756,27 @@ You have a maximum of 1 hours to complete the entire study and make your final r
                 legacy_disposition_exempt_ids = var.LEGACY_DISPOSITION_EXEMPT_IDS,
                 disposition_decisions = var.DISPOSITION_DECISIONS,
                 )
+
+    # EXPLOG.init() ALWAYS builds empty frames -- it is not a loader, and the
+    # class has none. Rehydrate from vasp_calcs/explog.pkl, the file EXPLOG's own
+    # _save_pickle writes on every mutation. Skipped for a fresh run, where an
+    # empty log is the correct starting point.
+    #
+    # This is the restore that commit 3bbf619 deleted along with the
+    # explog_candidates / explog_processes checkpoint channels, on the mistaken
+    # premise that init() already did it. Without it a resume starts with zero
+    # candidates and the first _save_pickle destroys the real log.
+    _vasp_dir = Path(WORKING_DIRECTORY)/"vasp_calcs"
+    if overwrite:
+        print("[EXPLOG] fresh run -- starting with an empty experiment log")
+    else:
+        _n_cand, _n_proc = restore_explog(EXPLOG, _vasp_dir)
+        # Loud on purpose. The failure being guarded here was invisible: an
+        # empty EXPLOG is a valid object, so the run continued normally and only
+        # the agent noticed, several minutes and one wiped pickle later.
+        print(f"[EXPLOG] restored {_n_cand} candidates / {_n_proc} processes "
+              f"from {_vasp_dir/'explog.pkl'}")
+        assert_restored(_n_cand, _n_proc, _vasp_dir)
     # SAFETY: a positive var.QUEUE_MIN_PENDING arms the queue-floor gate, which
     # pushes the worker to keep the HPC queue stocked with REAL DFT jobs. In any
     # test mode (anything other than "production") that is dangerous, so warn
@@ -892,10 +997,29 @@ You have a maximum of 1 hours to complete the entire study and make your final r
                     "`continue` is only for a run that ENDED (next=()); to carry "
                     "on an interrupted run just use `python invoke.py`."
                 )
+            # `inputs` is a plain LastValue channel (no reducer), so writing it
+            # here REPLACES the objective outright for every subsequent round --
+            # which is the point: unlike boss_feedback it is not consumed.
+            _continue_writes = {"next": "Supervisor", "boss_feedback": continue_directive}
+            if continue_objective is not None:
+                _continue_writes["inputs"] = continue_objective
+            # SCHEMA MIGRATION -- empty the vestigial CANVAS/EXPLOG/artifact
+            # channels (see PlanExecute). A checkpoint written before those were
+            # dropped still carries them, and LangGraph copies unrecognised
+            # channel_values forward verbatim, so without this every parent
+            # super-step of the resumed run would keep rewriting ~140 MB of dead
+            # 22-07 state -- 99.9% of the checkpoint -- under durability="sync".
+            # Writing empties once is enough: nothing writes these again.
+            _continue_writes.update({
+                "canvas": {},
+                "artifacts": {},
+                "explog_candidates": pd.DataFrame(),
+                "explog_processes": pd.DataFrame(),
+            })
             llm_config = {
                 **graph.update_state(
                     llm_config,
-                    {"next": "Supervisor", "boss_feedback": continue_directive},
+                    _continue_writes,
                     as_node="Boss_Agent",
                 ),
                 "recursion_limit": 2000,
@@ -904,14 +1028,43 @@ You have a maximum of 1 hours to complete the entire study and make your final r
             assert tuple(_after.next) == ("Supervisor",), (
                 f"continue: expected next=('Supervisor',), got {tuple(_after.next)}"
             )
+            if continue_objective is not None:
+                assert _after.values["inputs"] == continue_objective, (
+                    "continue: objective write did not land in state['inputs']"
+                )
+            # Verify the vestigial channels actually emptied. This CANNOT be
+            # taken on trust: while they were out of schema, update_state
+            # accepted the same writes and silently ignored them. If the blobs
+            # are still here, every super-step from now on rewrites ~140 MB.
+            _dead = sum(
+                len(pickle.dumps(_after.values.get(_k)))
+                for _k in ("canvas", "artifacts", "explog_candidates", "explog_processes")
+            )
+            print(f"# vestigial CANVAS/EXPLOG channels now {_dead} bytes "
+                  f"(was ~140 MB)")
+            assert _dead < 100_000, (
+                f"continue: vestigial channels still hold {_dead/1e6:.1f} MB -- "
+                "they were not cleared, so every checkpoint from here will carry "
+                "them. Check that PlanExecute still declares canvas / artifacts / "
+                "explog_candidates / explog_processes."
+            )
             print("################################################################")
             print(f"# CONTINUE injected. next = {tuple(_after.next)}")
             print("# directive delivered to the supervisor as boss feedback:")
             for _line in continue_directive.splitlines():
                 print(f"#   {_line}")
+            if continue_objective is not None:
+                print("# objective REPLACED in state['inputs']:")
+                for _line in continue_objective.splitlines():
+                    print(f"#   {_line}")
             print("################################################################")
             print()
             write_history("=== OPERATOR CONTINUE ===\n" + continue_directive + "\n\n")
+            if continue_objective is not None:
+                write_history(
+                    "=== OPERATOR CONTINUE: NEW OBJECTIVE ===\n"
+                    + continue_objective + "\n\n"
+                )
 
         # durability="sync": the checkpoint (parent round OR inner tool-level)
         # is committed to sqlite BEFORE execution continues, so a hard kill at

@@ -37,7 +37,11 @@ from pydantic import model_validator
 
 from src.tools import *
 from src.prompt import dft_agent_prompt,hpc_agent_prompt,supervisor_prompt, oer_agent_prompt, boss_prompt
-from src.disposition_messages import classify_wait_handback, format_supervisor_handback_directive
+from src.disposition_messages import (
+    classify_wait_handback,
+    format_study_status_block,
+    format_supervisor_handback_directive,
+)
 from src.forgotten_jobs import find_forgotten_jobs
 from src.history_log import write_history
 from src.past_steps import (
@@ -212,13 +216,30 @@ class PlanExecute(TypedDict):
     draft_response: str
     boss_feedback: str
     response: str
-    # NOTE: canvas / artifacts / explog_candidates / explog_processes used to
-    # live here too. They were removed: each is persisted by its own owner
-    # (canvas.pickle, artifacts.sqlite, vasp_calcs/explog.pkl) and carrying
-    # them here re-serialized ~375 MB into EVERY tool-level checkpoint to
-    # record a ~12 KB delta. The globals are now rehydrated from those files at
-    # startup instead. Consequence: TIME TRAVEL IS GONE -- rewinding would give
-    # an old conversation against current globals. Resume is unaffected.
+    # VESTIGIAL -- declared so they can be EMPTIED, never written again.
+    #
+    # These four used to hold the real CANVAS/EXPLOG/artifact state and were
+    # dropped from this schema: each is persisted by its own owner
+    # (canvas.pickle, artifacts.sqlite, vasp_calcs/explog.pkl) and carrying them
+    # here re-serialized ~375 MB into EVERY tool-level checkpoint to record a
+    # ~12 KB delta. The globals are rehydrated from those files at startup
+    # instead. Consequence: TIME TRAVEL IS GONE -- rewinding would give an old
+    # conversation against current globals. Resume is unaffected.
+    #
+    # Simply deleting the keys was NOT enough. LangGraph copies channel_values
+    # it does not recognise straight into every new checkpoint, so a run resumed
+    # from a pre-change checkpoint keeps dragging the old blobs along untouched
+    # -- measured at 139.8 MB, 99.9% of the 27-05 head checkpoint, rewritten on
+    # every parent super-step under durability="sync". And writing them through
+    # update_state while they were OUT of schema silently did nothing (verified:
+    # accepted without error, value unchanged), which is the worst kind of fix.
+    # Declaring them here makes them real channels again, so `invoke.py continue`
+    # can write empties into them once; nothing writes them afterwards, so they
+    # stay ~5 bytes for the rest of the run.
+    canvas: Dict
+    artifacts: Dict
+    explog_candidates: pd.DataFrame
+    explog_processes: pd.DataFrame
     time: float
     next: str
 
@@ -552,17 +573,40 @@ def boss_node(state, config, agent=None, name=None):
     # print(state)
 
     old_tasks_string = render_history(state)
+
+    # The boss used to be handed ONLY `Current time: <elapsed>` -- no budget, no
+    # remaining time, no queue state -- and on 22-07 approved a study as complete
+    # at 14.68 of 30 days with an idle cluster. Nothing here GATES its decision;
+    # it is simply given the numbers that decision needs. Same two reads as the
+    # handback classification below, but wrapped: boss_node runs on every review,
+    # so a raise here would kill the study at its very last step, and reporting
+    # "unavailable" beats defaulting to 0/0 (which reads as an idle cluster and
+    # would argue for exactly the wrong conclusion).
+    try:
+        _pending = EXPLOG.job_handler.count_pending()
+        _running = EXPLOG.relational_frame.processes.df["status"].tolist().count("running")
+    except Exception:
+        traceback.print_exc()
+        _pending = _running = None
+    study_status = format_study_status_block(
+        elapsed_seconds=time.time() - var.startTime,
+        pending_count=_pending,
+        running_count=_running,
+    )
+
     bossMessage = f"""
     The overall goal is:
     {state['inputs']}
 
     This is what has been done so far:
     {old_tasks_string}
-    
+
     The supervisor's draft final answer is:
     {state['draft_response']}
-    
+
     Current time: {timeElapsed}.
+
+    {study_status}
 
     Please review the supervisor's draft final answer and decide whether to approve it or send it back for revision.
     """
@@ -762,6 +806,13 @@ def supervisor_chain_node(state, config, agent=None, name=None):
     sup_good_patient = 3
     while not sup_good and sup_good_patient > 0:
         sup_good_patient -= 1
+        # Log the ACTUAL prompt, inside the loop so retries (which append a
+        # WARNING to old_supervisorMessage) are captured too. boss_node has
+        # always written its own bossMessage; the supervisor's was the one
+        # prompt in the workflow that was never recorded, which makes every
+        # injected directive -- handback, floor-coercion notice, context budget
+        # -- unauditable after the fact.
+        write_history(supervisorMessage + "\n")
         try:
             # NOTE: with subgraph checkpointing, retry iterations of this loop
             # share one checkpoint namespace, so the retry message is APPENDED
@@ -827,10 +878,22 @@ def supervisor_chain_node(state, config, agent=None, name=None):
         print("Supervisor failed")
         exit(0)
         
+    # CONSUME boss_feedback on every exit path. It is written ONLY by boss_node
+    # (set on revise, cleared on approve), so without this it survives every
+    # supervisor round until the boss next APPROVES -- and the boss only runs
+    # when a draft final answer is proposed. A rejection therefore used to be
+    # re-rendered into the prompt indefinitely, still headed "Your previous draft
+    # final answer has been reviewed and rejected by the boss", long after it had
+    # been acted on. Same for the `invoke.py continue` operator directive, which
+    # arrives through this channel and whose one-time instructions ("ingest the
+    # finished results") would otherwise repeat for the rest of the run.
+    # The feedback's EFFECT is carried forward by the plan it produced and by
+    # past_steps; the text itself is needed once, on the round that reads it.
     if isinstance(agent_response.action, Response):
         return {
             "draft_response": agent_response.action.response,
-            "next": "Boss_Agent", 
+            "boss_feedback": "",
+            "next": "Boss_Agent",
             }
     # elif isinstance(output.action, Response):
     #     return {"response": "Plan is not finished! Do not use response!", "next": "Supervisor"}
@@ -841,6 +904,7 @@ def supervisor_chain_node(state, config, agent=None, name=None):
         write_history("No change to the plan, continue to execute the original plan.\n" + plan_str + "\n")
         return {
             "plan": plan[1:],
+            "boss_feedback": "",
             "next": plan[1].agent,
             }
     else:
@@ -848,8 +912,9 @@ def supervisor_chain_node(state, config, agent=None, name=None):
         print(plan_str)
         write_history(plan_str + "\n")
         return {
-            "plan": agent_response.action.steps, 
-            "next": agent_response.action.steps[0].agent, 
+            "plan": agent_response.action.steps,
+            "boss_feedback": "",
+            "next": agent_response.action.steps[0].agent,
             }
     
     

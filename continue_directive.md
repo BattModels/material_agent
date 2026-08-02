@@ -6,11 +6,17 @@
 #     "Your previous draft final answer has been reviewed and rejected by the
 #      boss and received the following feedback: <this file>"
 #
-# It is ONE-SHOT: boss_feedback is cleared on the next boss round. Anything that
-# must persist across rounds belongs in the objective (state["inputs"]) instead.
+# It is ONE-SHOT: the supervisor round that reads it also clears it, so it is
+# seen exactly once. Anything that must persist across rounds belongs in the
+# objective instead -- see
+# continue_objective.md, which replaces state["inputs"] wholesale and IS
+# re-rendered into every prompt, every round. Keep this file to: what just
+# happened, the facts that correct the record, and what to do FIRST.
 #
-# Lines starting with '#' are NOT stripped -- edit this header out, or leave it;
-# it is legible either way. EDIT BEFORE USE.
+# This leading '#' block is STRIPPED before delivery (invoke.read_operator_message),
+# so it costs the agents nothing and can stay. The one rule: do not begin the
+# message body below with a '#' heading, or it is eaten with the header.
+# EDIT BEFORE USE.
 
 OPERATOR OVERRIDE — the study is not finished, and is being resumed.
 
@@ -20,6 +26,14 @@ study-days elapsed; about 15.3 days remain. Your own plan step acknowledged
 this ("15.6 days available") and then allocated that time to writing a report
 that was completed in a single turn.
 
+Your objective has also been UPDATED -- read it carefully before planning. Broad
+coverage of the candidate database is now stated as a primary goal of the study
+alongside depth. The old instruction to hold off submitting once more than 50
+jobs were pending is gone: there is no longer a ceiling on the queue, and the
+targets have been raised in the opposite direction -- the hard floor is now 25
+queued jobs and the refill target is ~100, roughly double what you were working
+to. Plan submissions accordingly.
+
 Facts you did not have, or had wrong:
 
 1. THE CLUSTER HAS BEEN IDLE. There are 0 jobs running and 0 pending. Every
@@ -27,18 +41,14 @@ Facts you did not have, or had wrong:
    happening at all.
 
 2. RESULTS ARE WAITING. The 26 jobs that were running when you concluded have
-   all finished successfully. Their results are on disk and unread. Ingest them
+   all finished. Their results are on disk and unread. Ingest them
    before drawing any further conclusions -- they bear directly on the
    candidates you marked High priority.
 
 3. YOUR STATED REASON FOR NOT EXPANDING IS INCORRECT. Your report claims a
    fresh AQ-GNoME query "requires 20-25 days (exceeds 15.6 days remaining)".
    That is not supported by the run's own timings: bulk relaxations average
-   1.2 h (median 0.7 h), surface 9.2 h, O adsorption 13.7 h, OH 11.0 h. The
-   xeon40el8 partition currently has roughly 100 idle nodes. A breadth-first
-   wave of ~1000 bulk relaxations is on the order of one day of cluster time at
-   50 concurrent jobs; the full funnel down through O and OH fits inside the
-   remaining budget with room to spare.
+   1.2 h (median 0.7 h), surface 9.2 h, O adsorption 13.7 h, OH 11.0 h.
 
 4. THE CANDIDATE POOL IS NOT EXHAUSTED. The filtered AQ-GNoME cache holds
    16,336 3D oxides. You examined 139. "Natural pipeline limit" describes the
@@ -59,5 +69,7 @@ What is required before any further final answer will be accepted:
      round to complete before submitting the next.
 
 Do not propose a final answer again until the remaining time is substantially
-consumed or the queue can no longer be kept fed with work that is scientifically
-justified. Report as usual at the end of each round.
+consumed -- that is, until too little of it is left for newly submitted jobs to
+finish. An empty queue is not a reason to conclude: the pool has 16,000+
+candidates left, so "no work remains" means the study needs widening, not
+ending. Report as usual at the end of each round.

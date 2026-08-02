@@ -183,10 +183,20 @@ def test_state_snapshot_carries_no_bulk_state():
     carrying them here cost ~376 MB per tool call (measured on the 27-05 run)
     to record a ~12 KB delta.
 
+    NOTE on PlanExecute: this used to also assert the four names were absent
+    from the PARENT schema. They are back, deliberately, as VESTIGIAL channels
+    -- deleting them from the schema does not delete them from an existing
+    checkpoint, and LangGraph copies unrecognised channel_values forward
+    forever, so they have to stay declared long enough for `invoke.py continue`
+    to write empties into them (see tests/test_legacy_channel_migration.py).
+    Declaring them is harmless; POPULATING them is the thing that costs 140 MB
+    a checkpoint, and that is what the two assertions below actually prevent:
+    nothing reaches those channels except the one-shot clearing write.
+
     Imported lazily -- src.planNexe2 pulls in src.tools and the GNoME database.
     """
     pytest.importorskip("gnome_dreams_oer_screening")
-    from src.planNexe2 import full_state_snapshot, SyncedAgentState, PlanExecute
+    from src.planNexe2 import full_state_snapshot, SyncedAgentState
     from src import var
 
     # var.startTime is "" until invoke.py sets it; the snapshot subtracts it.
@@ -194,7 +204,6 @@ def test_state_snapshot_carries_no_bulk_state():
 
     banned = {"canvas", "artifacts", "explog_candidates", "explog_processes"}
     assert banned.isdisjoint(SyncedAgentState.__annotations__)
-    assert banned.isdisjoint(PlanExecute.__annotations__)
     assert set(full_state_snapshot()) == {"curr_round_result_ids", "time"}
 
 

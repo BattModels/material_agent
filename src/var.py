@@ -37,6 +37,13 @@ STUDY_BUDGET_DAYS = 30
 FLOOR_DISARM_WINDOW_DAYS = 2
 # Path B (the "expand the study" refusal when no ready work exists) is disabled
 # when remaining time < this many days -- the wait then simply proceeds.
+# PATH_B_CUTOFF_DAYS doubles as the honest "too late to start anything new"
+# threshold quoted to the BOSS in boss_prompt: inside this window a freshly
+# submitted job could not finish, so concluding the study is defensible. The
+# boss decides for itself -- there is deliberately NO hard gate on finishing --
+# but it is given days remaining and the live queue counts so the decision is
+# informed. (The 27-05 run concluded at 14.68/30 days having only ever been
+# told ELAPSED time.)
 PATH_B_CUTOFF_DAYS = 4
 
 _SECONDS_PER_DAY = 86400
@@ -49,13 +56,13 @@ PATH_B_CUTOFF_SECONDS = PATH_B_CUTOFF_DAYS * _SECONDS_PER_DAY
 # (with the real numbers) to refill. Queued -- not running -- jobs are the target:
 # queued jobs are what feed nodes the instant they free up, and under fair-share
 # a near-empty queue means the cluster is absorbing everything we submit.
-QUEUE_MIN_PENDING = 15
+QUEUE_MIN_PENDING = 25
 
 # Soft refill goal shown to agents when the queue is below QUEUE_MIN_PENDING:
 # the floor (hard, gates waiting) triggers the refill; this target is what the
 # refill should AIM for -- fill the queue well beyond the floor with the most
 # VALUABLE ready work (never padding with junk just to hit a number).
-QUEUE_REFILL_TARGET = 50
+QUEUE_REFILL_TARGET = 100
 
 # --- Disposition gate ---------------------------------------------------------
 # Runtime slot mirroring the CURRENT task's `myStep.enforce_queue_floor` (the
@@ -103,10 +110,16 @@ DISPOSITION_ACTIVE_DECISIONS = ("Low priority", "Medium priority", "High priorit
 DISPOSITION_DEFAULT_ACTIVE = "Medium priority"   # neutral; legacy "Investigating" migrates here
 
 # G(O) deviation (|G(O) - 2.46| eV) at/under which an O-adsorption site is
-# "competitive" enough to warrant an OH job. Used by the forgotten-OH reminder
-# and cited by requirement-13 in the worker prompt so the two stay consistent.
+# "competitive" enough to warrant an OH job. Drives find_forgotten_jobs, hence
+# which sites the wait-gate SURFACES to the worker as ready OH work -- that
+# listing is how the value reaches the agent.
+#
+# DELIBERATELY NOT quoted in the worker prompt: requirement 13 keeps the
+# qualitative wording ("far from the ideal value of 2.46 eV") so the number
+# stays an operator knob rather than a figure the agent reasons about directly.
+# (An earlier comment here claimed requirement 13 cited the value; it never did.)
 # Set negative to disable forgotten-OH detection entirely.
-GO_DEV_OH_THRESHOLD = 0.3
+GO_DEV_OH_THRESHOLD = 0.8
 
 # --- Live visualisation write throttle -----------------------------------------
 # LiveVisualizer._flush() rewrites BOTH live_data.js and live_visualization.html
