@@ -1,6 +1,7 @@
 import math
 import os
 import pickle
+from src import var
 import time
 import uuid
 from typing import Any, Annotated, Callable, Dict, List, Literal, Optional, TypedDict, Union
@@ -13,37 +14,45 @@ from pydantic import BaseModel, Field
 from langchain_core.tools import tool
 
 def myDictPP(myDict, indent=4, nindent=0, toDisk=False, filename=None):
-    # remove canvas.txt if it exists
-    if toDisk:
-        with open(filename, 'w') as f:
-            f.write("")
-    _myDictPP(myDict, indent, nindent, toDisk, filename)
+    """Pretty-print a nested dict to stdout, or render it to `filename`.
 
-def _myDictPP(myDict, indent=4, nindent=0, toDisk=False, filename=None):
-    print('{')
+    Rewritten for cost. The previous version opened, appended to and closed the
+    output file once PER KEY AND PER LINE, and printed every line to stdout even
+    when writing to disk. On the 27-05 run's 985-key canvas that made a single
+    CANVAS.write() cost 5.80 s (thousands of NFS round trips) and emit 4.9 MB to
+    stdout -- and CANVAS.write() is called ~1000 times over a campaign, so it
+    accounted for ~1.6 hours of wall time and several GB of the nohup/hist logs.
+
+    Now: render once into memory, then a single atomic write (~0.1 s). Output
+    format is byte-identical to the old one.
+
+    stdout is used ONLY when not writing to disk. CANVAS.print() is the
+    deliberate way to dump the canvas to the log; the write path echoing the
+    whole canvas after every write was pure log bloat.
+    """
+    out = []
+    _myDictPP_render(myDict, indent, nindent, out)
+    text = "".join(out)
     if toDisk:
-        with open(filename, 'a') as f:
-            f.write("{\n")
+        tmp = filename + ".tmp"
+        with open(tmp, 'w') as f:
+            f.write(text)
+        os.replace(tmp, filename)      # atomic, like canvas.pickle
+    else:
+        print(text, end="")
+
+
+def _myDictPP_render(myDict, indent, nindent, out):
+    """Append the rendered form of `myDict` to the `out` list of strings."""
+    out.append('{\n')
     for k, v in myDict.items():
-        print(" " * indent * nindent, end="")
-        if toDisk:
-            with open(filename, 'a') as f:
-                f.write(" " * indent * nindent)
+        out.append(" " * indent * nindent)
         if isinstance(v, dict):
-            print(repr(k) + ": ", end="")
-            if toDisk:
-                with open(filename, 'a') as f:
-                    f.write(repr(k) + ": ")
-            _myDictPP(v, indent, nindent+1, toDisk=toDisk, filename=filename)
+            out.append(repr(k) + ": ")
+            _myDictPP_render(v, indent, nindent + 1, out)
         else:
-            print(repr(k) + ": " + repr(v) + ",")
-            if toDisk:
-                with open(filename, 'a') as f:
-                    f.write(repr(k) + ": " + repr(v) + ",\n")
-    print(" " * indent * nindent + "}")
-    if toDisk:
-        with open(filename, 'a') as f:
-            f.write(" " * indent * nindent + "}\n")
+            out.append(repr(k) + ": " + repr(v) + ",\n")
+    out.append(" " * indent * nindent + "}\n")
 
 def _new_id(prefix: str) -> str:
     alphabet = string.ascii_lowercase + string.digits
@@ -261,14 +270,16 @@ class myCANVAS():
             self.canvas[key] = value
             self._save_canvas()
             print("##################### CANVAS #######################")
-            myDictPP(self.canvas, toDisk=True, filename=writeDir+'.txt')
+            if getattr(var, "CANVAS_TXT_DUMP_ENABLED", True):
+                myDictPP(self.canvas, toDisk=True, filename=writeDir+'.txt')
             print("################### CANVAS END #####################")
             return f"Key '{key}' successfully added."
         elif overwrite:
             self.canvas[key] = value
             self._save_canvas()
             print("##################### CANVAS #######################")
-            myDictPP(self.canvas, toDisk=True, filename=writeDir+'.txt')
+            if getattr(var, "CANVAS_TXT_DUMP_ENABLED", True):
+                myDictPP(self.canvas, toDisk=True, filename=writeDir+'.txt')
             print("################### CANVAS END #####################")   
             return f"Key '{key}' successfully overwritten."
         else:

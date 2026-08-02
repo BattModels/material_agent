@@ -476,9 +476,14 @@ teamRestriction = """
 
 
 def print_stream(s, DAG=None):
+    # viz.on_event throttles its own writes (see var.LIVE_VIZ_* and
+    # LiveVisualizer._flush); gen_DAG has no such gate, so honour the kill
+    # switch here. These step_<N>_DAG.html files reached 18 MB each on the
+    # 27-05 run (2.8 GB in total) and are purely for human inspection --
+    # nothing in the workflow reads them back.
     viz.on_event(s, DAG=DAG)
-    
-    if DAG is not None:
+
+    if DAG is not None and getattr(var, "LIVE_VIZ_ENABLED", True):
         DAG_title = f"step_{DAG}_DAG"
         CANVAS.gen_DAG(
             filename=f"{var.my_WORKING_DIRECTORY}/{DAG_title}.html",

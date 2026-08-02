@@ -56,8 +56,11 @@ and `Response` variants and renders a readable summary for each.
 import os
 import json
 import re
+import time
 from datetime import datetime
 from threading import Lock
+
+from src import var
 
 try:
     import pandas as pd
@@ -255,6 +258,11 @@ class LiveVisualizer:
                 default_hide.setdefault(k, set()).update(set(v))
         self.hide_columns = {k: set(v) for k, v in default_hide.items()}
         self._lock = Lock()
+        # Write-throttle state (see var.LIVE_VIZ_*). Both output files are views
+        # rebuilt from in-memory state, so a skipped write loses nothing.
+        self._last_data_flush = 0.0
+        self._last_html_flush = 0.0
+        self._skipped_flushes = 0
 
         self.session_start = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.steps = []
@@ -296,7 +304,7 @@ class LiveVisualizer:
         self._html_prefix = rendered_tpl[:idx]
         self._html_suffix = rendered_tpl[idx + len(marker):]
 
-        self._flush()
+        self._flush(force=True)   # first paint
     
     def on_event(self, s, DAG=None):
         """Call this for every chunk yielded by graph.stream()."""
@@ -346,7 +354,7 @@ class LiveVisualizer:
                 self.current_step["end_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 self.steps.append(self.current_step)
                 self.current_step = self._new_step()
-            self._flush()
+            self._flush(force=True)   # final state must always land
 
     # ------------------------------------------------------------------
     # STATE HANDLING
@@ -880,38 +888,80 @@ class LiveVisualizer:
             "hide_columns": {k: sorted(v) for k, v in self.hide_columns.items()},
         }
 
-    def _flush(self):
-        # 1) Write live_data.js (lean — no DAG content) for live polling
-        data_lean = self._build_data(include_dag_content=False)
-        payload = "window.__LIVE_DATA__ = " + json.dumps(
-            data_lean, default=str, ensure_ascii=False
-        ) + ";\nwindow.__LIVE_TICK__ && window.__LIVE_TICK__();\n"
+    def _flush(self, force=False):
+        """Rewrite the dashboard files, subject to a time throttle.
 
-        tmp = self.data_path + ".tmp"
-        try:
-            with open(tmp, "w", encoding="utf-8") as f:
-                f.write(payload)
-            os.replace(tmp, self.data_path)
-        except Exception as e:
-            print(f"[LiveVisualizer] flush error (data.js): {e}")
+        Called from on_event() for EVERY streamed agent event -- at least once
+        per model call and once per tool call. Both files are rewritten IN FULL
+        (~80 MB js + ~99 MB html measured on the 27-05 run), so unthrottled this
+        was more I/O than the checkpointer itself.
+
+        Skipping is safe: both files are views rebuilt from in-memory state, so
+        the next flush emits the latest state -- nothing accumulates and nothing
+        is lost. `force=True` (used by __init__ and close()) always writes, so
+        the session's final state is never missing.
+
+        The heavy self-contained HTML is throttled far harder than the lean
+        live_data.js that the page actually polls.
+        """
+        now = time.time()
+        # Kill switch beats everything, including force: "off" must mean no
+        # dashboard writes at all, not "no writes except the forced ones".
+        if not getattr(var, "LIVE_VIZ_ENABLED", True):
+            return
+        write_data = force or (now - self._last_data_flush) >= var.LIVE_VIZ_DATA_MIN_INTERVAL_S
+        write_html = force or (now - self._last_html_flush) >= var.LIVE_VIZ_HTML_MIN_INTERVAL_S
+        if not write_data and not write_html:
+            self._skipped_flushes += 1
+            return
+
+        if write_data:
+            self._last_data_flush = now
+        if write_html:
+            self._last_html_flush = now
+        self._skipped_flushes = 0
+
+        self._write_files(write_data=write_data, write_html=write_html)
+
+    def _write_files(self, write_data=True, write_html=True):
+        """The actual writes. Each file is independently skippable -- building
+        its payload (a full json.dumps of the whole state) is most of the cost,
+        so a skipped file must not be built either."""
+        # 1) live_data.js (lean — no DAG content) for live polling
+        if write_data:
+            data_lean = self._build_data(include_dag_content=False)
+            payload = "window.__LIVE_DATA__ = " + json.dumps(
+                data_lean, default=str, ensure_ascii=False
+            ) + ";\nwindow.__LIVE_TICK__ && window.__LIVE_TICK__();\n"
+
+            tmp = self.data_path + ".tmp"
+            try:
+                with open(tmp, "w", encoding="utf-8") as f:
+                    f.write(payload)
+                os.replace(tmp, self.data_path)
+            except Exception as e:
+                print(f"[LiveVisualizer] flush error (data.js): {e}")
 
         # 2) Rewrite the HTML with embedded data (full — includes DAG content)
         #    so downloading live_visualization.html gives a self-contained file.
-        data_full = self._build_data(include_dag_content=True)
-        data_json = json.dumps(data_full, default=str, ensure_ascii=False)
-        # CRITICAL: The DAG HTML (and any other embedded content) may contain
-        # </script> tags.  The browser's HTML parser sees those and thinks
-        # they close OUR <script> block, breaking the page.  Escape every
-        # </ sequence — this is the standard fix for inline JSON-in-script.
-        data_json = data_json.replace("</", r"<\/")
-        html = self._html_prefix + data_json + self._html_suffix
-        tmp_html = self.html_path + ".tmp"
-        try:
-            with open(tmp_html, "w", encoding="utf-8") as f:
-                f.write(html)
-            os.replace(tmp_html, self.html_path)
-        except Exception as e:
-            print(f"[LiveVisualizer] flush error (html): {e}")
+        #    Much heavier than (1): it embeds every DAG, then runs a str.replace
+        #    over the whole ~99 MB payload. Throttled hardest.
+        if write_html:
+            data_full = self._build_data(include_dag_content=True)
+            data_json = json.dumps(data_full, default=str, ensure_ascii=False)
+            # CRITICAL: The DAG HTML (and any other embedded content) may contain
+            # </script> tags.  The browser's HTML parser sees those and thinks
+            # they close OUR <script> block, breaking the page.  Escape every
+            # </ sequence — this is the standard fix for inline JSON-in-script.
+            data_json = data_json.replace("</", r"<\/")
+            html = self._html_prefix + data_json + self._html_suffix
+            tmp_html = self.html_path + ".tmp"
+            try:
+                with open(tmp_html, "w", encoding="utf-8") as f:
+                    f.write(html)
+                os.replace(tmp_html, self.html_path)
+            except Exception as e:
+                print(f"[LiveVisualizer] flush error (html): {e}")
 
     # ------------------------------------------------------------------
     # RESUME: restore state from a previous session

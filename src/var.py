@@ -108,6 +108,27 @@ DISPOSITION_DEFAULT_ACTIVE = "Medium priority"   # neutral; legacy "Investigatin
 # Set negative to disable forgotten-OH detection entirely.
 GO_DEV_OH_THRESHOLD = 0.3
 
+# --- Live visualisation write throttle -----------------------------------------
+# LiveVisualizer._flush() rewrites BOTH live_data.js and live_visualization.html
+# in full, on EVERY streamed agent event -- i.e. at least once per model call and
+# once per tool call. Measured on the 27-05 run that is ~180 MB per event
+# (80 MB js + 99 MB self-contained html), plus json.dumps of the whole state
+# twice and a str.replace over the ~99 MB html. Unthrottled, that was MORE I/O
+# than the checkpointer, for a dashboard nobody watches during an unattended run.
+#
+# Both files are pure VIEWS rebuilt from in-memory state, so skipping a write
+# loses nothing -- the next flush emits the latest state. close() always forces
+# a final write, so the end state is never missing.
+LIVE_VIZ_ENABLED = True          # False disables the dashboard writes entirely
+LIVE_VIZ_DATA_MIN_INTERVAL_S = 60      # live_data.js  (lean; polled by the page)
+LIVE_VIZ_HTML_MIN_INTERVAL_S = 900     # live_visualization.html (heavy; ~99 MB)
+
+# CANVAS.write() also re-dumps the ENTIRE canvas as a human-readable
+# canvas.pickle.txt on every write -- 5 MB on the 27-05 run, x753
+# write_my_canvas calls ~= 3.8 GB of pure inspection output. Nothing reads the
+# file back (canvas.pickle is the real artefact), so it is safe to switch off.
+CANVAS_TXT_DUMP_ENABLED = True
+
 # --- Dialogue history log rotation (hist/his_<N>.txt) --------------------------
 # Once the active his_<N>.txt file reaches this many bytes, close it and start
 # the next (see src/history_log.py). Tune here.
