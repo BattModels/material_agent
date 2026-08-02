@@ -175,3 +175,56 @@ def test_missing_directory_fails_clearly(tmp_path):
     'unable to open database file'."""
     with pytest.raises(FileNotFoundError, match="directory does not exist"):
         ArtifactStore(str(tmp_path / "no" / "such" / "dir" / "artifacts.sqlite"))
+
+
+# --- canvas.pickle: atomic write + startup restore --------------------------
+
+def test_canvas_persists_and_restores(tmp_path):
+    """The notes board must survive a restart from disk alone -- it is no
+    longer carried in the checkpoint."""
+    c1 = myCANVAS(); c1.set_working_directory(str(tmp_path))
+    c1.write("round1_report", "findings ...")
+    c1.write("hypothesis", {"H1": "Ir-Rh 1:2 optimal"})
+
+    c2 = myCANVAS(); c2.set_working_directory(str(tmp_path))
+    assert c2.read("round1_report") == "findings ..."
+    assert c2.read("hypothesis") == {"H1": "Ir-Rh 1:2 optimal"}
+
+
+def test_canvas_overwrite_is_persisted(tmp_path):
+    c1 = myCANVAS(); c1.set_working_directory(str(tmp_path))
+    c1.write("k", "v1")
+    c1.write("k", "v2", overwrite=True)
+
+    c2 = myCANVAS(); c2.set_working_directory(str(tmp_path))
+    assert c2.read("k") == "v2"
+
+
+def test_canvas_write_is_atomic(tmp_path):
+    """No .tmp left behind, and the destination is only ever replaced whole."""
+    c = myCANVAS(); c.set_working_directory(str(tmp_path))
+    c.write("k", "v")
+    assert (tmp_path / "canvas.pickle").exists()
+    assert not (tmp_path / "canvas.pickle.tmp").exists()
+
+
+def test_wiped_run_dir_does_not_resurrect_stale_state(tmp_path):
+    """invoke.py's 'ow' path rm -rf's the run dir BETWEEN its two
+    set_working_directory calls. Neither the canvas nor the artifact registry
+    may survive that."""
+    import shutil
+    run = tmp_path / "run"; run.mkdir()
+    c = myCANVAS(); c.set_working_directory(str(run))
+    c.write("old_report", "from the previous run")
+    _numeric(c, 1.0)
+    assert len(c.result_registry) == 1 and c.read("old_report") is not None
+
+    shutil.rmtree(str(run)); run.mkdir()          # what 'ow' does
+    c.set_working_directory(str(run))             # second call
+
+    assert c.canvas == {}, "stale canvas survived a wiped run directory"
+    assert c.result_registry == {}, "stale artifacts survived a wiped run directory"
+    # and the reopened store must be usable, not pointing at the unlinked file
+    rid = _numeric(c, 2.0)
+    assert c._artifact_store.count() == 1
+    assert c._artifact_store.get(rid).value == 2.0

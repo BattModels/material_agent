@@ -115,6 +115,7 @@ class myCANVAS():
     
     def set_working_directory(self, working_directory, ckp=0):
         self.working_directory = working_directory
+        self._load_canvas()
         self._open_artifact_store()
         # writeDir = os.path.join(self.working_directory, 'canvas.pickle')
         # ckpDir = os.path.join(self.working_directory, 'canvas_checkpoints.pickle')
@@ -134,6 +135,47 @@ class myCANVAS():
         #     myDictPP(self.canvas, toDisk=True, filename=writeDir+'.txt')
         #     print("################### CANVAS END #####################")
 
+    def canvas_path(self):
+        return os.path.join(self.working_directory, 'canvas.pickle')
+
+    def _save_canvas(self):
+        """Persist self.canvas ATOMICALLY (temp file + os.replace).
+
+        This used to be a plain `open(path,'wb'); pickle.dump(...)`, which
+        truncates the file before writing -- a crash mid-write left a corrupt
+        pickle. That was survivable only because nothing ever READ the file
+        back; the canvas was restored from the LangGraph checkpoint instead.
+
+        Now that the canvas is rehydrated from this file on startup, a torn
+        write would lose the whole notes board, so it gets the same guarantee
+        EXPLOG._save_pickle already uses.
+        """
+        dest = self.canvas_path()
+        tmp = dest + '.tmp'
+        with open(tmp, 'wb') as f:
+            pickle.dump(self.canvas, f)
+        os.replace(tmp, dest)      # atomic on Linux/NFS
+
+    def _load_canvas(self):
+        """Restore the notes board written by a previous session, if any.
+
+        Deliberately quiet about a missing file: a fresh run has no canvas yet.
+        A CORRUPT file is NOT swallowed -- that would silently start the agent
+        with an empty canvas and lose every report and note it had recorded.
+        """
+        path = self.canvas_path()
+        if not os.path.exists(path):
+            # Authoritative in both directions: no file means a fresh run, so
+            # drop anything carried over from a previous working directory.
+            # ('ow' wipes the run dir BETWEEN invoke.py's two
+            # set_working_directory calls -- keeping the stale canvas there
+            # would resurrect the deleted run's notes.)
+            self.canvas = {}
+            return
+        with open(path, 'rb') as f:
+            self.canvas = pickle.load(f)
+        print(f"[CANVAS] restored {len(self.canvas)} keys from {path}")
+
     def _open_artifact_store(self):
         """Open (or re-open) the run's artifacts.sqlite and rehydrate the registry.
 
@@ -148,12 +190,26 @@ class myCANVAS():
         from src.artifact_store import ArtifactStore
 
         path = os.path.join(self.working_directory, "artifacts.sqlite")
-        if self._artifact_store is not None and self._artifact_store.path == path:
+        # Reopen if the path changed OR the file vanished underneath us: the
+        # 'ow' path in invoke.py does `rm -rf WORKING_DIRECTORY` BETWEEN its two
+        # set_working_directory calls, so a cached handle would be writing to an
+        # unlinked inode.
+        if (self._artifact_store is not None
+                and self._artifact_store.path == path
+                and os.path.exists(path)):
             return
+        if self._artifact_store is not None:
+            try:
+                self._artifact_store.close()
+            except Exception:
+                pass
         self._artifact_store = ArtifactStore(path)
+        # Unconditional: the store is AUTHORITATIVE in both directions. An empty
+        # table means a fresh run, and must clear any registry carried over from
+        # a previous working directory -- not silently keep it.
         loaded = self._artifact_store.load_all()
+        self.result_registry = loaded
         if loaded:
-            self.result_registry = loaded
             print(f"[CANVAS] rehydrated {len(loaded)} artifacts from {path}")
 
     def _register_artifact(self, result_id, artifact):
@@ -203,16 +259,14 @@ class myCANVAS():
             
         if key not in self.canvas.keys():
             self.canvas[key] = value
-            with open(writeDir, 'wb') as f:
-                pickle.dump(self.canvas, f)
+            self._save_canvas()
             print("##################### CANVAS #######################")
             myDictPP(self.canvas, toDisk=True, filename=writeDir+'.txt')
-            print("################### CANVAS END #####################")    
+            print("################### CANVAS END #####################")
             return f"Key '{key}' successfully added."
         elif overwrite:
             self.canvas[key] = value
-            with open(writeDir, 'wb') as f:
-                pickle.dump(self.canvas, f)    
+            self._save_canvas()
             print("##################### CANVAS #######################")
             myDictPP(self.canvas, toDisk=True, filename=writeDir+'.txt')
             print("################### CANVAS END #####################")   
