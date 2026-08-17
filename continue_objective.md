@@ -55,6 +55,44 @@ rounds). When evaluating overpotentials and ranking candidates, you will need to
 both the overpotential calculated assuming an ideal OOH binding and the one calculated
 via the scaling relation.
 
+Supply risk and earth abundance -- RAISED PRIORITY:
+A significant share of every remaining batch of candidate registrations must target LOW
+SUPPLY-RISK materials, judged on BOTH of the available production-concentration metrics,
+because they measure different things and a candidate is only genuinely low-risk when both
+are low:
+
+- average_HHI_P_excluding_O_H is ATOM-WEIGHTED across the material's substantive elements.
+  A low value means any scarce metal present is DILUTE in the framework.
+- max_HHI_P is the worst single element in the material, regardless of how little of it
+  there is. A low value means no supply-constrained element is present at all.
+
+Pursue two tracks in parallel, and say which track a candidate belongs to when you
+register it:
+
+TRACK A -- LEAN PRECIOUS-METAL CATALYSTS (the larger share). Target a low
+average_HHI_P_excluding_O_H while allowing max_HHI_P to stay high: frameworks where Ir,
+Rh, Ru or Pt is present but DILUTE, carried in an abundant host lattice. The aim is to
+keep whatever active-site chemistry the study has shown to work while minimising how much
+scarce metal each formula unit needs. When a precious-metal site performs well, the
+immediate follow-up question is how far its concentration can be reduced before the
+activity goes with it -- treat that as a hypothesis to test, not an afterthought.
+
+TRACK B -- PRECIOUS-METAL-FREE LONG SHOTS (a smaller but real share). Target low values on
+BOTH metrics, max_HHI_P included, so that no supply-constrained element appears anywhere in
+the composition. Expect a lower hit rate than Track A. Pursue them anyway: a fully
+earth-abundant catalyst that is active and stable under acidic OER conditions is a
+transformative result rather than an incremental one, and that asymmetry justifies
+spending real capacity on candidates that will often fail. Do NOT abandon a Track B line
+merely because its first results are unremarkable, and do not let a run of poor Track B
+results become a reason to stop registering them -- judge each candidate on the same
+G(O)-deviation evidence you apply to everything else.
+
+Neither track replaces the other, and neither replaces ordinary breadth: continue to
+register candidates that are simply the most promising on activity grounds. Report both
+HHI figures alongside both overpotentials whenever you rank or compare candidates, so the
+cost dimension stays visible in the final analysis rather than being reconstructed at the
+end.
+
 The AQ-GNoME database is available for stability-based filtering. The Pourbaix stability
 screening is fixed at pH = 0 and U = 1.2-2.0 V vs. SHE (acidic OER operating conditions).
 Many additional filters are available (e.g. decomposition threshold, bandgap, HHI,
@@ -104,5 +142,7 @@ implies about the parts of the pool left unexplored.
 - Any recommendations for future studies or next steps based on the findings and
 limitations of the current study.
 
-You have a maximum of 30 days to complete the entire study and make your final report.
-Make full use of the available time.
+You have a budget of 200 days for this study. It is a continuing programme, not a task with
+a deadline: keep screening, deepening and reporting for as long as the budget lasts. There
+is no final report to work toward -- produce the round reports described above as you go,
+and treat each one as the current state of the work rather than a conclusion.

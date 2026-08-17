@@ -34,8 +34,10 @@ def test_reports_remaining_not_just_elapsed():
     block = format_study_status_block(
         elapsed_seconds=14.68 * _DAY, pending_count=0, running_count=0)
     assert "REMAINING" in block
-    # 30 - 14.68 = 15.32
-    assert "15.32" in block, block
+    # Derived, not hardcoded: STUDY_BUDGET_DAYS is an operator knob (raised
+    # 30 -> 200 when the study became a continuing programme), so pinning the
+    # arithmetic to one budget just breaks the test when the knob moves.
+    assert f"{var.STUDY_BUDGET_DAYS - 14.68:.2f}" in block, block
     assert "14.68" in block
 
 
@@ -43,7 +45,7 @@ def test_reports_the_budget_and_percentage_spent():
     block = format_study_status_block(
         elapsed_seconds=15 * _DAY, pending_count=3, running_count=4)
     assert f"{var.STUDY_BUDGET_DAYS:.1f}" in block
-    assert "50%" in block, block
+    assert f"{100 * 15 / var.STUDY_BUDGET_DAYS:.0f}%" in block, block
 
 
 def test_renders_live_queue_counts_with_the_floor_and_target():
@@ -112,7 +114,12 @@ def test_boss_prompt_still_forbids_rejecting_on_style():
 def test_supervisor_prompt_makes_coverage_a_standing_objective():
     p = supervisor_prompt.lower()
     assert "coverage" in p
-    assert "default action is to register more candidates" in p
+    # Coverage stays a standing objective, but registering candidates is no
+    # longer the reflex answer to it: the supervisor must ASK the worker what
+    # the log supports first. Registering 169 candidates in one session to hold
+    # a queue target is what that reflex produced.
+    assert "default action is to register more candidates" not in p
+    assert "put the question to your worker" in p
 
 
 # --- the gate prose ----------------------------------------------------------

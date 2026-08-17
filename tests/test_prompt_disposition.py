@@ -53,12 +53,18 @@ def test_worker_prompt_defines_the_standing_duty():
 
 
 def test_supervisor_prompt_states_floor_semantics_and_disarm_window():
-    # The supervisor must be told the floor is on QUEUED jobs, the refill target,
-    # that workers self-serve ready work, and the final-days disarm rule.
+    # The supervisor must be told the floor is on QUEUED jobs, that workers
+    # self-serve ready work, and the final-days disarm rule.
+    #
+    # It is deliberately NOT told a refill target any more. QUEUE_REFILL_TARGET
+    # is still shown by the wait tool when the floor is breached, but as a
+    # standing goal in the prompt it became a number to chase -- the supervisor
+    # registered 169 candidates in one session to reach it, because new
+    # candidates are the only work it can create on demand.
     s = supervisor_prompt.lower()
     assert "queued" in s
     assert str(var.QUEUE_MIN_PENDING) in s
-    assert str(var.QUEUE_REFILL_TARGET) in s
+    assert str(var.QUEUE_REFILL_TARGET) not in s
     assert "standing duty" in s
     assert f"final {var.FLOOR_DISARM_WINDOW_DAYS} days" in s
 

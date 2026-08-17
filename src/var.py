@@ -31,7 +31,14 @@ reportGist = ""
 # defined in DAYS (the tunable knobs); the *_SECONDS forms below are what the
 # code reads. invoke.py's objective text derives its "maximum of N days" from
 # STUDY_BUDGET_DAYS, so prose and gates cannot drift apart.
-STUDY_BUDGET_DAYS = 30
+#
+# Raised 30 -> 200 on 2026-08-17: the study is a continuing programme that runs
+# until the compute grant is spent, not a task with a deadline. At 200 the two
+# windows below become unreachable, which is the point -- no wind-down path, no
+# floor disarm, and the boss can never approve a final answer on clock grounds.
+# NOTE: continue_objective.md states the budget in prose and is NOT derived from
+# this constant, so the two must be changed together.
+STUDY_BUDGET_DAYS = 200
 # enforce_queue_floor=False on a plan step is HONORED only when remaining time
 # < this many days; earlier it is coerced back to True (see worker_agent_node).
 FLOOR_DISARM_WINDOW_DAYS = 2
@@ -57,6 +64,13 @@ PATH_B_CUTOFF_SECONDS = PATH_B_CUTOFF_DAYS * _SECONDS_PER_DAY
 # queued jobs are what feed nodes the instant they free up, and under fair-share
 # a near-empty queue means the cluster is absorbing everything we submit.
 QUEUE_MIN_PENDING = 25
+
+# Hard ceiling on queued jobs. SLURM refuses submissions once a user has 1000
+# active jobs, so this leaves headroom rather than expressing a preference: going
+# over it does not slow the study down, it makes submissions FAIL. Unlike the
+# floor this is not enforced anywhere in code -- it is stated to the worker in
+# requirement 14, which is where it already reads the live queue numbers.
+QUEUE_MAX_PENDING = 800
 
 # Soft refill goal shown to agents when the queue is below QUEUE_MIN_PENDING:
 # the floor (hard, gates waiting) triggers the refill; this target is what the

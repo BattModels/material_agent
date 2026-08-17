@@ -18,58 +18,37 @@
 # message body below with a '#' heading, or it is eaten with the header.
 # EDIT BEFORE USE.
 
-OPERATOR OVERRIDE — the study is not finished, and is being resumed.
+OPERATOR UPDATE — the run was down for four days on an infrastructure fault, not on anything
+you did. Two things have changed while you were stopped.
 
-Your final answer is rejected on one ground: you concluded the study with
-roughly half of the allotted time unused. The record shows 14.7 of the 30
-study-days elapsed; about 15.3 days remain. Your own plan step acknowledged
-this ("15.6 days available") and then allocated that time to writing a report
-that was completed in a single turn.
+1. THE TIME BUDGET IS NOW 200 DAYS, not 30. This study is a continuing programme that runs
+until the compute grant is spent; there is no deadline and no final report to work toward.
+Your CANVAS and plan text still say "Day 24 of 30", "5.8 days remaining" and "wind down at
+Day 26.0". All of that is now wrong. Correct it in your notes NOW rather than at reporting
+time -- a stale figure left in the record is inherited by every later round, which is how the
+0.30 eV threshold survived two corrections.
 
-Your objective has also been UPDATED -- read it carefully before planning. Broad
-coverage of the candidate database is now stated as a primary goal of the study
-alongside depth. The old instruction to hold off submitting once more than 50
-jobs were pending is gone: there is no longer a ceiling on the queue, and the
-targets have been raised in the opposite direction -- the hard floor is now 25
-queued jobs and the refill target is ~100, roughly double what you were working
-to. Plan submissions accordingly.
+2. SAMPLE EACH CANDIDATE AT MORE ADSORPTION SITES. Across the study a candidate averages 2.91
+O sites tried. 139 candidates have found a competitive O site, but 87 of them found exactly
+one and stopped there. The deepest candidate in the study reached 12 sites and 4 terminations,
+so the room exists -- this is a habit, not a limit. Aim for roughly 4 to 8 O sites per
+candidate, more where your results justify it, and relax a further termination when a surface
+runs out of distinct promising sites. Treat that range as a guide: some candidates genuinely
+do not offer that many sites, and those are finished, not under-sampled.
 
-Facts you did not have, or had wrong:
+The most under-sampled are also among the best you have. Verify these against the log rather
+than taking the list on faith:
 
-1. THE CLUSTER HAS BEEN IDLE. There are 0 jobs running and 0 pending. Every
-   job you had in flight completed. Until you submit work, no computation is
-   happening at all.
+  9e74301d57  PrBiRh2O7          1 site,  1 surface,  best G(O) deviation 0.010
+  cf03e0cb1d  LuBi3Ir2(RhO7)2    1 site,  1 surface,  0.020
+  47c41df315  YCoTeO6            2 sites, 1 surface,  0.030
+  65c2439d36  Al3Co(TeO6)2       2 sites, 1 surface,  0.030
+  a21b6febda  FeIrRhO6           3 sites, 1 surface,  0.030
+  0dbc4e8975  PtRh(SeO3)4        2 sites, 1 surface,  0.040
 
-2. RESULTS ARE WAITING. The 26 jobs that were running when you concluded have
-   all finished. Their results are on disk and unread. Ingest them
-   before drawing any further conclusions -- they bear directly on the
-   candidates you marked High priority.
+You can find the rest yourself: query_explog on the candidates table, sort n_O_started
+ascending, filter on G(O) deviation or idealOverPotential to take the promising ones first.
 
-3. YOUR STATED REASON FOR NOT EXPANDING IS INCORRECT. Your report claims a
-   fresh AQ-GNoME query "requires 20-25 days (exceeds 15.6 days remaining)".
-   That is not supported by the run's own timings: bulk relaxations average
-   1.2 h (median 0.7 h), surface 9.2 h, O adsorption 13.7 h, OH 11.0 h.
-
-4. THE CANDIDATE POOL IS NOT EXHAUSTED. The filtered AQ-GNoME cache holds
-   16,336 3D oxides. You examined 139. "Natural pipeline limit" describes the
-   candidates you had already registered, not the space available to you.
-
-What is required before any further final answer will be accepted:
-
-  a. Ingest the finished results and update the affected dispositions.
-  b. Consult the literature (arXiv_search) on where the Ir-Rh ternary results
-     and the OPTIMAL G(O) RANGE finding point next.
-  c. Expand deliberately, in breadth first: register a large batch of new
-     candidates from AQ-GNoME with criteria informed by (b), and submit their
-     bulk relaxations immediately -- these are cheap and are what fills the
-     queue.
-  d. In parallel, go deeper on the active candidates that earned it: more
-     terminations, more adsorption sites, OH on every competitive O site.
-  e. Keep the queue genuinely full. Submit in large batches; do not wait for a
-     round to complete before submitting the next.
-
-Do not propose a final answer again until the remaining time is substantially
-consumed -- that is, until too little of it is left for newly submitted jobs to
-finish. An empty queue is not a reason to conclude: the pool has 16,000+
-candidates left, so "no work remains" means the study needs widening, not
-ending. Report as usual at the end of each round.
+Also: about 354 calculations finished while the run was down and need dispositioning, and
+there is one hard ceiling on submission -- do not take the queue above ~800 queued jobs,
+because SLURM refuses submissions once you hold 1000 active and they will simply fail.
