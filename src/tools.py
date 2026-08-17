@@ -2916,6 +2916,20 @@ def _matches_category(
 _SEARCHABLE_CATEGORIES = ("tool_name", "args", "value", "description", "context")
 
 
+def _cap_arg(v: Any, cap: int = 200) -> Any:
+    """Clip one args value so a search hit cannot ship a whole report.
+
+    Max args keys on any artifact is 5 (measured over 15,101), so this bounds
+    a whole response at cap * 5 * max_results = 200 * 5 * 20 = 20,000 chars
+    (~5k tokens). On 2026-08-10 twenty write_report hits returned 563,539
+    bytes and overflowed the 200k-token context.
+    """
+    s = str(v)
+    if len(s) <= cap:
+        return v
+    return s[:cap - 3] + "..."
+
+
 def _build_result_dict(
     artifact: Any,
     parent_result_id: Optional[str] = None,
@@ -2937,7 +2951,8 @@ def _build_result_dict(
         "result_id": rid,
         "tool_name": getattr(artifact, "tool_name", ""),
         "value_preview": v_preview,
-        "args": getattr(artifact, "args", {}) or {},
+        "args": {k: _cap_arg(v)
+                 for k, v in (getattr(artifact, "args", {}) or {}).items()},
         "description": getattr(artifact, "description", ""),
         "context": getattr(artifact, "context", ""),
     }
