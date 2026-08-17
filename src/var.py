@@ -153,11 +153,16 @@ HIST_ROTATE_BYTES = 1 * 1024**3  # ~1 GiB
 hist_active_index = None
 hist_active_bytes = None
 
-# When the wait-tool's Gate-2 message lists more than this many forgotten jobs,
-# there is plainly plenty of work to do, so it drops the "return to the
-# supervisor / do a literature review" closer and just tells the worker to get on
-# with it. At or below this count the closer is kept.
-FORGOTTEN_CLOSER_SUPPRESS_ABOVE = 30
+# How many forgotten-work items the wait-tool's Gate-2 (Path A) message lists
+# before collapsing the rest into "... and N more".
+#
+# find_forgotten_jobs returns the list BEST FIRST, so this cap is a BATCH SIZE,
+# not a filter: the worker submits these, re-calls wait_for_update, and the next
+# batch surfaces when capacity frees up. Before the list was sorted the same cap
+# was a filter over registration order, and it hid 9 sites with G(O) deviation
+# 0.055-0.294 eV inside "... and 42 more" for 88 consecutive refusals -- see
+# _KIND_RANK in src/forgotten_jobs.py.
+FORGOTTEN_JOBS_DISPLAY_CAP = 20
 
 # Process ids that were already finalized before the first resume after the
 # disposition-gate rollout. The wait-tool's Gate-1 coverage check treats these

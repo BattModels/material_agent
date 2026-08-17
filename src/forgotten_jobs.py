@@ -10,10 +10,34 @@ message; it is deliberately NOT registered as a standalone @tool.
 
 Each returned item is a dict
 ``{candidate_id, kind in {"bulk","surface","O","OH"}, termination_index,
-site_index}`` (termination/site are None except for OH).
+site_index, go_dev, formula}`` (termination/site/go_dev are None except for OH;
+``formula`` is the candidate's "Reduced Formula", None until it is backfilled).
+
+ORDERING IS PART OF THE CONTRACT. The list comes back BEST FIRST: OH items
+ranked by measured G(O) deviation ascending, then the unranked frontier stages
+depth-first (O, surface, bulk). See ``_KIND_RANK`` for why bulk must come last.
 """
 
 import pandas as pd
+
+# Sort ranks for the returned list. OH items carry a MEASURED number, so they
+# are ordered against each other on evidence and come first. Frontier items have
+# no per-item number and are ranked by pipeline depth instead -- deliberately
+# NOT by an invented pseudo-deviation, which would just relocate a
+# fabricated-threshold failure into the code.
+#
+# bulk MUST rank last, and this is load-bearing: a candidate-registration round
+# adds dozens of bulk items at once, and under the old registration-order
+# listing those would flood the top of the (truncated) Gate 2 message and hide
+# the competitive OH work behind "... and N more" -- the exact failure that
+# deadlocked the 02-08 run for 88 consecutive steps.
+_KIND_RANK = {"OH": 0, "O": 1, "surface": 2, "bulk": 3}
+
+
+def _sort_key(item):
+    dev = item.get("go_dev")
+    return (_KIND_RANK.get(item.get("kind"), 99),
+            float(dev) if dev is not None else 0.0)
 
 
 def _na_to_none_int(v):
@@ -22,6 +46,16 @@ def _na_to_none_int(v):
     if v is None or pd.isna(v):
         return None
     return int(v)
+
+
+def _na_to_none_str(v):
+    """pandas NA/NaN/blank -> None; otherwise a plain str. "Reduced Formula" is
+    <NA> until sync_reduced_formula backfills it, and the renderer must be able
+    to tell "no formula known" from a literal "<NA>" in the agent's message."""
+    if v is None or pd.isna(v):
+        return None
+    s = str(v).strip()
+    return s or None
 
 
 def _forgotten_oh_sites(processes_df, candidate_id, go_dev_oh_threshold):
@@ -52,8 +86,12 @@ def _forgotten_oh_sites(processes_df, candidate_id, go_dev_oh_threshold):
         site = _na_to_none_int(r["site_index"])
         if (term, site) in oh_sites:
             continue
+        # abs() is defensive: the backend already stores |G(O) - 2.46|, and the
+        # threshold check above applies abs() as well, so the rendered message
+        # can never show a negative "deviation".
         out.append({"candidate_id": candidate_id, "kind": "OH",
-                    "termination_index": term, "site_index": site})
+                    "termination_index": term, "site_index": site,
+                    "go_dev": float(abs(float(dev))), "formula": None})
     return out
 
 
@@ -94,20 +132,34 @@ def find_forgotten_jobs(explog, go_dev_oh_threshold):
         if str(row.get("state")) == "failed":
             continue
         cid = row["candidate_id"]
-        # Frontier (mutually exclusive): bulk -> surface -> O.
+        formula = _na_to_none_str(row.get("Reduced Formula"))
+        # Frontier (mutually exclusive): bulk -> surface -> O. go_dev is None
+        # for all three -- they have no completed O site to measure. The key is
+        # still present so every item has the same shape.
         if is0(row.get("n_bulk_started")):
             items.append({"candidate_id": cid, "kind": "bulk",
-                          "termination_index": None, "site_index": None})
+                          "termination_index": None, "site_index": None,
+                          "go_dev": None, "formula": formula})
             continue
         if eq1(row.get("n_bulk_finalized")) and is0(row.get("n_surface_started")):
             items.append({"candidate_id": cid, "kind": "surface",
-                          "termination_index": None, "site_index": None})
+                          "termination_index": None, "site_index": None,
+                          "go_dev": None, "formula": formula})
             continue
         if ge1(row.get("n_surface_finalized")) and is0(row.get("n_O_started")):
             items.append({"candidate_id": cid, "kind": "O",
-                          "termination_index": None, "site_index": None})
+                          "termination_index": None, "site_index": None,
+                          "go_dev": None, "formula": formula})
             continue
-        # Competitive O sites without OH (one item per site).
+        # Competitive O sites without OH (one item per site). _forgotten_oh_sites
+        # works off the processes df alone and cannot see the candidates row, so
+        # the formula is stamped on here rather than widening its signature.
         if oh_enabled:
-            items.extend(_forgotten_oh_sites(pdf, cid, go_dev_oh_threshold))
+            oh = _forgotten_oh_sites(pdf, cid, go_dev_oh_threshold)
+            for it in oh:
+                it["formula"] = formula
+            items.extend(oh)
+    # BEST FIRST -- see _KIND_RANK. list.sort is stable, so candidate
+    # registration order survives as a deterministic tie-break within a rank.
+    items.sort(key=_sort_key)
     return items

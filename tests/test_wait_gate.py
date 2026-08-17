@@ -16,6 +16,8 @@
 # Distinctive ids/values (termination 7, pending=5, floor=15) are fed in, so
 # asserting they surface genuinely checks rendering (not a coincidental "0").
 
+import pytest
+
 from gnome_dreams_oer_screening.explog.explog import EXPLOG
 
 from src import var
@@ -463,6 +465,18 @@ def _kinds(items):
              i["site_index"]) for i in items]
 
 
+def _devs(items):
+    return [i.get("go_dev") for i in items]
+
+
+def _set_formula(cid, formula):
+    """Write the "Reduced Formula" column the way sync_reduced_formula would.
+    It is <NA> on a fresh candidate, which is the case the renderer must also
+    survive -- see test_frontier_items_carry_no_deviation."""
+    df = EXPLOG.relational_frame.candidates.df
+    df.loc[df["candidate_id"] == cid, "Reduced Formula"] = formula
+
+
 def test_forgotten_bulk_when_no_bulk_started(tmp_path):
     _setup(tmp_path)
     _add_candidate("c")
@@ -562,6 +576,94 @@ def test_norow_failed_candidate_is_excluded_from_forgotten(tmp_path):
                for it in find_forgotten_jobs(EXPLOG, THR))
 
 
+# ---------------------------------------------------------------------------
+# Ordering + the per-item G(O) deviation.
+#
+# The 02-08 run deadlocked because this list came back in candidate REGISTRATION
+# order and the Gate 2 message shows only the first N: 9 sites with deviation
+# 0.055-0.294 eV sat inside "... and 42 more" for 88 consecutive refusals while
+# the agent judged the study exhausted from the arbitrary handful it could see.
+# ---------------------------------------------------------------------------
+
+def test_forgotten_oh_item_carries_the_measured_deviation(tmp_path):
+    _setup(tmp_path)
+    _add_candidate("c")
+    _inject("c", "bulk_relaxation", "completed")
+    _inject("c", "surface_relaxation", "completed", termination_index=0)
+    _inject("c", "O_adsorption", "completed", termination_index=0, site_index=2,
+            go_dev=0.12)
+    assert find_forgotten_jobs(EXPLOG, THR)[0]["go_dev"] == pytest.approx(0.12)
+
+
+def test_forgotten_oh_items_are_sorted_best_first(tmp_path):
+    # The direct regression test for the incident: registered worst-first, so a
+    # list that preserved registration order would come back [0.25, 0.05, 0.15].
+    _setup(tmp_path)
+    _add_candidate("c")
+    _inject("c", "bulk_relaxation", "completed")
+    _inject("c", "surface_relaxation", "completed", termination_index=0)
+    for site, dev in ((0, 0.25), (1, 0.05), (2, 0.15)):
+        _inject("c", "O_adsorption", "completed", termination_index=0,
+                site_index=site, go_dev=dev)
+    assert _devs(find_forgotten_jobs(EXPLOG, THR)) == [
+        pytest.approx(0.05), pytest.approx(0.15), pytest.approx(0.25)]
+
+
+def test_frontier_items_sort_after_oh_and_depth_first(tmp_path):
+    # Registered shallowest-first, so registration order would invert this.
+    _setup(tmp_path)
+    for cid in ("c_bulk", "c_surf", "c_o", "c_oh"):
+        _add_candidate(cid)
+    _inject("c_surf", "bulk_relaxation", "completed")
+    _inject("c_o", "bulk_relaxation", "completed")
+    _inject("c_o", "surface_relaxation", "completed", termination_index=0)
+    _inject("c_oh", "bulk_relaxation", "completed")
+    _inject("c_oh", "surface_relaxation", "completed", termination_index=0)
+    _inject("c_oh", "O_adsorption", "completed", termination_index=0, site_index=0,
+            go_dev=0.1)
+    assert [i["kind"] for i in find_forgotten_jobs(EXPLOG, THR)] == \
+        ["OH", "O", "surface", "bulk"]
+
+
+def test_new_bulk_candidates_never_displace_competitive_oh_work(tmp_path):
+    # Load-bearing: an expansion round registers dozens of candidates at once.
+    # Under registration order those bulk items flood the top of the truncated
+    # Gate 2 listing and re-hide the competitive OH work within one round.
+    _setup(tmp_path)
+    _add_candidate("keeper")
+    _inject("keeper", "bulk_relaxation", "completed")
+    _inject("keeper", "surface_relaxation", "completed", termination_index=0)
+    _inject("keeper", "O_adsorption", "completed", termination_index=0,
+            site_index=0, go_dev=0.05)
+    for n in range(50):
+        _add_candidate(f"new{n:02d}")
+    items = find_forgotten_jobs(EXPLOG, THR)
+    assert items[0]["candidate_id"] == "keeper" and items[0]["kind"] == "OH"
+    assert all(i["kind"] == "bulk" for i in items[1:])
+
+
+def test_frontier_items_carry_no_deviation(tmp_path):
+    # Uniform dict shape: a consumer doing item["go_dev"] must not KeyError on
+    # frontier items only. Formula is <NA> until sync_reduced_formula runs.
+    _setup(tmp_path)
+    _add_candidate("c")
+    item = find_forgotten_jobs(EXPLOG, THR)[0]
+    assert item["kind"] == "bulk"
+    assert "go_dev" in item and item["go_dev"] is None
+    assert "formula" in item and item["formula"] is None
+
+
+def test_forgotten_item_carries_the_reduced_formula(tmp_path):
+    _setup(tmp_path)
+    _add_candidate("c")
+    _set_formula("c", "CoBi3IrRh3O14")
+    _inject("c", "bulk_relaxation", "completed")
+    _inject("c", "surface_relaxation", "completed", termination_index=0)
+    _inject("c", "O_adsorption", "completed", termination_index=0, site_index=2,
+            go_dev=0.055)
+    assert find_forgotten_jobs(EXPLOG, THR)[0]["formula"] == "CoBi3IrRh3O14"
+
+
 # ===========================================================================
 # Gate 2 message with the forgotten-jobs hint (pure formatter)
 # ===========================================================================
@@ -587,21 +689,69 @@ def test_gate2_path_a_orders_self_service_submit():
     assert f"~{var.QUEUE_REFILL_TARGET}" in msg          # refill well beyond the floor
 
 
-def test_gate2_caps_at_ten_and_reports_remainder():
-    jobs = [_fitem(f"mat{i}", "bulk") for i in range(12)]
+def test_gate2_path_a_orders_the_whole_list_not_a_selection():
+    # The 02-08 deadlock: the message hedged three times ("the most valuable",
+    # "guided by your dispositions' priorities", "where the work justifies it"),
+    # and the agent read that as licence to sub-select, then to decline entirely.
+    jobs = [_fitem("matA", "bulk"), _fitem("matB", "O")]
+    msg = format_wait_gate2_refusal(jobs, running_count=7, pending_count=4)
+    assert "every job listed" in msg.lower()
+    assert "not a selection" in msg.lower()
+    for hedge in ("most valuable", "guided by your dispositions",
+                  "where the work justifies it"):
+        assert hedge not in msg.lower()
+
+
+def test_gate2_path_a_states_the_threshold_provenance():
+    # Forecloses the fabricated "dev < 0.30 eV" cut-off: name the real threshold
+    # and the requirement (13, not 14) that it implements.
+    jobs = [_fitem("matA", "OH", t=11, s=3)]
+    msg = format_wait_gate2_refusal(jobs, running_count=7, pending_count=4)
+    assert str(var.GO_DEV_OH_THRESHOLD) in msg
+    assert "measured" in msg.lower()
+    assert "requirement 13" in msg.lower()
+    assert "do not apply a stricter" in msg.lower()
+
+
+def test_gate2_line_shows_the_deviation_and_formula():
+    jobs = [{"candidate_id": "b85a209e2b", "kind": "OH", "termination_index": 11,
+             "site_index": 3, "go_dev": 0.055, "formula": "CoBi3IrRh3O14"}]
     msg = format_wait_gate2_refusal(jobs, running_count=0, pending_count=0)
-    assert "mat0" in msg and "mat9" in msg               # first 10 shown
-    assert "mat10" not in msg and "mat11" not in msg     # capped out
+    assert "0.055" in msg                      # the measured number is visible
+    assert "surface 11" in msg and "site 3" in msg
+    assert "CoBi3IrRh3O14" in msg
+
+
+def test_gate2_line_tolerates_items_without_deviation_or_formula():
+    # _fitem and several older callers hand-build 4-key dicts; the renderer must
+    # fall back rather than KeyError or print "None eV".
+    msg = format_wait_gate2_refusal([_fitem("matA", "OH", t=0, s=2)],
+                                    running_count=0, pending_count=0)
+    assert "matA" in msg and "competitive O site" in msg
+    assert "None" not in msg
+
+
+def test_gate2_caps_the_listing_and_reports_the_remainder():
+    # Read the cap from var rather than pinning whatever it happened to be when
+    # this was written (it was 10; the sort made it a batch size, not a filter).
+    cap = var.FORGOTTEN_JOBS_DISPLAY_CAP
+    jobs = [_fitem(f"mat{i:03d}", "bulk") for i in range(cap + 2)]
+    msg = format_wait_gate2_refusal(jobs, running_count=0, pending_count=0)
+    assert "mat000" in msg                                # first shown
+    assert f"mat{cap - 1:03d}" in msg                     # last shown
+    assert f"mat{cap:03d}" not in msg                     # capped out
+    assert f"mat{cap + 1:03d}" not in msg
     assert "2 more" in msg
 
 
 def test_gate2_path_a_refusal_is_unconditional():
     # Path A always fires while the floor is armed, regardless of how many jobs
     # are waiting (the old FORGOTTEN_CLOSER_SUPPRESS_ABOVE conditional is gone).
-    jobs = [_fitem(f"mat{i}", "bulk") for i in range(35)]
+    jobs = [_fitem(f"mat{i}", "bulk")
+            for i in range(var.FORGOTTEN_JOBS_DISPLAY_CAP + 25)]
     msg = format_wait_gate2_refusal(jobs, running_count=0, pending_count=0)
     assert "call wait_for_update again" in msg.lower()   # self-service instruction
-    assert "25 more" in msg                              # 35 - 10 shown
+    assert "25 more" in msg                              # everything past the cap
 
 
 def test_gate2_path_b_names_expansion_discussion_points():

@@ -266,9 +266,21 @@ def _forgotten_job_line(item: Dict[str, Any]) -> str:
         return (f"{cid}: surface finished but no O adsorption started -- "
                 "start O adsorption jobs.")
     if kind == "OH":
-        return (f"{cid}: competitive O site (termination "
-                f"{item.get('termination_index')}, site {item.get('site_index')}) "
-                "has no OH adsorption -- start OH there.")
+        # Lead with the MEASURED deviation: the list is sorted on it, so putting
+        # it first makes the ranking legible as an ascending column instead of
+        # something the agent has to re-derive with a query per item. Both
+        # go_dev and formula are read defensively -- callers elsewhere (and the
+        # older tests) hand-build items without them.
+        dev = item.get("go_dev")
+        formula = item.get("formula")
+        who = f"{cid} ({formula})" if formula else str(cid)
+        where = (f"surface {item.get('termination_index')}, "
+                 f"site {item.get('site_index')}")
+        if dev is None:
+            return (f"{who}: competitive O site ({where}) has no OH adsorption "
+                    "-- start OH there.")
+        return (f"{who}: G(O) deviation {float(dev):.3f} eV -- {where}. "
+                "Competitive O site with no OH adsorption; start OH there.")
     return f"{cid}: ready unstarted work ({kind})."
 
 
@@ -296,23 +308,41 @@ def format_wait_gate2_refusal(
 
     # Path A: ready continuation work -> the worker submits it NOW, then re-waits.
     if jobs:
-        shown = jobs[:10]
+        shown = jobs[:var.FORGOTTEN_JOBS_DISPLAY_CAP]
         listing = "\n".join("  - " + _forgotten_job_line(j) for j in shown)
         extra = len(jobs) - len(shown)
-        more = f"\n  ... and {extra} more." if extra > 0 else ""
+        more = (f"\n  ... and {extra} more, every one of them ranked BELOW the "
+                "items above -- nothing better is hidden. They are listed the "
+                "next time this gate fires." if extra > 0 else "")
         return (
             f"HPC queue below floor: {running_count} running but only "
             f"{pending_count} queued (hard floor: {var.QUEUE_MIN_PENDING} queued "
             "-- queued jobs feed nodes the instant they free up, and a near-empty "
             "queue under fair-share means the cluster is absorbing all we give "
             "it: free capacity). While under-utilized, submissions are "
-            "effectively free: submit the most valuable ready continuation jobs "
-            "below NOW under your current task (standing duty), guided by your "
-            f"dispositions' priorities. Clear the floor at minimum ({deficit} "
-            "more queued), and prefer refilling toward "
-            f"~{var.QUEUE_REFILL_TARGET} queued where the work justifies it; "
+            "effectively free: submit EVERY job listed below NOW under your "
+            "current task (standing duty) -- all of them, not a selection you "
+            f"narrow further. The floor needs {deficit} more queued and the "
+            f"refill target is ~{var.QUEUE_REFILL_TARGET}; "
             "then call wait_for_update again.\n\n"
-            "Ready-but-unstarted continuation work:\n" + listing + more + "\n\n"
+            "Ready-but-unstarted continuation work, BEST FIRST (OH sites ranked "
+            "by measured G(O) deviation, closest to ideal first; then unstarted "
+            "pipeline stages -- O, then surface, then bulk):\n"
+            + listing + more + "\n\n"
+            # The anti-fabrication clause. In the 02-08 run the agent invented a
+            # "dev < 0.30 eV" cut-off, attributed it to requirement 14 (which
+            # states no number and names holding back justified work as a failure
+            # mode), and refused this list 88 times running while the queue
+            # drained. Name the real threshold and the requirement it implements.
+            "Every G(O) deviation above is a MEASURED value read from the "
+            "experiment log, not an estimate. The competitiveness cut-off has "
+            "ALREADY been applied for you: a site appears here only because its "
+            f"deviation from the ideal 2.46 eV is below {var.GO_DEV_OH_THRESHOLD} "
+            "eV. That threshold is exactly what your Requirement 13 (avoid OH "
+            "where G(O) is far from ideal) implements, so every site listed has "
+            "already passed it. Do not apply a stricter cut-off of your own, do "
+            "not infer one from your prompt, and do not sub-select from this "
+            "list -- the selection is done.\n\n"
             "If submitting all of the above would still leave the queue well "
             f"short of ~{var.QUEUE_REFILL_TARGET}, say so in your end-of-turn "
             "report. Do NOT register new candidates yourself -- that is the "
