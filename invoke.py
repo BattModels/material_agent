@@ -619,6 +619,24 @@ You have a maximum of 1 hours to complete the entire study and make your final r
     # Optional replacement objective read alongside it; None -> leave the run's
     # existing state["inputs"] untouched.
     continue_objective = None
+    # `continue --force`: opt in to injecting a directive into a run that was
+    # killed MID-ROUND (head checkpoint still has a pending task). Off by
+    # default -- see the guard further down for what it discards. Accepted
+    # anywhere in argv and stripped here, so the positional parsing below
+    # (argv[1] == "continue", argv[2] == directive path) is unaffected.
+    continue_force = "--force" in sys.argv[1:]
+    if continue_force:
+        sys.argv = [a for a in sys.argv if a != "--force"]
+        # `--force` ONLY means anything to `continue`. Bare `invoke.py --force`
+        # would otherwise fall through to a plain resume and quietly deliver no
+        # directive at all -- the failure being hardest to notice, since the run
+        # starts up looking perfectly healthy.
+        if len(sys.argv) < 2 or sys.argv[1] != "continue":
+            raise SystemExit(
+                "`--force` is only meaningful with `continue`. Use "
+                "`python invoke.py continue --force` to inject a directive into "
+                "an interrupted run, or drop `--force` for a plain resume."
+            )
     if len(sys.argv) > 1 and sys.argv[1] == "ow":
         print()
         print("####################")
@@ -991,12 +1009,39 @@ You have a maximum of 1 hours to complete the entire study and make your final r
             if overwrite:
                 raise SystemExit("`continue` cannot be combined with a fresh run.")
             _before = graph.get_state(llm_config)
-            if tuple(_before.next):
+            _pending = tuple(_before.next)
+            if _pending and not continue_force:
                 raise SystemExit(
-                    f"This run is not finished -- next={tuple(_before.next)}. "
+                    f"This run is not finished -- next={_pending}. "
                     "`continue` is only for a run that ENDED (next=()); to carry "
-                    "on an interrupted run just use `python invoke.py`."
+                    "on an interrupted run just use `python invoke.py`.\n"
+                    "If you specifically need to inject a directive into an "
+                    "INTERRUPTED run -- the only way to also replace the "
+                    "objective, since a plain resume reads neither continue file "
+                    "-- re-run with `continue --force`. That DISCARDS the "
+                    "interrupted round and restarts it from the supervisor."
                 )
+            if _pending and continue_force:
+                # update_state APPENDS a checkpoint (see the note above), so the
+                # interrupted round is superseded rather than rewound: its
+                # pending task stays in the old, no-longer-head checkpoint and
+                # never runs. The inner agent's partial conversation for that
+                # round is lost -- which is the POINT when the reason for
+                # intervening is what that round was deciding.
+                print()
+                print("!" * 78)
+                print(f"!! continue --force: run was interrupted mid-round, "
+                      f"next={_pending}.")
+                print("!! That round is DISCARDED and restarted from the "
+                      "supervisor with the directive below.")
+                print("!" * 78)
+                print()
+                # The mid-round overlay above (see the tool-level resume block)
+                # already read curr_round_result_ids out of the namespaced
+                # checkpoint of the round we are about to discard. Applying them
+                # to the FIRST worker round of the continued run would credit it
+                # with tool calls from a conversation that no longer exists.
+                var.resume_curr_round_result_ids = None
             # `inputs` is a plain LastValue channel (no reducer), so writing it
             # here REPLACES the objective outright for every subsequent round --
             # which is the point: unlike boss_feedback it is not consumed.

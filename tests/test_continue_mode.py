@@ -227,7 +227,10 @@ def test_omitting_the_objective_leaves_it_untouched():
 
 
 def test_continue_is_refused_on_an_unfinished_run():
-    """invoke.py guards on next != (); this pins the condition it checks."""
+    """invoke.py guards on next != (); this pins the condition it checks.
+
+    Without `--force` that guard is a hard SystemExit -- a plain resume is the
+    supported way to carry on an interrupted run."""
     graph, cfg = _build(boss_decision="revise")
     # boss keeps rejecting -> recursion limit, so just take one super-step
     it = graph.stream({"inputs": "obj", "draft_response": "", "boss_feedback": "",
@@ -237,4 +240,45 @@ def test_continue_is_refused_on_an_unfinished_run():
     assert graph.get_state(cfg).next != (), (
         "an in-flight run must report a pending task, which is what invoke.py "
         "refuses `continue` on"
+    )
+
+
+def test_forced_continue_supersedes_an_interrupted_rounds_pending_task():
+    """`continue --force` on a run killed MID-ROUND.
+
+    This is the assumption Change 3 rests on: update_state APPENDS a checkpoint
+    rather than rewinding, so writing next="Supervisor" as the boss leaves the
+    interrupted round's pending task behind in a no-longer-head checkpoint --
+    superseded, never executed twice -- while the directive and the replacement
+    objective both land. Without this property, forcing the guard would corrupt
+    the run instead of restarting the round.
+    """
+    graph, cfg = _build(boss_decision="revise")
+    it = graph.stream({"inputs": "obj", "draft_response": "", "boss_feedback": "",
+                       "response": "", "next": ""}, cfg, durability="sync")
+    next(it)
+    it.close()
+    interrupted = graph.get_state(cfg)
+    assert interrupted.next != ()          # mid-round: a task is pending
+
+    graph.update_state(
+        cfg,
+        {"next": "Supervisor", "boss_feedback": "operator directive",
+         "inputs": "replacement objective"},
+        as_node="Boss_Agent",
+    )
+
+    after = graph.get_state(cfg)
+    assert tuple(after.next) == ("Supervisor",), (
+        "the forced write must leave exactly one pending Supervisor task -- the "
+        "restarted round -- not the interrupted one plus a new one"
+    )
+    assert after.values["boss_feedback"] == "operator directive"
+    assert after.values["inputs"] == "replacement objective", (
+        "replacing the objective is the whole reason --force exists: a plain "
+        "resume reads neither continue file"
+    )
+    assert after.config["configurable"]["checkpoint_id"] != \
+        interrupted.config["configurable"]["checkpoint_id"], (
+        "update_state must APPEND a new checkpoint, not rewrite the head"
     )
