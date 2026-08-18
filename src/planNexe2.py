@@ -9,7 +9,7 @@ try:
 except ImportError:  # python < 3.11
     from typing_extensions import NotRequired
 
-from typing import Annotated, Sequence, TypedDict,Literal, List, Dict, Tuple, Union, Any
+from typing import Annotated, Sequence, TypedDict,Literal, List, Dict, Tuple, Union, Any, get_args
 import functools
 import pandas as pd
 import os
@@ -110,8 +110,35 @@ class myStep(BaseModel):
                             "write_report",
                             "search_artifacts",
                             ""
-                ]] = Field(f"must-use tools for this step, should be a subset of the tools available to the agent. read the CANVAS with key Worker_available_tools to see more details about each tools.")
+                ]] = Field(default_factory=list, description="must-use tools for this step, should be a subset of the tools available to the agent. read the CANVAS with key Worker_available_tools to see more details about each tools.")
     enforce_queue_floor: bool = Field(True, description=f"Whether the worker must keep the HPC queue stocked (at least {var.QUEUE_MIN_PENDING} QUEUED jobs) before it may wait for current jobs to finish. Keep True to ensure maximum HPC utilization: the worker submits ready continuation work itself, and only returns to the supervisor to discuss expanding the study when no ready work remains. Set False only when genuinely winding the study down -- when the remaining time is too short for newly-submitted jobs to finish -- so the worker may instead wait for and finalize the in-flight results. False is honored only within the final {var.FLOOR_DISARM_WINDOW_DAYS} days of the {var.STUDY_BUDGET_DAYS}-day study budget; set earlier, it is ignored (coerced back to True) and the worker is told so.")
+
+# The tool names a plan step may pin, read off myStep's OWN annotation so the
+# supervisor's validation and the schema can never drift apart.
+#
+# The assert is not defensive noise. If the annotation shape ever changes -- say
+# to Optional[List[Literal[...]]] -- get_args nests differently and this silently
+# becomes [], at which point every tool looks wrong, every plan is rejected, and
+# three retries end the run. Failing loudly at import beats that.
+_REQUIRED_TOOL_NAMES = list(get_args(get_args(
+    myStep.model_fields["required_tools"].annotation)[0]))
+if len(_REQUIRED_TOOL_NAMES) < 2 or not all(
+    isinstance(name, str) for name in _REQUIRED_TOOL_NAMES
+):
+    # Keyed on the SHAPE, not on any particular tool: individual tools get
+    # commented out of the Literal from time to time (math_expression_tool and
+    # extract_numeric_from_tool_output already are), and that is fine -- the
+    # derivation stays correct. What must never pass unnoticed is the annotation
+    # changing form, which makes get_args nest differently and yields [].
+    #
+    # A raise, not an assert: asserts are stripped under python -O, and this
+    # guard vanishing silently is the failure it exists to prevent.
+    raise RuntimeError(
+        "myStep.required_tools annotation shape changed: _REQUIRED_TOOL_NAMES is "
+        f"{_REQUIRED_TOOL_NAMES!r}, no longer the tool list, so the supervisor's "
+        "wrongTools check would reject every plan."
+    )
+
 
 class myPastStep(BaseModel):
     """Step in the plan."""
@@ -866,28 +893,15 @@ def supervisor_chain_node(state, config, agent=None, name=None):
         sup_good = True
         if isinstance(agent_response.action, Plan):
             for step in agent_response.action.steps:
-                ToolList = [
-                    "inspect_my_canvas",
-                    "write_my_canvas",
-                    "read_my_canvas",
-                    "OER_data_analasis_v2",
-                    "browse_df",
-                    "arXiv_search",
-                    "enter_candidate_in_log",
-                    "submit_dft_job",
-                    "get_terminations_ranking",
-                    "list_adsorption_sites",
-                    "read_explog",
-                    "wait_for_update",
-                    "query_explog",
-                    "get_disposition_info",
-                    "update_disposition_info",
-                    # "math_expression_tool",
-                    # "extract_numeric_from_tool_output",
-                    "write_report",
-                    "search_artifacts",
-                    ""
-                ]
+                # Derived from the field's OWN Literal, never hand-copied. The two
+                # lists were identical, but nothing kept them that way -- and now
+                # that a rejection here is no longer silently discarded, a drift
+                # would refuse a tool the schema accepts and exit(0) after three
+                # retries. See test_tool_list_did_not_collapse_to_empty for the
+                # other half: if the annotation shape ever changes, this must not
+                # quietly become an empty list, which would reject every tool
+                # instead of none.
+                ToolList = _REQUIRED_TOOL_NAMES
                 wrongTools = set(step.required_tools) - set(ToolList)
                 print(f"wrongTools: {wrongTools}")
                 if len(wrongTools) > 0:
@@ -907,9 +921,16 @@ def supervisor_chain_node(state, config, agent=None, name=None):
         elif isinstance(agent_response.action, Plan) and len(agent_response.action.steps) == 0:
             sup_good = False
             supervisorMessage = old_supervisorMessage + f"\n\nWARNING: you chose to rewrite the plan, but the new plan is empty. Please provide a non-empty plan with at least one step, or if you think the overall goal is finished, you can choose 'Response' and write a draft final answer for the boss review."
-        else:
-            sup_good = True
-            
+        # Deliberately no `else: sup_good = True`. sup_good is set True at the top
+        # of this iteration and from here on is only ever CLEARED. The else used to
+        # re-approve a plan that the required_tools check above had just rejected --
+        # composing the warning and then throwing it away. It fired non-empty exactly
+        # once in nine sessions, and that once was a phantom: required_tools defaulted
+        # to its own description string (Field's first positional arg is `default`,
+        # not `description`), so set() iterated the prose CHARACTER BY CHARACTER. With
+        # that default fixed, Pydantic's Literal rejects unknown tool names before this
+        # check is ever reached, so a non-empty wrongTools now means something real.
+
     if not sup_good:
         print("Supervisor failed")
         exit(0)
@@ -1219,7 +1240,9 @@ Now, you are tasked with: {task}. Focus on this task. Your standing duties are a
         else:
             print(f"worker {name} finished the task successfully, now checking tool use...")
             # check if the worker used all required tools
-            if task.required_tools == "":
+            # Catches [] as well as "": required_tools now defaults to an empty
+            # list, and "" is still a legal single entry in the Literal.
+            if not task.required_tools:
                 tool_use_passed = True
                 tool_use_msg = "No required tools for this step."
             else:

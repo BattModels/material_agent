@@ -124,3 +124,106 @@ def test_docstrings_distinguish_the_two_variants(schema):
     _, Advance, Repeat = schema
     assert "REMOVED" in Advance.__doc__
     assert "AGAIN" in Repeat.__doc__ and "NOT modified" in Repeat.__doc__
+
+
+# --- myStep.required_tools --------------------------------------------------
+#
+# Field()'s first positional parameter is `default`, not `description`. This
+# field was declared Field(f"must-use tools for this step, ...") -- so the prose
+# became the DEFAULT VALUE and the field carried no description at all. Two
+# consequences, both live for the whole study until 2026-08-18:
+#
+#   * the model was never told what required_tools means, only the Literal enum;
+#   * omitting the field yielded a str, and `set(str)` in the supervisor's
+#     wrongTools check iterated it CHARACTER BY CHARACTER --
+#     wrongTools: {'-', 'W', 'u', 'C', ' ', 'l', 'd', ...}
+#
+# That phantom rejection was then silently discarded by an `else: sup_good = True`
+# which has now been removed, so these tests are what keep the un-defanged check
+# from refusing real plans.
+
+
+@pytest.fixture(scope="module")
+def step_model():
+    pytest.importorskip("gnome_dreams_oer_screening")
+    from src.planNexe2 import myStep
+    return myStep
+
+
+def test_required_tools_has_a_description(step_model):
+    """It had none: the text was consumed as the default instead."""
+    desc = step_model.model_fields["required_tools"].description
+    assert desc, "required_tools must describe itself to the model"
+    assert "subset of the tools available" in desc
+
+
+def test_required_tools_defaults_to_an_empty_list(step_model):
+    """Not to its own description string."""
+    default = step_model(step="s", agent="OER_Agent").required_tools
+    assert default == []
+    assert isinstance(default, list)
+
+
+def test_the_default_cannot_produce_a_phantom_wrongtools(step_model):
+    """The exact expression from supervisor_node. With a str default this
+    returned 33 single characters and refused a perfectly good plan."""
+    step = step_model(step="s", agent="OER_Agent")
+    assert set(step.required_tools) - {"wait_for_update", ""} == set()
+
+
+def test_an_unknown_tool_name_is_rejected_by_the_literal(step_model):
+    """Pydantic is the primary guard; wrongTools is only a backstop for values
+    that bypassed validation. This is what makes removing the else-reset safe."""
+    with pytest.raises(Exception):
+        step_model(step="s", agent="OER_Agent", required_tools=["not_a_real_tool"])
+
+
+def test_valid_tool_names_are_accepted(step_model):
+    step = step_model(step="s", agent="OER_Agent",
+                      required_tools=["wait_for_update", "query_explog"])
+    assert step.required_tools == ["wait_for_update", "query_explog"]
+
+
+def test_empty_required_tools_reads_as_no_required_tools(step_model):
+    """supervisor_node's worker path tests `not task.required_tools`, which must
+    catch the new [] default as well as the legacy ""."""
+    assert not step_model(step="s", agent="OER_Agent").required_tools
+
+
+def test_every_validated_tool_name_survives_the_wrongtools_check(step_model):
+    """The invariant that matters: anything the schema ACCEPTS must also pass the
+    supervisor's check. supervisor_node used to validate against a hand-copied
+    list; the two were identical, but nothing enforced it -- and now that a
+    rejection is no longer discarded, a drift would refuse a tool the schema
+    accepts and exit(0) after three retries.
+
+    Asserted behaviourally rather than by recomputing the production expression,
+    which could only ever agree with itself."""
+    from src.planNexe2 import _REQUIRED_TOOL_NAMES
+
+    for tool in _REQUIRED_TOOL_NAMES:
+        step = step_model(step="s", agent="OER_Agent", required_tools=[tool])
+        assert set(step.required_tools) - set(_REQUIRED_TOOL_NAMES) == set(), (
+            f"{tool!r} validates but the supervisor would reject it"
+        )
+
+
+def test_tool_list_did_not_collapse_to_empty(step_model):
+    """The dangerous failure mode: if the annotation shape changes, get_args
+    nests differently and the list silently becomes [] -- which rejects EVERY
+    tool rather than none. planNexe2 asserts this at import; pin it here too."""
+    from src.planNexe2 import _REQUIRED_TOOL_NAMES
+
+    assert len(_REQUIRED_TOOL_NAMES) > 10
+    for tool in ("submit_dft_job", "wait_for_update", "query_explog", "write_report"):
+        assert tool in _REQUIRED_TOOL_NAMES
+
+
+def test_a_realistic_plan_step_passes_the_wrongtools_check(step_model):
+    """End-to-end on the armed check: the expression from supervisor_node must
+    return empty for a step the schema accepted."""
+    from src.planNexe2 import _REQUIRED_TOOL_NAMES
+
+    step = step_model(step="s", agent="OER_Agent",
+                      required_tools=["wait_for_update", "submit_dft_job"])
+    assert set(step.required_tools) - set(_REQUIRED_TOOL_NAMES) == set()
