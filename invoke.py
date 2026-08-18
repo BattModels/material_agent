@@ -1133,7 +1133,14 @@ You have a maximum of 1 hours to complete the entire study and make your final r
 
             # Each yielded update == one completed super-step (one big round)
             # of the parent graph, i.e. a safe boundary to prune at.
-            prune_old_rounds(checkpointer, db_path, THREAD_ID, max_bytes=30 * 1024**3, keep_rounds=3)
+            # 30 GiB / keep 3 until 2026-08-18. The 30 GiB trigger was never
+            # reached -- the db has sat at ~20 GiB and [prune] never once appeared
+            # in nine sessions' logs -- so the file only ever grew. 10 GiB fires on
+            # the first round; keep_rounds=200 leaves ~1.8 GiB of blob data
+            # (measured), i.e. 5x under the trigger, so it cannot re-fire in a loop.
+            # keep_rounds is cheap now: the 128 MB round checkpoints all predate the
+            # resume-only rework and everything since averages 257 KB.
+            prune_old_rounds(checkpointer, db_path, THREAD_ID, max_bytes=10 * 1024**3, keep_rounds=200)
         log_file.write(f"=== Session ended at {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n\n")
         write_history(f"=== Session ended at {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n\n")
     print("End, check the log file for details")
