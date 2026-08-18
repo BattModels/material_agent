@@ -60,6 +60,11 @@ from src.past_steps import (
     steps_completed,
     truncate_step_text,
 )
+from src.supervisor_actions import (
+    LEGACY_KINDS,
+    action_warning,
+    route_action,
+)
 from src import var
 from src.myCANVAS import CANVAS
 from src.live_visualizer import LiveVisualizer
@@ -134,20 +139,32 @@ class Response(BaseModel):
     kind: Literal["response"] = "response"
     response: str
 
-# the class supervisor will choose if the plan doesn't need to be changed
-class NoChange(BaseModel):
-    """The first step of the current plan will be removed, and the second step to be executed next without any change."""
-    kind: Literal["no_change"] = "no_change"
-    comment: str = Field(description="any comment from the supervisor if needed, otherwise just put 'No change to the plan, continue to execute the second step of the original plan.'")
+# The two ways to keep going with the CURRENT plan, named for what they do to the
+# plan pointer. `Advance` was called `NoChange` until 2026-08-18: that name
+# described the wrong half (the action DOES change the plan -- it removes the
+# completed step) and was read as "nothing to do here". See
+# src/supervisor_actions.py for the outage that came of it.
+class Advance(BaseModel):
+    """Finish the first step of the current plan and execute the SECOND step next, unchanged. The first step is REMOVED, so the plan must hold at least two steps."""
+    kind: Literal["advance"] = "advance"
+    comment: str = Field(description="any comment from the supervisor if needed, otherwise just put 'First step finished, continue to execute the second step of the original plan.'")
+
+
+class Repeat(BaseModel):
+    """Execute the CURRENT first step of the plan AGAIN. The plan is NOT modified and no step is removed. Use this when the current step is a standing duty that should keep cycling."""
+    kind: Literal["repeat"] = "repeat"
+    comment: str = Field(description="why the current step should be executed again rather than advanced past.")
 
 
 class Act(BaseModel):
     """Action to perform."""
 
-    action: Union[Plan, NoChange, Response] = Field(
-        description="""Action to perform. If the team need to further use tools to get the answer, and if you need to add more steps or adjust the steps, use Plan.
-        If the team can continue to execute the original plan without any change, use NoChange.
-        Use Response when you believe the task is complete and want to submit a proposed final answer for boss review.""",
+    action: Union[Plan, Advance, Repeat, Response] = Field(
+        description="""Action to perform. Each one is described by what it does to the plan -- choose on that basis, not on whether the plan "needs changing".
+        Plan: replace the plan with the steps you write; the first of them is executed next. Use it when steps must be added or adjusted.
+        Advance: the first step of the current plan is FINISHED -- remove it and execute the second step unchanged. Requires at least two steps in the plan.
+        Repeat: execute the CURRENT first step AGAIN; the plan is not modified and nothing is removed. Use this when the current step is a standing duty that should keep cycling.
+        Response: you believe the overall goal is complete -- submit a proposed final answer for boss review.""",
         discriminator="kind"
     )
     
@@ -165,16 +182,28 @@ class Act(BaseModel):
             except json.JSONDecodeError:
                 return data  # let pydantic raise the real error
 
-        # Case 2: model wrapped variant as {"NoChange": {...}}
+        # Case 2: model wrapped variant as {"Repeat": {...}}
+        wrapped = {
+            "Plan": "plan",
+            "Advance": "advance",
+            "Repeat": "repeat",
+            "Response": "response",
+            "NoChange": "advance",   # pre-2026-08-18 name for Advance
+        }
         if isinstance(action, dict) and len(action) == 1:
             key = next(iter(action))
-            if key in {"Plan", "NoChange", "Response"}:
+            if key in wrapped:
                 inner = dict(action[key])
-                inner.setdefault(
-                    "kind",
-                    {"Plan": "plan", "NoChange": "no_change", "Response": "response"}[key],
-                )
+                inner.setdefault("kind", wrapped[key])
                 action = inner
+
+        # Case 3: legacy `kind`. MUST come after case 2, which leaves an inner
+        # kind untouched when the model supplied one. The supervisor's inner agent
+        # appends retries to the previous attempt's conversation in a shared
+        # checkpoint namespace (see the sup_good loop), so the first resume after
+        # the rename can still surface kind="no_change".
+        if isinstance(action, dict) and action.get("kind") in LEGACY_KINDS:
+            action = {**action, "kind": LEGACY_KINDS[action["kind"]]}
 
         return {**data, "action": action}
     
@@ -465,8 +494,8 @@ def on_act_parse_error(exc: Exception) -> str:
     
     return (
         "Your previous tool call did not match the Act schema. "
-        "Return exactly one of {Plan, NoChange, Response} as `action`, "
-        "with the inner fields directly — do NOT wrap in {'NoChange': {...}}."
+        "Return exactly one of {Plan, Advance, Repeat, Response} as `action`, "
+        "with the inner fields directly — do NOT wrap in {'Repeat': {...}}."
     )
 
 teamCapability = """
@@ -719,7 +748,8 @@ def supervisor_chain_node(state, config, agent=None, name=None):
         Current time: {timeElapsed}.
 
         Please inspect and extract related information from CANVAS and EXPLOG, then update the plan accordingly. 
-        Only choose <NoChange> if you want the first step of the current plan to be removed, and the second step to be executed next without any change.
+        Choose <Advance> if the first step of the current plan is finished and the second step should be executed next without any change -- this REMOVES the first step, so it needs at least two steps in the plan.
+        Choose <Repeat> if the worker should execute the CURRENT first step again -- the plan is not modified and nothing is removed. This is the right choice for a standing-duty step that should keep cycling.
         Otherwise choose <Plan> and rewrite the plan with the steps you want, and the first step of the plan you just wrote will be executed.
         Or if you think the overall goal is finished, you can choose <Response> and write a draft final answer for the boss review.
         """
@@ -865,9 +895,15 @@ def supervisor_chain_node(state, config, agent=None, name=None):
                     sup_good = False
                     break
         
-        if isinstance(agent_response.action, NoChange) and len(state["plan"]) <= 1:
+        # Plan-length rules for Advance/Repeat live in src/supervisor_actions.py so
+        # they can be tested without importing this module (and with it the GNoME
+        # database). The warning names Repeat as the alternative: before it existed,
+        # this refusal offered only Plan or Response -- neither of which was what
+        # the supervisor wanted -- and three of them in a row ended the run.
+        _warning = action_warning(agent_response.action.kind, len(state["plan"]))
+        if _warning is not None:
             sup_good = False
-            supervisorMessage = old_supervisorMessage + f"\n\nWARNING: there is less than 2 steps left in the current plan, and there's no 'second' step to execute. You cannot choose 'NoChange' as the action. Please first carefully review what has been done, then either 'Response' with a message, or 'Plan' more steps! If you choose 'Plan', the first step of the new plan you just wrote will be executed next."
+            supervisorMessage = old_supervisorMessage + _warning
         elif isinstance(agent_response.action, Plan) and len(agent_response.action.steps) == 0:
             sup_good = False
             supervisorMessage = old_supervisorMessage + f"\n\nWARNING: you chose to rewrite the plan, but the new plan is empty. Please provide a non-empty plan with at least one step, or if you think the overall goal is finished, you can choose 'Response' and write a draft final answer for the boss review."
@@ -897,16 +933,24 @@ def supervisor_chain_node(state, config, agent=None, name=None):
             }
     # elif isinstance(output.action, Response):
     #     return {"response": "Plan is not finished! Do not use response!", "next": "Supervisor"}
-    elif isinstance(agent_response.action, NoChange):
-        plan_str = "\n".join(f"{i+1}. {step.step}, agent={step.agent}, required_tools: {step.required_tools}" for i, step in enumerate(plan[1:]))
-        print("No change to the plan, continue to execute the original plan.")
+    elif isinstance(agent_response.action, (Advance, Repeat)):
+        # route_action decides the delta; the logging below is what makes a Repeat
+        # round as auditable as any other -- it is the record that later says
+        # whether the supervisor actually uses the action.
+        delta = route_action(agent_response.action.kind, plan)
+        headline = (
+            "Advancing: first step finished, continue with the rest of the plan."
+            if isinstance(agent_response.action, Advance)
+            else "Repeating the current step; the plan is unchanged."
+        )
+        plan_str = "\n".join(
+            f"{i+1}. {step.step}, agent={step.agent}, required_tools: {step.required_tools}"
+            for i, step in enumerate(delta["plan"])
+        )
+        print(headline)
         print(plan_str)
-        write_history("No change to the plan, continue to execute the original plan.\n" + plan_str + "\n")
-        return {
-            "plan": plan[1:],
-            "boss_feedback": "",
-            "next": plan[1].agent,
-            }
+        write_history(headline + "\n" + plan_str + "\n")
+        return delta
     else:
         plan_str = "\n".join(f"{i+1}. {step.step}, agent={step.agent}, required_tools: {step.required_tools}" for i, step in enumerate(agent_response.action.steps))
         print(plan_str)

@@ -49,8 +49,9 @@ agent boundaries from two signals:
      (worker), `BossReview` (boss).  When one of these arrives, the
      current step is closed and a new one is started below it.
 
-For the supervisor's `Act` response it distinguishes `Plan`, `NoChange`,
-and `Response` variants and renders a readable summary for each.
+For the supervisor's `Act` response it distinguishes `Plan`, `Advance`, `Repeat`
+and `Response` variants and renders a readable summary for each. `NoChange` is
+`Advance`'s pre-2026-08-18 name and is still parsed, so historical logs replay.
 """
 
 import os
@@ -73,6 +74,17 @@ except ImportError:  # pandas is required only for DataFrame handling
 # --------------------------------------------------------------------------
 SUPERVISOR_TOOL = "Act"
 WORKER_TOOL = "wokerResponse"     # (sic — matches your class name)
+
+# Act.action `kind` -> display name. "no_change" was Advance's kind before
+# 2026-08-18 and stays here for good: 400+ MB of hist/ and the nohup logs use it,
+# and prior sessions are re-parsed on every restart (1961 steps last launch).
+_ACTION_KINDS = {
+    "plan": "Plan",
+    "advance": "Advance",
+    "repeat": "Repeat",
+    "response": "Response",
+    "no_change": "Advance",
+}
 BOSS_TOOL = "BossReview"
 STRUCTURED_TOOLS = {SUPERVISOR_TOOL, WORKER_TOOL, BOSS_TOOL}
 
@@ -591,14 +603,27 @@ class LiveVisualizer:
             if name == SUPERVISOR_TOOL:
                 action = payload.get("action", payload)
                 if isinstance(action, dict):
-                    if "steps" in action:
+                    # Discriminate on `kind`, NOT on field presence: Advance and
+                    # Repeat both carry `comment`, so the old "comment in action"
+                    # test would have reported every Repeat as an Advance.
+                    kind = action.get("kind")
+                    if kind in _ACTION_KINDS:
+                        result["action_type"] = _ACTION_KINDS[kind]
+                        if kind == "plan":
+                            result["steps"] = action.get("steps", [])
+                        elif kind == "response":
+                            result["response"] = action.get("response", "")
+                        else:
+                            result["comment"] = action.get("comment", "")
+                    # Fallbacks below are for payloads with no `kind` at all.
+                    elif "steps" in action:
                         result["action_type"] = "Plan"
                         result["steps"] = action.get("steps", [])
                     elif "response" in action:
                         result["action_type"] = "Response"
                         result["response"] = action.get("response", "")
                     elif "comment" in action:
-                        result["action_type"] = "NoChange"
+                        result["action_type"] = "Advance"
                         result["comment"] = action.get("comment", "")
                     else:
                         result["action_type"] = "Unknown"
@@ -627,8 +652,14 @@ class LiveVisualizer:
                     ag = agent_texts[i][1] if i < len(agent_texts) else ""
                     steps.append({"step": st, "agent": ag})
                 result["steps"] = steps
-            elif "action=NoChange(" in content:
-                result["action_type"] = "NoChange"
+            # "NoChange" is kept for good: it is what 400+ MB of existing hist/
+            # and nohup logs say, and those are re-parsed on every restart.
+            elif ("action=Advance(" in content) or ("action=NoChange(" in content):
+                result["action_type"] = "Advance"
+                m = re.search(r"comment=(['\"])((?:(?!\1).)*?)\1", content, re.DOTALL)
+                result["comment"] = m.group(2) if m else ""
+            elif "action=Repeat(" in content:
+                result["action_type"] = "Repeat"
                 m = re.search(r"comment=(['\"])((?:(?!\1).)*?)\1", content, re.DOTALL)
                 result["comment"] = m.group(2) if m else ""
             elif "action=Response(" in content:
@@ -685,11 +716,16 @@ class LiveVisualizer:
                 summary = "\n".join(lines)
                 if len(steps) > 10:
                     summary += f"\n…and {len(steps) - 10} more"
-            elif atype == "NoChange":
+            elif atype == "Advance":
                 tags.append("waiting")
-                phase = "Continue"
-                title = "Supervisor — No change"
-                summary = _truncate(parsed.get("comment", "Continue executing the plan."), 400)
+                phase = "Advancing"
+                title = "Supervisor — Advance to next step"
+                summary = _truncate(parsed.get("comment", "First step finished; continuing with the rest of the plan."), 400)
+            elif atype == "Repeat":
+                tags.append("waiting")
+                phase = "Repeating"
+                title = "Supervisor — Repeat current step"
+                summary = _truncate(parsed.get("comment", "Executing the current step again; the plan is unchanged."), 400)
             elif atype == "Response":
                 tags.append("results")
                 phase = "Finalizing"
@@ -1517,7 +1553,7 @@ function renderStructuredResponse(st) {
           const ag = typeof s === 'object' ? (s.agent || '') : '';
           return `<li style="margin:3px 0"><span style="color:var(--text)">${escapeHtml(step)}</span>${ag ? ` <span style="color:var(--text3);font-size:0.65rem">[${escapeHtml(ag)}]</span>` : ''}</li>`;
         }).join('') + '</ol>';
-    } else if (p.action_type === 'NoChange') {
+    } else if (p.action_type === 'Advance' || p.action_type === 'Repeat' || p.action_type === 'NoChange') {
       inner = `<div>${escapeHtml(p.comment || '')}</div>`;
     } else if (p.action_type === 'Response') {
       inner = `<div style="color:var(--text)">${escapeHtml(p.response || '')}</div>`;
