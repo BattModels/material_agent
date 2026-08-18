@@ -588,6 +588,64 @@ def print_stream(s, DAG=None):
     write_history("\n")
 
 
+# LangGraph's own key for "this run is a resume"; cleared only on the retry below.
+_PREGEL_RESUMING = "__pregel_resuming"
+
+
+def _stream_agent(agent, prompt, inner_cfg, **print_kw):
+    """Stream an inner agent and return its LAST update chunk.
+
+    A zero-update stream is possible, raises nothing, and happened twice on
+    2026-08-18. On the first super-step after a resume LangGraph stamps
+    CONFIG_KEY_RESUMING into every node config (pregel/_loop.py:727-730). Node
+    configs are exactly what we forward as inner_cfg, so the subgraph sees the
+    flag too -- and its resume branch and its apply-input branch are mutually
+    exclusive (pregel/_loop.py:682-693). The resume branch wins, `prompt` is
+    DISCARDED, and the subgraph replays its own saved checkpoint instead.
+
+    That is harmless while the checkpoint still has something runnable, which is
+    how the worker legitimately resumes mid-round after a crash. It is fatal when
+    the previous session died AFTER the inner agent finished but BEFORE the
+    parent committed the node's writes -- exactly what the exit(0) on a failed
+    supervisor does. Then there are no tasks, tick() returns False on the first
+    call (pregel/_loop.py:513-515), and the caller is left with an unbound loop
+    variable pointing at the wrong line.
+
+    So: stream normally, and only if nothing at all came back, resend the prompt
+    with the flag cleared. Clearing it unconditionally would break the worker's
+    mid-round resume, which depends on this mechanism.
+
+    stream_mode is pinned: with the parent config propagated the inner stream
+    otherwise inherits the parent's stream context and yields "values"-mode
+    chunks (full cumulative state) instead of {node: update}, which breaks
+    print_stream and the structured_response extraction in every caller.
+    """
+    for cleared in (False, True):
+        cfg = inner_cfg
+        if cleared:
+            cfg = {**inner_cfg, "configurable": {
+                k: v for k, v in inner_cfg.get("configurable", {}).items()
+                if k != _PREGEL_RESUMING
+            }}
+        last = None
+        for chunk in agent.stream({"messages": [("user", prompt)]}, cfg,
+                                  stream_mode="updates", durability="sync"):
+            last = next(iter(chunk.values()))
+            print_stream(last, **print_kw)
+        if last is not None:
+            return last
+        if cleared:
+            raise RuntimeError(
+                "inner agent yielded no updates even with "
+                f"{_PREGEL_RESUMING} cleared -- its checkpoint namespace is "
+                "exhausted and the prompt cannot be delivered"
+            )
+        msg = (f"inner agent yielded ZERO updates; the prompt was swallowed by "
+               f"{_PREGEL_RESUMING}. Retrying with the flag cleared.")
+        print(msg, flush=True)
+        write_history(msg + "\n")
+
+
 def render_history(state, *, with_timing: bool = True) -> str:
     """The single rendering of past_steps, shared by the boss, supervisor and
     worker prompts (it used to be four copy-pasted f-strings that could drift).
@@ -671,18 +729,7 @@ def boss_node(state, config, agent=None, name=None):
     write_history(bossMessage + "\n")
 
 
-    # stream_mode MUST be pinned: with the parent config propagated, the
-    # inner stream otherwise inherits the parent's stream context and yields
-    # "values"-mode chunks (full cumulative state) instead of {node: update},
-    # breaking print_stream and the structured_response extraction below.
-    for agent_response in agent.stream(
-        {"messages": [("user", bossMessage)]},  inner_cfg, stream_mode="updates", durability="sync"
-    ):
-        # set agent_response to be the value of the first key of the dictionary
-        agent_response = next(iter(agent_response.values()))
-        print_stream(agent_response)
-
-    agent_response = agent_response['structured_response']
+    agent_response = _stream_agent(agent, bossMessage, inner_cfg)['structured_response']
 
     if agent_response.decision == "approve":
         return {
@@ -871,18 +918,13 @@ def supervisor_chain_node(state, config, agent=None, name=None):
         # -- unauditable after the fact.
         write_history(supervisorMessage + "\n")
         try:
-            # NOTE: with subgraph checkpointing, retry iterations of this loop
-            # share one checkpoint namespace, so the retry message is APPENDED
-            # to the previous attempt's conversation (add_messages reducer)
-            # instead of starting a fresh one.
-            for agent_response in agent.stream(
-                {"messages": [("user", supervisorMessage)]},  inner_cfg, stream_mode="updates", durability="sync"
-            ):
-                # set agent_response to be the value of the first key of the dictionary
-                agent_response = next(iter(agent_response.values()))
-                # print("agent reposonse:")
-                # print(agent_response)
-                print_stream(agent_response)
+            # NOTE: each retry iteration gets its OWN checkpoint namespace
+            # ("<node>:<task_id>|N", pregel/_loop.py:255-269), each holding a
+            # single HumanMessage -- so the corrective WARNING built below is
+            # delivered to an agent with NO memory of the answer being
+            # corrected. This comment used to claim the opposite (that retries
+            # share a namespace and append); they do not.
+            agent_response = _stream_agent(agent, supervisorMessage, inner_cfg)
         except Exception as e:
             # fall back to a default Act, retry with a smaller schema, escalate to a human, etc.
             print(f"Supervisor halted: structured output failures: {e}")
@@ -1221,18 +1263,11 @@ Now, you are tasked with: {task}. Focus on this task. Your standing duties are a
         print(f"Agent {name} is processing!!!!!")
         write_history(task_formatted + "\n" + f"Agent {name} is processing!!!!!\n")
         workerGood_patient -= 1
-        # stream_mode pinned: see note in boss_node — without it the propagated
-        # parent config flips chunks to "values" mode.
-        for agent_response in agent.stream(
-            {"messages": [("user", task_formatted)]},  inner_cfg, stream_mode="updates", durability="sync"
-        ):
-            # set agent_response to be the value of the first key of the dictionary
-            agent_response = next(iter(agent_response.values()))
-            print_stream(agent_response, DAG=step_no)
-        
-        # agent_response = agent.invoke(
-        #     {"messages": [("user", task_formatted)]},  {"configurable": {"thread_id": "1"}}
-        # )
+        # NOTE: this is the caller that legitimately RELIES on the resume flag
+        # _stream_agent conditionally clears -- a worker killed mid-round picks
+        # up after its last completed tool call rather than restarting the step.
+        # That is why the flag is only cleared after a zero-update stream.
+        agent_response = _stream_agent(agent, task_formatted, inner_cfg, DAG=step_no)
         structured_response = agent_response['structured_response']
         if not structured_response.success:
             print(f"worker {name} didn't finish")
