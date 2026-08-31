@@ -1467,6 +1467,14 @@ footer.pagefoot code {
           Gaultois <i>et al.</i>, <i>Chem. Mater.</i> <b>25</b>, 2911&ndash;2920 (2013).
           <a href="https://doi.org/10.1021/cm400893e">10.1021/cm400893e</a>
         </li>
+        <li>
+          <span class="why">Supplied the Hubbard <i>U</i> parameters applied to the
+          transition-metal <i>d</i> states in every GGA+U calculation here, and &mdash;
+          by way of AQ-GNoME &mdash; the data behind the Pourbaix decomposition
+          energies.</span>
+          Wang, Maxisch and Ceder. <i>Phys. Rev. B</i> <b>73</b>, 195107 (2006).
+          <a href="https://doi.org/10.1103/PhysRevB.73.195107">10.1103/PhysRevB.73.195107</a>
+        </li>
       </ol>
       <p>Pourbaix stability (<b>max ΔG<sub>pbx</sub></b>) is computed from GNoME and
       Materials Project data; the Materials Project is licensed CC BY 4.0 and should be
@@ -3140,6 +3148,17 @@ document.querySelectorAll("#tabbar button").forEach(b =>
     "  pages   = {2911--2920},",
     "  year    = {2013},",
     "  doi     = {10.1021/cm400893e}",
+    "}",
+    "",
+    "@article{wang2006ggau,",
+    "  author  = {Wang, Lei and Maxisch, Thomas and Ceder, Gerbrand},",
+    "  title   = {Oxidation energies of transition metal oxides within the",
+    "             GGA+U framework},",
+    "  journal = {Physical Review B},",
+    "  volume  = {73},",
+    "  pages   = {195107},",
+    "  year    = {2006},",
+    "  doi     = {10.1103/PhysRevB.73.195107}",
     "}"
   ];
   document.getElementById("citebox").textContent = bib.join("\n");
