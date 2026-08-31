@@ -1,0 +1,3194 @@
+<title>OER-GNoME</title>
+
+<style>
+/* ============================================================
+   Tokens — light is the base; dark redefines tokens only.
+   ============================================================ */
+:root {
+  --ground:    #F1F4F5;
+  --surface:   #FFFFFF;
+  --surface-2: #E7ECEE;
+  --ink:       #0E1619;
+  --ink-2:     #45555C;
+  --ink-3:     #6F8188;
+  --line:      #D2DADD;
+  --line-soft: #E4EAEC;
+  --accent:    #0B6B68;
+  --accent-ink:#08514F;
+
+  --d-high: #A6390D;
+  --d-med:  #B4682A;
+  --d-low:  #8A7418;
+  --d-suf:  #0B6B68;
+  --d-aba:  #71828A;
+
+  --s-ok:    #0B6B68;
+  --s-run:   #2A6198;
+  --s-fail:  #A02F28;
+  --s-unrec: #8A5F10;
+
+  --shadow: 0 1px 2px rgba(14,22,25,.06), 0 8px 24px rgba(14,22,25,.08);
+
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --mono: ui-monospace, "Cascadia Mono", "Cascadia Code", Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground:    #0B1013;
+    --surface:   #131B1F;
+    --surface-2: #1C262B;
+    --ink:       #E9EFF1;
+    --ink-2:     #A6B6BC;
+    --ink-3:     #78888F;
+    --line:      #26333A;
+    --line-soft: #1D272C;
+    --accent:    #57C3B8;
+    --accent-ink:#7FD6CC;
+
+    --d-high: #F0895A;
+    --d-med:  #DDA470;
+    --d-low:  #C9BC6B;
+    --d-suf:  #57C3B8;
+    --d-aba:  #8A9BA2;
+
+    --s-ok:    #57C3B8;
+    --s-run:   #74A9DE;
+    --s-fail:  #EE8279;
+    --s-unrec: #D7AC55;
+
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.45);
+  }
+}
+
+:root[data-theme="dark"] {
+  --ground:    #0B1013;
+  --surface:   #131B1F;
+  --surface-2: #1C262B;
+  --ink:       #E9EFF1;
+  --ink-2:     #A6B6BC;
+  --ink-3:     #78888F;
+  --line:      #26333A;
+  --line-soft: #1D272C;
+  --accent:    #57C3B8;
+  --accent-ink:#7FD6CC;
+
+  --d-high: #F0895A;
+  --d-med:  #DDA470;
+  --d-low:  #C9BC6B;
+  --d-suf:  #57C3B8;
+  --d-aba:  #8A9BA2;
+
+  --s-ok:    #57C3B8;
+  --s-run:   #74A9DE;
+  --s-fail:  #EE8279;
+  --s-unrec: #D7AC55;
+
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.45);
+}
+
+/* ============================================================
+   Base
+   ============================================================ */
+* { box-sizing: border-box; }
+
+/* The `hidden` attribute is only `display:none` in the UA stylesheet, so any
+   author display rule beats it — and .panel / #cpage both set display:flex.
+   Without this reset the tabs and the candidate page never hide anything. */
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 32px 24px 72px;
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+}
+
+.label {
+  font-size: .68rem;
+  text-transform: uppercase;
+  letter-spacing: .09em;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.num  { font-variant-numeric: tabular-nums; text-align: right; }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* ============================================================
+   Masthead
+   ============================================================ */
+.masthead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.masthead h1 {
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: clamp(1.5rem, 3.2vw, 2rem);
+  letter-spacing: -.01em;
+  margin: 0;
+  text-wrap: balance;
+}
+
+/* the standfirst now lives inside the Database panel, not the masthead */
+.sub {
+  color: var(--ink-2);
+  font-size: .9rem;
+  margin: 0;
+  max-width: 66ch;
+  line-height: 1.55;
+}
+
+.provenance {
+  font-family: var(--mono);
+  font-size: .72rem;
+  color: var(--ink-3);
+  text-align: right;
+  line-height: 1.7;
+}
+
+/* ============================================================
+   Tabs
+   ============================================================ */
+.tabbar {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+  /* no negative margin: it pulled the panel up over the active tab's underline,
+     which an opaque panel (.prosecard) then hid entirely */
+}
+
+.tabbar button {
+  font: inherit;
+  font-family: var(--serif);
+  font-size: 1.22rem;
+  font-weight: 500;
+  padding: 12px 22px 11px;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: none;
+  color: var(--ink-3);
+  cursor: pointer;
+  transition: color .12s ease, border-color .12s ease;
+  margin-bottom: -1px;
+  letter-spacing: -.005em;
+}
+
+.tabbar button:hover { color: var(--ink); }
+
+.tabbar button[aria-selected="true"] {
+  color: var(--accent-ink);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+.tabbar .count {
+  font-family: var(--mono);
+  font-size: .74em;
+  opacity: .6;
+  margin-left: 6px;
+}
+
+.panel { display: flex; flex-direction: column; gap: 26px; }
+
+/* a compact reminder of what is filtered, for panels without the controls */
+.filterecho {
+  font-size: .8rem;
+  color: var(--ink-2);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 9px 13px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  align-items: center;
+}
+
+.filterecho b { color: var(--ink); font-weight: 600; }
+
+/* ============================================================
+   About / cite
+   ============================================================ */
+.prosecard {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 20px 24px;
+}
+
+.prosecard h3 {
+  font-family: var(--serif);
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin: 0 0 10px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--line);
+}
+
+.prosecard h3:not(:first-child) { margin-top: 26px; }
+
+.prosecard p, .prosecard li {
+  font-size: .875rem;
+  color: var(--ink-2);
+  line-height: 1.62;
+  max-width: 74ch;
+}
+
+.prosecard ul, .prosecard ol { padding-left: 22px; margin: 8px 0; }
+.prosecard ol li { margin-bottom: 9px; }
+.prosecard ol li::marker { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+
+/* reference list: why it must be cited, then the reference itself */
+.reflist li { margin-bottom: 16px; }
+
+.reflist .why {
+  display: block;
+  color: var(--ink);
+  font-weight: 500;
+  margin-bottom: 3px;
+}
+
+.reflist a { word-break: break-word; }
+.prosecard a { color: var(--accent-ink); }
+
+.prosecard dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 18px;
+  font-size: .85rem;
+  margin: 10px 0 0;
+}
+
+.prosecard dt { color: var(--ink-3); }
+.prosecard dd { margin: 0; color: var(--ink); font-family: var(--mono); font-size: .95em; }
+
+.citebox {
+  font-family: var(--mono);
+  font-size: .76rem;
+  line-height: 1.6;
+  background: var(--ground);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--accent);
+  border-radius: 0 3px 3px 0;
+  padding: 12px 14px;
+  overflow-x: auto;
+  white-space: pre;
+  color: var(--ink-2);
+  margin: 10px 0 0;
+}
+
+.todo {
+  border-left: 2px solid var(--s-unrec);
+  background: color-mix(in srgb, var(--s-unrec) 8%, var(--surface));
+  padding: 10px 14px;
+  border-radius: 0 3px 3px 0;
+  font-size: .82rem;
+  color: var(--ink-2);
+  margin: 10px 0 0;
+}
+
+.todo b { color: var(--s-unrec); }
+
+/* ============================================================
+   Stat tiles
+   ============================================================ */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.tile {
+  background: var(--surface);
+  padding: 15px 17px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.tile .v {
+  font-family: var(--serif);
+  font-size: 1.85rem;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.tile .k { font-size: .76rem; color: var(--ink-2); }
+
+/* ============================================================
+   Periodic table filter
+   ============================================================ */
+.ptblock { display: flex; flex-direction: column; gap: 10px; }
+
+.ptbar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px 18px;
+  flex-wrap: wrap;
+}
+
+.pthint { font-size: .76rem; color: var(--ink-3); }
+
+.pthint b { font-weight: 600; color: var(--ink-2); }
+
+.ptscroll { overflow-x: auto; padding-bottom: 2px; }
+
+.ptable {
+  display: grid;
+  grid-template-columns: repeat(18, 1fr);
+  grid-template-rows: repeat(7, auto) 14px auto auto;
+  gap: 3px;
+  max-width: 900px;
+  min-width: 660px;
+}
+
+.el {
+  grid-column: var(--c);
+  grid-row: var(--r);
+  aspect-ratio: 1 / 0.86;
+  min-width: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--surface);
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: .95rem;
+  line-height: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  cursor: pointer;
+  transition: background .1s ease, border-color .1s ease, color .1s ease;
+}
+
+.el .sym { font-weight: 500; }
+
+.el .cnt {
+  font-size: .56em;
+  opacity: .6;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.01em;
+}
+
+.el.req .cnt, .el.exc .cnt { opacity: .85; }
+
+.el.off {
+  opacity: .2;
+  cursor: default;
+  background: var(--surface);
+}
+
+.el:not(.off):hover { border-color: var(--ink-3); color: var(--ink); }
+
+.el.req {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 700;
+}
+
+.el.exc {
+  background: color-mix(in srgb, var(--s-fail) 15%, var(--surface));
+  border-color: var(--s-fail);
+  color: var(--s-fail);
+  font-weight: 700;
+}
+
+/* strike the symbol only — striking the count too makes it unreadable */
+.el.exc .sym { text-decoration: line-through; }
+
+.ptsummary {
+  font-size: .78rem;
+  color: var(--ink-2);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  align-items: center;
+  min-height: 20px;
+}
+
+.ptsummary .tagset { display: inline-flex; gap: 5px; flex-wrap: wrap; align-items: center; }
+
+.ptsummary .etag {
+  font-family: var(--mono);
+  font-size: .72rem;
+  padding: 2px 7px;
+  border-radius: 3px;
+  border: 1px solid;
+}
+
+.ptsummary .etag.req { color: var(--accent-ink); border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
+.ptsummary .etag.exc { color: var(--s-fail); border-color: color-mix(in srgb, var(--s-fail) 45%, transparent); background: color-mix(in srgb, var(--s-fail) 10%, var(--surface)); }
+
+/* ============================================================
+   Controls
+   ============================================================ */
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.search {
+  flex: 1 1 260px;
+  min-width: 200px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--ground);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 7px 10px;
+}
+
+.search input {
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: .875rem;
+  width: 100%;
+  outline: none;
+}
+
+.search svg { flex: none; color: var(--ink-3); }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.chip {
+  font: inherit;
+  font-size: .78rem;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background .12s ease, border-color .12s ease, color .12s ease;
+}
+
+.chip:hover { border-color: var(--ink-3); }
+
+.chip[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 13%, var(--surface));
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.chip .n {
+  font-variant-numeric: tabular-nums;
+  opacity: .65;
+  margin-left: 5px;
+}
+
+.resetbtn {
+  font: inherit;
+  font-size: .78rem;
+  background: none;
+  border: 0;
+  color: var(--ink-3);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  padding: 4px;
+}
+
+.resetbtn:hover { color: var(--ink); }
+
+/* ============================================================
+   Volcano
+   ============================================================ */
+.vcard {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 16px 18px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.vhead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px 18px;
+  flex-wrap: wrap;
+}
+
+.vhead h2 {
+  font-family: var(--serif);
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.vtoggles { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+
+.cmapsel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: .72rem;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+
+.cmapsel select {
+  font: inherit;
+  font-size: .74rem;
+  text-transform: none;
+  letter-spacing: 0;
+  padding: 4px 7px;
+  border-radius: 3px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.seg button {
+  font: inherit;
+  font-size: .74rem;
+  padding: 4px 10px;
+  border: 0;
+  background: var(--surface);
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background .12s ease, color .12s ease;
+}
+
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button:hover { background: var(--surface-2); }
+
+.seg button[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.vplot { position: relative; }
+.vplot svg { display: block; width: 100%; height: auto; overflow: visible; }
+
+.vgrid { stroke: var(--line-soft); stroke-width: 1; }
+.vaxis { stroke: var(--line); stroke-width: 1; }
+.vtick { fill: var(--ink-3); font-size: 11px; font-family: var(--mono); }
+.vlab  { fill: var(--ink-2); font-size: 12px; font-family: var(--sans); }
+.vcurve { fill: none; stroke: var(--ink-3); stroke-width: 1.5; opacity: .5; }
+.vguide { stroke: var(--ink-3); stroke-width: 1; stroke-dasharray: 3 3; opacity: .45; }
+.vnote { fill: var(--ink-3); font-size: 10.5px; font-family: var(--mono); }
+
+.vpt {
+  stroke: #111;
+  stroke-width: 1.1;
+  cursor: pointer;
+  transition: r .1s ease;
+}
+
+.vpt:hover { stroke: #000; stroke-width: 2; }
+
+.vtip {
+  position: absolute;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .1s ease;
+  background: var(--ink);
+  color: var(--ground);
+  border-radius: 3px;
+  padding: 7px 10px;
+  font-size: .76rem;
+  line-height: 1.45;
+  white-space: nowrap;
+  z-index: 5;
+  transform: translate(-50%, -100%);
+  box-shadow: var(--shadow);
+}
+
+.vtip.on { opacity: 1; }
+.vtip .tf { font-family: var(--mono); font-weight: 600; }
+.vtip .tm { font-family: var(--mono); opacity: .8; }
+
+.vfoot {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px 18px;
+  flex-wrap: wrap;
+  font-size: .76rem;
+  color: var(--ink-3);
+}
+
+.vlegend { display: flex; flex-wrap: wrap; gap: 5px 13px; }
+.vlegend span { display: inline-flex; align-items: center; gap: 5px; }
+.vlegend i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+
+.vscale { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.vscale .lbl { color: var(--ink-3); }
+.vscale .ramp { display: inline-flex; align-items: flex-end; gap: 1px; }
+
+.vscale .sw {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  font-family: var(--mono);
+  font-size: .66rem;
+  color: var(--ink-3);
+}
+
+.vscale .ramp { gap: 0; }
+
+.vscale .sw i {
+  width: 22px;
+  height: 12px;
+  display: block;
+  border: 0;
+}
+
+.vscale .sw { font-size: .62rem; }
+
+.vempty {
+  padding: 46px 12px;
+  text-align: center;
+  color: var(--ink-3);
+  font-size: .875rem;
+}
+
+/* ============================================================
+   Table
+   ============================================================ */
+.tablecard {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.tablescroll { overflow-x: auto; }
+
+table { border-collapse: collapse; width: 100%; font-size: .84rem; }
+
+thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  padding: 9px 12px;
+  text-align: left;
+  font-size: .72rem;
+  /* no uppercase here: CSS would fold η (U+03B7) to Η (U+0397), which is
+     indistinguishable from a Latin H */
+  letter-spacing: .03em;
+  color: var(--ink-2);
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+thead th.right { text-align: right; }
+thead th:hover { color: var(--ink); }
+
+thead th .arrow { opacity: 0; margin-left: 4px; font-size: .8em; }
+thead th[data-dir="1"]  .arrow { opacity: 1; }
+thead th[data-dir="-1"] .arrow { opacity: 1; }
+
+tbody tr {
+  border-bottom: 1px solid var(--line-soft);
+  cursor: pointer;
+  transition: background .1s ease;
+}
+
+tbody tr:last-child { border-bottom: 0; }
+tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
+tbody tr[aria-selected="true"] { background: color-mix(in srgb, var(--accent) 11%, var(--surface)); }
+
+tbody td { padding: 9px 12px; vertical-align: middle; }
+
+.formula { font-family: var(--mono); font-size: .88rem; color: var(--ink); }
+.formula sub { font-size: .72em; }
+
+.cid { font-family: var(--mono); font-size: .74rem; color: var(--ink-3); }
+
+.na { color: var(--ink-3); }
+
+/* pills */
+.pill {
+  display: inline-block;
+  font-size: .72rem;
+  font-weight: 600;
+  padding: 2px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+  border: 1px solid;
+}
+
+/* stage progress */
+.stages { display: inline-flex; gap: 3px; }
+
+.stg {
+  width: 15px;
+  height: 7px;
+  border-radius: 1.5px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+
+.stg.part { background: color-mix(in srgb, var(--accent) 32%, var(--surface)); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.stg.full { background: var(--accent); border-color: var(--accent); }
+
+.empty {
+  padding: 40px 18px;
+  text-align: center;
+  color: var(--ink-3);
+  font-size: .875rem;
+}
+
+.tablefoot {
+  padding: 9px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-2);
+  font-size: .76rem;
+  color: var(--ink-2);
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* ============================================================
+   Quick-view drawer
+   ============================================================ */
+.scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(6,12,14,.42);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .2s ease;
+  z-index: 40;
+}
+
+.scrim.on { opacity: 1; pointer-events: auto; }
+
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100%;
+  width: min(660px, 100%);
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  transform: translateX(100%);
+  transition: transform .22s cubic-bezier(.3,.7,.3,1);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+}
+
+.drawer.on { transform: translateX(0); }
+
+.drawerhead {
+  padding: 16px 20px 14px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.drawerhead h2 {
+  font-family: var(--mono);
+  font-size: 1.28rem;
+  font-weight: 600;
+  margin: 0 0 3px;
+}
+
+.drawerhead h2 sub { font-size: .68em; }
+
+.closebtn {
+  font: inherit;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  width: 30px;
+  height: 30px;
+  border-radius: 3px;
+  cursor: pointer;
+  flex: none;
+  line-height: 1;
+  font-size: 1rem;
+}
+
+.closebtn:hover { color: var(--ink); border-color: var(--ink-3); }
+
+.drawerbody {
+  overflow-y: auto;
+  padding: 18px 20px 60px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.openfull {
+  font: inherit;
+  font-size: .84rem;
+  font-weight: 600;
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 3px;
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 13%, var(--surface));
+  color: var(--accent-ink);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  text-align: left;
+}
+
+.openfull:hover { background: color-mix(in srgb, var(--accent) 22%, var(--surface)); }
+.openfull .sub { font-weight: 400; font-size: .76rem; opacity: .8; }
+
+/* ============================================================
+   Candidate page
+   ============================================================ */
+#cpage {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.cphead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px 24px;
+  flex-wrap: wrap;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.cphead h2 {
+  font-family: var(--mono);
+  font-size: clamp(1.35rem, 3.2vw, 1.95rem);
+  font-weight: 600;
+  margin: 0 0 4px;
+  letter-spacing: -.01em;
+}
+
+.cphead h2 sub { font-size: .68em; }
+
+.backbtn {
+  font: inherit;
+  font-size: .82rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  padding: 6px 13px;
+  border-radius: 3px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.backbtn:hover { color: var(--ink); border-color: var(--ink-3); }
+
+/* the point of the full page: structures get real room */
+#cpage canvas.sview { height: 330px; }
+#cpage .sviewwrap { padding: 6px 10px 10px; }
+#cpage .prose { max-width: 80ch; }
+
+@media (min-width: 900px) {
+  #cpage .sitebody { grid-template-columns: 1.05fr 1fr; align-items: start; gap: 8px; }
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.metric { background: var(--surface); padding: 10px 12px; }
+.metric .mk { font-size: .71rem; color: var(--ink-3); letter-spacing: .02em; }
+
+/* subscripts in headers and metric labels */
+thead th sub, .metric .mk sub { font-size: .76em; }
+.metric .mv { font-family: var(--mono); font-size: 1rem; font-variant-numeric: tabular-nums; margin-top: 3px; }
+
+.sec { display: flex; flex-direction: column; gap: 10px; }
+
+.sec > h3 {
+  font-family: var(--serif);
+  font-size: 1.02rem;
+  font-weight: 600;
+  margin: 0;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.sec > h3 .cnt { font-family: var(--mono); font-size: .74rem; color: var(--ink-3); font-weight: 400; }
+
+.prose {
+  font-size: .86rem;
+  color: var(--ink-2);
+  line-height: 1.62;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.prose strong { color: var(--ink); font-weight: 600; }
+
+/* decision timeline */
+.round {
+  border-left: 2px solid var(--line);
+  padding: 0 0 20px 16px;
+  position: relative;
+}
+
+.round:last-child { padding-bottom: 0; }
+
+.round::before {
+  content: "";
+  position: absolute;
+  left: -5px;
+  top: 4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--surface);
+}
+
+.roundhead {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  margin-bottom: 7px;
+}
+
+.roundhead .rn {
+  font-family: var(--mono);
+  font-size: .7rem;
+  color: var(--ink-3);
+  letter-spacing: .04em;
+}
+
+.plan {
+  margin-top: 9px;
+  padding: 10px 12px;
+  background: var(--ground);
+  border-left: 2px solid color-mix(in srgb, var(--accent) 55%, var(--line));
+  border-radius: 0 3px 3px 0;
+  font-size: .82rem;
+  color: var(--ink-2);
+  line-height: 1.58;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.plan .label { display: block; margin-bottom: 4px; }
+
+/* adsorption sites + free energy diagrams */
+.uctl { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
+
+.sitecard {
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 10px;
+  background: var(--surface);
+}
+
+.sitehead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 14px;
+  flex-wrap: wrap;
+  padding: 8px 11px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+}
+
+.sitehead .sid { font-family: var(--mono); font-size: .78rem; font-weight: 600; }
+
+.sitehead .stype {
+  font-weight: 500;
+  color: var(--accent-ink);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  border-radius: 999px;
+  padding: 1px 8px;
+  margin-left: 5px;
+  font-size: .72rem;
+}
+
+.siteinfo, .sitenbrs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 14px;
+  padding: 7px 11px 0;
+  font-family: var(--mono);
+  font-size: .72rem;
+  color: var(--ink-2);
+}
+
+.siteinfo b { color: var(--ink); font-weight: 600; }
+.siteinfo sub { font-size: .8em; }
+.siteinfo sup { font-size: .8em; }
+.sitenbrs { color: var(--ink-3); }
+.sitehead .se { font-family: var(--mono); font-size: .72rem; color: var(--ink-2); }
+.sitehead .se sub { font-size: .8em; }
+
+.sitenote { padding: 7px 11px; font-size: .74rem; color: var(--ink-3); overflow-wrap: anywhere; }
+.sitenote .mono { color: var(--ink-2); }
+
+.fedwrap { padding: 4px 6px 0; }
+.fedwrap svg { display: block; width: 100%; height: auto; }
+
+.fedplat { stroke: var(--accent); stroke-width: 2.6; stroke-linecap: round; }
+.fedplat.miss { stroke: var(--ink-3); stroke-dasharray: 3 3; opacity: .45; }
+
+.fedlink { stroke: var(--ink-3); stroke-width: 1; stroke-dasharray: 3 3; opacity: .6; }
+.fedlink.pds { stroke: var(--s-unrec); stroke-width: 1.9; stroke-dasharray: none; opacity: 1; }
+
+/* rungs are clickable; only the hit rects take pointer events */
+.fedplat, .fedlink, .fedstate, .feddg, .fedtick, .vgrid { pointer-events: none; }
+
+.fedslot { fill: transparent; pointer-events: all; cursor: pointer; }
+.fedslot:hover { fill: var(--ink-3); fill-opacity: .07; }
+.fedslot.on { fill: var(--accent); fill-opacity: .09; }
+
+/* structure viewer */
+/* Single column by default. The two-column split is scoped to the full page,
+   because the media query tracks the viewport, not the drawer: at 660px wide
+   the drawer would otherwise squeeze the diagram into half an empty grid. */
+.sitebody { display: grid; grid-template-columns: 1fr; gap: 2px; }
+
+/* the diagram and any note beneath it count as one grid child */
+.fedcol { display: flex; flex-direction: column; min-width: 0; }
+
+.sviewwrap { padding: 4px 8px 8px; display: flex; flex-direction: column; gap: 6px; }
+
+canvas.sview {
+  width: 100%;
+  height: 186px;
+  display: block;
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  background: var(--ground);
+  cursor: grab;
+  touch-action: none;
+}
+
+.skinds { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.skinds .chip { padding: 3px 9px; font-size: .72rem; }
+.skinds .shint { font-size: .68rem; color: var(--ink-3); margin-left: 2px; }
+
+.slegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 14px;
+  font-size: .73rem;
+  color: var(--ink-2);
+  margin-bottom: 4px;
+}
+
+.slegend span { display: inline-flex; align-items: center; gap: 5px; }
+.slegend i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+
+.fedtick  { fill: var(--ink-3); font-size: 9.5px; font-family: var(--mono); }
+.fedstate { fill: var(--ink-2); font-size: 10.5px; font-family: var(--mono); }
+.feddg    { fill: var(--ink-3); font-size: 9.5px; font-family: var(--mono); }
+.feddg.pds { fill: var(--s-unrec); font-weight: 700; }
+
+/* process list */
+.jobgroup { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
+
+.jobgroup > .jt {
+  font-size: .7rem;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--ink-3);
+  font-weight: 600;
+  display: flex;
+  justify-content: space-between;
+}
+
+.proc {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 7px 10px;
+  background: var(--ground);
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  font-size: .78rem;
+}
+
+.proc .pid { font-family: var(--mono); font-size: .72rem; color: var(--ink-3); }
+.proc .pstat { overflow-wrap: anywhere; }
+.proc .pg { font-family: var(--mono); font-size: .72rem; color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.proc .psite { grid-column: 1 / -1; font-size: .71rem; color: var(--ink-3); font-family: var(--mono); }
+
+footer.pagefoot {
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+  font-size: .78rem;
+  color: var(--ink-3);
+  line-height: 1.65;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 18px;
+}
+
+footer.pagefoot a { color: var(--ink-2); }
+
+.footlink {
+  font: inherit;
+  font-size: .78rem;
+  font-weight: 600;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent-ink);
+  cursor: pointer;
+  margin-left: auto;
+}
+
+.footlink:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+footer.pagefoot code {
+  font-family: var(--mono);
+  font-size: .92em;
+  background: var(--surface-2);
+  padding: 1px 5px;
+  border-radius: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+
+@media (max-width: 640px) {
+  .wrap { padding: 22px 14px 56px; }
+  .provenance { text-align: left; }
+  #cpage canvas.sview { height: 260px; }
+}
+</style>
+
+<div class="wrap">
+<div id="listview">
+
+  <header class="masthead">
+    <div>
+      <h1>OER-GNoME</h1>
+    </div>
+    <div class="provenance" id="provenance"></div>
+  </header>
+
+  <nav class="tabbar" id="tabbar" role="tablist">
+    <button role="tab" data-tab="explore" aria-selected="true">Database</button>
+    <button role="tab" data-tab="methods" aria-selected="false">Methods</button>
+    <button role="tab" data-tab="cite" aria-selected="false">Licence &amp; how to cite</button>
+  </nav>
+
+  <div class="panel" id="panel-explore">
+
+  <p class="sub">
+    Every candidate an autonomous DFT agent considered for oxygen evolution, the jobs it
+    launched, and the reasoning behind each decision it took. Read-only snapshot.
+  </p>
+
+  <section class="tiles" id="tiles"></section>
+
+  <section class="ptblock">
+    <div class="ptbar">
+      <span class="label">Composition &mdash; click to filter</span>
+      <span class="pthint">
+        Once to <b>require</b> &middot; twice to <b>exclude</b> &middot; a third time to clear.
+        Shading shows how often each element appears.
+      </span>
+    </div>
+    <div class="ptscroll">
+      <div class="ptable" id="ptable" role="group" aria-label="Filter candidates by element"></div>
+    </div>
+    <div class="ptsummary" id="ptsummary"></div>
+  </section>
+
+  <section class="controls">
+    <label class="search">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+        <circle cx="7" cy="7" r="4.5"></circle><path d="M10.5 10.5L14 14"></path>
+      </svg>
+      <input id="q" type="search" placeholder="Search formula, hypothesis, or reasoning&hellip;" aria-label="Search candidates">
+    </label>
+    <div class="chips" id="statechips"></div>
+    <div class="chips">
+      <button class="chip" id="completeToggle" aria-pressed="false">Complete energetics only</button>
+    </div>
+    <button class="resetbtn" id="reset">Reset</button>
+  </section>
+
+  <section class="vcard">
+    <div class="vhead">
+      <h2>2-D activity volcano</h2>
+      <div class="vtoggles">
+        <span class="seg" role="group" aria-label="Overpotential field">
+          <button data-metric="eta_scaling" aria-pressed="true">OOH scaling</button>
+          <button data-metric="eta_ideal" aria-pressed="false">Ideal OOH</button>
+        </span>
+        <span class="seg" role="group" aria-label="Points shown">
+          <button data-vmode="best" aria-pressed="true">Best site per candidate</button>
+          <button data-vmode="all" aria-pressed="false">All sites</button>
+        </span>
+        <label class="cmapsel">colormap
+          <select id="cmapsel" aria-label="Field colormap"></select>
+        </label>
+      </div>
+    </div>
+    <div class="vplot" id="vplot">
+      <div class="vtip" id="vtip"></div>
+    </div>
+    <div class="vfoot">
+      <div class="vlegend" id="vlegend"></div>
+      <div class="vscale" id="vscale"></div>
+    </div>
+    <div class="vfoot"><span id="vcaption"></span></div>
+  </section>
+
+  <section class="tablecard">
+    <div class="tablescroll">
+      <table>
+        <thead>
+          <tr id="headrow"></tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+    <div class="tablefoot">
+      <span id="count"></span>
+      <span>Click any row to open its candidate page</span>
+    </div>
+  </section>
+
+  </div><!-- /panel-explore -->
+
+  <div class="panel" id="panel-methods" hidden>
+    <div class="prosecard">
+
+      <h3>Electronic structure</h3>
+      <p>All calculations use <b>VASP</b> with the projector augmented-wave method
+      (PBE_64 potentials) and the <b>RPBE</b> exchange&ndash;correlation functional
+      (<span class="mono">GGA = RP</span>). Every calculation is spin-polarised
+      (<span class="mono">ISPIN = 2</span>) with aspherical corrections
+      (<span class="mono">LASPH</span>); bulk magnetic configurations are enumerated and
+      the lowest-energy ordering is carried forward.</p>
+
+      <p>A Hubbard correction is applied in Dudarev form
+      (<span class="mono">LDAUTYPE = 2</span>, J = 0) to the d states of the transition
+      metals below, following the Materials Project values:</p>
+      <dl>
+        <dt>U (eV)</dt>
+        <dd>Co 3.32 &middot; Cr 3.70 &middot; Fe 5.30 &middot; Mn 3.90 &middot;
+            Mo 4.38 &middot; Ni 6.20 &middot; V 3.25 &middot; W 6.20</dd>
+      </dl>
+
+      <p>Convergence is <span class="mono">EDIFF = 1&times;10<sup>-5</sup></span> eV
+      electronically and <span class="mono">EDIFFG = -0.05</span> eV/&Aring; on forces,
+      with Gaussian smearing (<span class="mono">ISMEAR = 0</span>,
+      <span class="mono">SIGMA = 0.1</span>) and
+      <span class="mono">PREC = Accurate</span>. k-point grids are &Gamma;-centred and
+      sized from the cell:</p>
+      <dl>
+        <dt>Bulk</dt>
+        <dd>ENCUT 520 eV &middot; full cell relaxation (ISIF 3) &middot;
+            k-grid ⌈50/a⌉ &times; ⌈50/b⌉ &times; ⌈50/c⌉</dd>
+        <dt>Surface &amp; adsorbate</dt>
+        <dd>ENCUT 400 eV &middot; ions only, cell fixed (ISIF 0, ISYM 0) &middot;
+            k-grid ⌈30/a⌉ &times; ⌈30/b⌉ &times; 1</dd>
+      </dl>
+      <h3>Free energies</h3>
+      <p>All free energies are referenced to the computational hydrogen electrode and
+      follow the four-electron pathway
+      <span class="mono">* → OH* → O* → OOH* → O₂</span>, whose steps sum to 4.92 eV.
+      Rungs on the diagrams are cumulative &Delta;G, and the highlighted riser is the
+      potential-determining step.</p>
+
+      <h3>Overpotentials</h3>
+      <p>OOH* is never computed directly, so its rung has to be assumed. Two
+      conventions are reported, and both diagrams and the volcano can be switched
+      between them:</p>
+      <ul>
+        <li><b>η<sub>scaling</sub></b> uses the universal scaling relation
+        G(OOH) = G(OH) + 3.2 eV, fixing OOH* relative to OH*.</li>
+        <li><b>η<sub>ideal</sub></b> drops that constraint and lets the last two steps
+        split the remaining energy evenly &mdash; the best a catalyst could achieve if
+        scaling were broken.</li>
+      </ul>
+      <p>In both cases η is the largest step in the ladder minus 1.23 V. The two agree
+      when the O/OH steps limit; where they differ, the gap is how much the scaling
+      relation is costing that site.</p>
+
+      <h3>Stability</h3>
+      <p><b>max ΔG<sub>pbx</sub></b> is the Pourbaix decomposition energy in eV per
+      atom, taken as the worst case across pH 0 and U in 1.2&ndash;2.0 V vs. SHE. Lower
+      is more stable under operating conditions.</p>
+      <p>This comes from
+      <a href="https://doi.org/10.26434/chemrxiv.15003677/v1">AQ-GNoME</a>, not from
+      the calculations on this page: AQ-GNoME's precomputed Pourbaix data is reduced to
+      a single worst-case value over the fixed pH and potential window using its own
+      stability criteria. The screening agent read this column when deciding which
+      materials to pursue, alongside the disorder probabilities and HHI supply-risk
+      scores that AQ-GNoME also supplies.</p>
+
+    </div>
+  </div><!-- /panel-methods -->
+
+  <div class="panel" id="panel-cite" hidden>
+    <div class="prosecard">
+
+      <h3>Licence &mdash; data</h3>
+      <p>The data on this page is released under
+      <a href="https://creativecommons.org/licenses/by-nc/4.0/"><b>CC BY-NC 4.0</b></a>
+      &mdash; <b>non-commercial use only</b>. This follows from the GNoME licence
+      (Google DeepMind, CC BY-NC 4.0), which governs the data this database is
+      derived from.</p>
+      <p>Provided as is, without warranty of any kind; the authors accept no liability
+      arising from its use.</p>
+
+      <h3>How to cite</h3>
+      <p>OER-GNoME is built on the AQ-GNoME database, which is itself derived from
+      GNoME. If you use this dataset, or figures derived from it, please cite this
+      work <b>and</b> the upstream sources it depends on.</p>
+
+      <p><b>This work</b></p>
+      <div class="todo"><b>COMING SOON</b></div>
+
+      <p><b>Required upstream citations</b></p>
+      <ol class="reflist">
+        <li>
+          <span class="why">Ran the calculations. The agentic DFT framework that planned,
+          launched and validated every job in this dataset.</span>
+          Wang, Huang, Zhao, Xu, Zhu, Janssen and Viswanathan.
+          <i>DREAMS: Density Functional Theory Based Research Engine for Agentic
+          Materials Simulation.</i> arXiv:2507.14267 (2025).
+          <a href="https://arxiv.org/abs/2507.14267">arxiv.org/abs/2507.14267</a>
+        </li>
+        <li>
+          <span class="why">Supplied the candidate pool. Every material screened here was
+          selected out of AQ-GNoME, along with the properties the agent reasoned over.</span>
+          Nissen <i>et al.</i>, <i>ChemRxiv</i> (2026).
+          <a href="https://doi.org/10.26434/chemrxiv.15003677/v1">10.26434/chemrxiv.15003677/v1</a>
+        </li>
+        <li>
+          <span class="why">Supplied the crystal structures. Every candidate is a GNoME
+          material, and its GNoME ID is the identifier used throughout this page. This is
+          also the source of the CC BY-NC licence below.</span>
+          Merchant <i>et al.</i>, <i>Nature</i> (2023).
+          <a href="https://doi.org/10.1038/s41586-023-06735-9">10.1038/s41586-023-06735-9</a>
+        </li>
+        <li>
+          <span class="why">Supplied the disorder probabilities. The agent read this column
+          directly when deciding which materials to pursue, and cites it in its recorded
+          reasoning.</span>
+          Jakob <i>et al.</i>, <i>Advanced Materials</i> (2025).
+          <a href="https://doi.org/10.1002/adma.202514226">10.1002/adma.202514226</a>
+        </li>
+        <li>
+          <span class="why">Supplied the HHI supply-risk scores, which the agent used as a
+          cost and criticality proxy when ranking candidates.</span>
+          Gaultois <i>et al.</i>, <i>Chem. Mater.</i> <b>25</b>, 2911&ndash;2920 (2013).
+          <a href="https://doi.org/10.1021/cm400893e">10.1021/cm400893e</a>
+        </li>
+      </ol>
+      <p>Pourbaix stability (<b>max ΔG<sub>pbx</sub></b>) is computed from GNoME and
+      Materials Project data; the Materials Project is licensed CC BY 4.0 and should be
+      acknowledged where those values are reproduced.</p>
+
+      <h3>BibTeX</h3>
+      <div class="citebox" id="citebox"></div>
+
+      <h3>Code</h3>
+      <p>The main code base for this work &mdash; the screening workflow, the agent and
+      the analysis behind this page &mdash; is at
+      <a href="https://github.com/BattModels/material_agent/tree/oer_resume_extented_workflow">github.com/BattModels/material_agent</a>
+      (branch <span class="mono">oer_resume_extented_workflow</span>).</p>
+      <div class="todo"><b>More details coming soon.</b></div>
+
+      <h3>Funding</h3>
+      <ul>
+        <li><b>SUSTAINCELL</b> &mdash; Durable and Sustainable component supply chain
+        for high performance fuel cells and electrolysers. European Commission.</li>
+        <li><b>A high-performance computing infrastructure for data-driven research on
+        sustainable energy materials</b> &mdash; Novo Nordisk Foundation.</li>
+      </ul>
+    </div>
+  </div><!-- /panel-cite -->
+
+</div>
+
+<div id="cpage" hidden></div>
+
+<!-- outside both views, so it is present on every tab and on a candidate page -->
+<footer class="pagefoot" id="pagefoot"></footer>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle" tabindex="-1">
+  <div class="drawerhead">
+    <div>
+      <h2 id="drawerTitle"></h2>
+      <span class="cid" id="drawerId"></span>
+    </div>
+    <button class="closebtn" id="close" aria-label="Close quick view">&times;</button>
+  </div>
+  <div class="drawerbody" id="drawerbody"></div>
+</aside>
+
+<script type="application/json" id="explog-data" data-src="__DATASRC__">__DATA__</script>
+
+<script>
+"use strict";
+
+/* The payload is either inlined in the tag above (single-file build) or fetched
+   from data.json beside the page (static-host build). Same page either way. */
+(function () {
+  const el = document.getElementById("explog-data");
+  const raw = (el.textContent || "").trim();
+  if (raw) { boot(JSON.parse(raw)); return; }
+  const src = el.dataset.src || "data.json";
+  fetch(src)
+    .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+    .then(boot)
+    .catch(e => {
+      document.getElementById("listview").innerHTML =
+        `<div class="empty">Could not load <code>${src}</code> — ${e.message}.<br><br>
+         If you opened this file straight from disk, browsers block the fetch.
+         Serve the folder instead: <code>python -m http.server</code></div>`;
+    });
+})();
+
+function boot(DATA) {
+const CANDS = DATA.candidates;
+const PROCS = DATA.processes;
+
+/* ---------- index processes by candidate ---------- */
+const byCand = new Map();
+for (const p of PROCS) {
+  if (!byCand.has(p.cand)) byCand.set(p.cand, []);
+  byCand.get(p.cand).push(p);
+}
+
+/* ---------- periodic table: [symbol, group, period]; f-block on rows 9-10 ---------- */
+const PTABLE=[["H",1,1],["He",18,1],["Li",1,2],["Be",2,2],["B",13,2],["C",14,2],["N",15,2],["O",16,2],["F",17,2],["Ne",18,2],["Na",1,3],["Mg",2,3],["Al",13,3],["Si",14,3],["P",15,3],["S",16,3],["Cl",17,3],["Ar",18,3],["K",1,4],["Ca",2,4],["Sc",3,4],["Ti",4,4],["V",5,4],["Cr",6,4],["Mn",7,4],["Fe",8,4],["Co",9,4],["Ni",10,4],["Cu",11,4],["Zn",12,4],["Ga",13,4],["Ge",14,4],["As",15,4],["Se",16,4],["Br",17,4],["Kr",18,4],["Rb",1,5],["Sr",2,5],["Y",3,5],["Zr",4,5],["Nb",5,5],["Mo",6,5],["Tc",7,5],["Ru",8,5],["Rh",9,5],["Pd",10,5],["Ag",11,5],["Cd",12,5],["In",13,5],["Sn",14,5],["Sb",15,5],["Te",16,5],["I",17,5],["Xe",18,5],["Cs",1,6],["Ba",2,6],["La",3,9],["Ce",4,9],["Pr",5,9],["Nd",6,9],["Pm",7,9],["Sm",8,9],["Eu",9,9],["Gd",10,9],["Tb",11,9],["Dy",12,9],["Ho",13,9],["Er",14,9],["Tm",15,9],["Yb",16,9],["Lu",17,9],["Hf",4,6],["Ta",5,6],["W",6,6],["Re",7,6],["Os",8,6],["Ir",9,6],["Pt",10,6],["Au",11,6],["Hg",12,6],["Tl",13,6],["Pb",14,6],["Bi",15,6],["Po",16,6],["At",17,6],["Rn",18,6],["Fr",1,7],["Ra",2,7],["Ac",3,10],["Th",4,10],["Pa",5,10],["U",6,10],["Np",7,10],["Pu",8,10],["Am",9,10],["Cm",10,10],["Bk",11,10],["Cf",12,10],["Es",13,10],["Fm",14,10],["Md",15,10],["No",16,10],["Lr",17,10],["Rf",4,7],["Db",5,7],["Sg",6,7],["Bh",7,7],["Hs",8,7],["Mt",9,7],["Ds",10,7],["Rg",11,7],["Cn",12,7],["Nh",13,7],["Fl",14,7],["Mc",15,7],["Lv",16,7],["Ts",17,7],["Og",18,7]];
+
+// "Fe(PtO3)2" -> {Fe, Pt, O}
+const SYMRE = /[A-Z][a-z]?/g;
+function elemsOf(c) {
+  if (!c._els) c._els = new Set(String(c.formula || "").match(SYMRE) || []);
+  return c._els;
+}
+
+const ELEM_N = new Map();
+for (const c of CANDS) for (const s of elemsOf(c)) ELEM_N.set(s, (ELEM_N.get(s) || 0) + 1);
+const ELEM_MAX = Math.max(1, ...ELEM_N.values());
+
+/* ---------- volcano source data ----------
+   The descriptor and both overpotentials live on the adsorption processes,
+   not on the candidate row, so points are sites joined back to their candidate.
+   Stored η values are used as-is; they are the workflow's source of truth.   */
+const SITES = PROCS
+  .filter(p => p.gO !== null && p.gO !== undefined && p.gOH !== null && p.gOH !== undefined)
+  .map(p => ({
+    pid: p.id, cand: p.cand,
+    x: p.gO - p.gOH,   // descriptor
+    y: p.gOH,          // second descriptor
+    gO: p.gO,
+    eta_scaling: p.eta_scaling, eta_ideal: p.eta_ideal,
+    term: p.term, site: p.site,
+  }));
+
+function bestPerCandidate(list, metric) {
+  const m = new Map();
+  for (const s of list) {
+    const v = s[metric];
+    if (v === null || v === undefined) continue;
+    const b = m.get(s.cand);
+    if (!b || v < b[metric]) m.set(s.cand, s);
+  }
+  return [...m.values()];
+}
+
+/* ---------- helpers ---------- */
+const esc = s => String(s ?? "").replace(/[&<>"]/g, ch =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+
+// Fe(PtO3)2 -> Fe(PtO<sub>3</sub>)<sub>2</sub>
+const formula = f => esc(f).replace(/([A-Za-z\)\]])(\d+)/g, "$1<sub>$2</sub>");
+
+const fx = (v, n) => (v === null || v === undefined) ? '<span class="na">&mdash;</span>' : Number(v).toFixed(n);
+
+const DECISIONS = [
+  { key: "High priority",   tok: "--d-high" },
+  { key: "Medium priority", tok: "--d-med"  },
+  { key: "Low priority",    tok: "--d-low"  },
+  { key: "Sufficient",      tok: "--d-suf"  },
+  { key: "Abandon",         tok: "--d-aba"  },
+];
+
+const decTok = d => (DECISIONS.find(x => x.key === d) || { tok: "--ink-3" }).tok;
+
+function decPill(d) {
+  if (!d) return '<span class="na">&mdash;</span>';
+  const c = `var(${decTok(d)})`;
+  return `<span class="pill" style="color:${c};border-color:color-mix(in srgb,${c} 40%,transparent);background:color-mix(in srgb,${c} 12%,var(--surface))">${esc(d)}</span>`;
+}
+
+function statusKind(s) {
+  if (!s) return "--ink-3";
+  if (s.startsWith("unrecoverable")) return "--s-unrec";
+  if (s === "completed") return "--s-ok";
+  if (s === "running") return "--s-run";
+  if (s === "failed") return "--s-fail";
+  return "--ink-3";
+}
+
+function statusPill(s) {
+  const c = `var(${statusKind(s)})`;
+  const short = !s ? "unknown" : (s.startsWith("unrecoverable") ? "unrecoverable" : s);
+  return `<span class="pill" title="${esc(s)}" style="color:${c};border-color:color-mix(in srgb,${c} 40%,transparent);background:color-mix(in srgb,${c} 12%,var(--surface))">${esc(short)}</span>`;
+}
+
+// four-segment pipeline indicator: bulk -> surface -> O -> OH
+function stages(c) {
+  const steps = [
+    ["bulk", c.bulk_s, c.bulk_f],
+    ["surface", c.surf_s, c.surf_f],
+    ["O*", c.O_s, c.O_f],
+    ["OH*", c.OH_s, c.OH_f],
+  ];
+  return '<span class="stages">' + steps.map(([n, s, f]) => {
+    const cls = (f > 0) ? "full" : (s > 0 ? "part" : "");
+    const t = `${n}: ${f ?? 0} finalized / ${s ?? 0} started`;
+    return `<i class="stg ${cls}" title="${esc(t)}"></i>`;
+  }).join("") + "</span>";
+}
+
+/* ---------- symbol labels ----------
+   Written as markup rather than plain text so the subscripts render, and kept
+   in one place so the table, the drawer and the candidate page agree.       */
+const ETA_SCALING = "η<sub>scaling</sub>";
+const ETA_IDEAL   = "η<sub>ideal</sub>";
+const DG_PBX      = "max ΔG<sub>pbx</sub>";
+const DG_O_DEV    = "ΔG(O) dev";
+
+/* ---------- work status ----------
+   Queued work counts as active: a pending job will still change the result. */
+const ACTIVE_STATUS = new Set(["running", "pending"]);
+const ACTIVE_N = new Map();
+for (const p of PROCS) {
+  if (ACTIVE_STATUS.has(p.status)) ACTIVE_N.set(p.cand, (ACTIVE_N.get(p.cand) || 0) + 1);
+}
+
+function statusOf(c) {
+  if (c.state === "failed") return { rank: 2, label: "Failed", tok: "--s-fail" };
+  const n = ACTIVE_N.get(c.id) || 0;
+  if (n) return { rank: 0, label: `${n} active job${n === 1 ? "" : "s"}`, tok: "--s-run" };
+  return { rank: 1, label: "No active jobs", tok: "--ink-3" };
+}
+
+function statusCell(c) {
+  const s = statusOf(c);
+  const col = `var(${s.tok})`;
+  return `<span class="pill" style="color:${col};border-color:color-mix(in srgb,${col} 40%,transparent);` +
+         `background:color-mix(in srgb,${col} 12%,var(--surface))">${esc(s.label)}</span>`;
+}
+
+/* ---------- columns ----------
+   `type` drives sorting, `align` drives layout — they are not the same thing:
+   Status sorts on a numeric rank but must stay left-aligned.               */
+const COLS = [
+  { id: "formula",     label: "Formula",   get: c => c.formula,     render: c => `<span class="formula">${formula(c.formula)}</span>`, type: "s" },
+  { id: "id",          label: "GNoME ID", get: c => c.id,          render: c => `<span class="cid">${esc(c.id)}</span>`, type: "s" },
+  { id: "status",      label: "Status",    get: c => statusOf(c).rank, render: statusCell, type: "n" },
+  { id: "stages",      label: "Pipeline",  get: c => (c.bulk_f ?? 0) + (c.surf_f ?? 0) + (c.O_f ?? 0) + (c.OH_f ?? 0), render: stages, type: "n",
+    title: "bulk → surface → O* → OH*; filled where finalized, half where started" },
+  { id: "eta_scaling", label: ETA_SCALING, unit: "V",     get: c => c.eta_scaling, render: c => fx(c.eta_scaling, 2), type: "n", align: "right" },
+  { id: "eta_ideal",   label: ETA_IDEAL,   unit: "V",     get: c => c.eta_ideal,   render: c => fx(c.eta_ideal, 2),   type: "n", align: "right" },
+  { id: "gO_dev",      label: "ΔG(O) dev", unit: "eV",    get: c => c.gO_dev,      render: c => fx(c.gO_dev, 2),      type: "n", align: "right" },
+  { id: "pourbaix",    label: DG_PBX,      unit: "eV/atom", get: c => c.pourbaix,    render: c => fx(c.pourbaix, 3),    type: "n", align: "right",
+    title: "max_dG_U[1.2,2.0]_pH0 — Pourbaix decomposition energy over the 1.2–2.0 V window at pH 0" },
+];
+
+/* ---------- state ---------- */
+const state = {
+  q: "",
+  decisions: new Set(),
+  states: new Set(),
+  elems: new Map(),   // symbol -> 1 (require) | -1 (exclude)
+  metric: "eta_scaling",
+  vmode: "best",
+  cmap: "crest",            // volcano field colormap
+  tab: "explore",           // active top-level tab
+  oOutcome: true,           // O-screening plot: draw the OH drop lines
+  fedU: 0,                  // applied potential for the free energy diagrams
+  fedMode: "scaling",       // OOH* rung: scaling relation | ideal split
+  colorMode: "element",     // structure colouring: element | adsorbate (ASE tags)
+  repeatCell: false,        // ASE shows the cell contents only; opt in to images
+  showBonds: false,         // ASE's viewer draws no bonds by default
+  completeOnly: false,
+  sort: "eta_scaling",
+  dir: 1,
+  selected: null,
+};
+
+/* ---------- filtering ---------- */
+function haystack(c) {
+  if (c._hay === undefined) {
+    c._hay = [
+      c.formula, c.id, c.decision, c.reason, c.notes,
+      ...(c.rounds || []).flatMap(r => [r.summary, r.plan]),
+    ].filter(Boolean).join(" ").toLowerCase();
+  }
+  return c._hay;
+}
+
+function filtered() {
+  const q = state.q.trim().toLowerCase();
+  return CANDS.filter(c => {
+    if (state.decisions.size && !state.decisions.has(c.decision ?? "Unassigned")) return false;
+    if (state.states.size && !state.states.has(c.state)) return false;
+    if (state.completeOnly && c.eta_scaling === null) return false;
+    if (state.elems.size) {
+      const els = elemsOf(c);
+      // required elements are AND-ed; any excluded element disqualifies
+      for (const [sym, mode] of state.elems) {
+        if (mode === 1 && !els.has(sym)) return false;
+        if (mode === -1 && els.has(sym)) return false;
+      }
+    }
+    if (q && !haystack(c).includes(q)) return false;
+    return true;
+  });
+}
+
+// nulls always sink to the bottom, whichever direction we sort
+function sorted(rows) {
+  const col = COLS.find(c => c.id === state.sort);
+  const g = col.get, dir = state.dir;
+  return rows.slice().sort((a, b) => {
+    const x = g(a), y = g(b);
+    const xn = x === null || x === undefined || x === "";
+    const yn = y === null || y === undefined || y === "";
+    if (xn && yn) return 0;
+    if (xn) return 1;
+    if (yn) return -1;
+    if (col.type === "n") return dir * (x - y);
+    return dir * String(x).localeCompare(String(y));
+  });
+}
+
+/* ---------- render: header ---------- */
+function renderHead() {
+  document.getElementById("headrow").innerHTML = COLS.map(c => {
+    const right = c.align === "right" ? " right" : "";
+    const dir = state.sort === c.id ? state.dir : 0;
+    const arrow = dir === 1 ? "↑" : "↓";
+    const unit = c.unit ? ` <span style="opacity:.6;font-weight:400">(${c.unit})</span>` : "";
+    const title = c.title ? ` title="${esc(c.title)}"` : "";
+    return `<th class="sortable${right}" data-col="${c.id}" data-dir="${dir}"${title}>${c.label}${unit}<span class="arrow">${arrow}</span></th>`;
+  }).join("");
+
+  document.querySelectorAll("th[data-col]").forEach(th => {
+    th.addEventListener("click", () => {
+      const id = th.dataset.col;
+      if (state.sort === id) state.dir = -state.dir;
+      else { state.sort = id; state.dir = (COLS.find(c => c.id === id).type === "n") ? 1 : 1; }
+      render();
+    });
+  });
+}
+
+/* ---------- render: table ---------- */
+function render() {
+  renderHead();
+  const rows = sorted(filtered());
+  const tb = document.getElementById("tbody");
+
+  if (!rows.length) {
+    tb.innerHTML = `<tr><td colspan="${COLS.length}"><div class="empty">No candidates match these filters.</div></td></tr>`;
+  } else {
+    tb.innerHTML = rows.map(c => {
+      const sel = state.selected === c.id ? ' aria-selected="true"' : "";
+      return `<tr data-id="${esc(c.id)}"${sel} tabindex="0">` + COLS.map(col => {
+        const cls = col.align === "right" ? ' class="num"' : "";
+        return `<td${cls}>${col.render(c)}</td>`;
+      }).join("") + "</tr>";
+    }).join("");
+
+    tb.querySelectorAll("tr[data-id]").forEach(tr => {
+      const open = () => openDrawer(tr.dataset.id);
+      tr.addEventListener("click", open);
+      tr.addEventListener("keydown", e => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
+      });
+    });
+  }
+
+  document.getElementById("count").textContent =
+    `${rows.length} of ${CANDS.length} candidates`;
+
+  renderChips();
+  renderPtable();
+  renderVolcano(rows);
+}
+
+/* ---------- render: chips + mix ---------- */
+function renderChips() {
+  const pool = CANDS;
+  const stateCounts = {};
+  for (const c of pool) stateCounts[c.state] = (stateCounts[c.state] || 0) + 1;
+
+  document.getElementById("statechips").innerHTML =
+    Object.entries(stateCounts).sort((a, b) => b[1] - a[1]).map(([k, n]) =>
+      `<button class="chip" data-state="${esc(k)}" aria-pressed="${state.states.has(k)}">${esc(k)}<span class="n">${n}</span></button>`
+    ).join("");
+
+  document.querySelectorAll("[data-state]").forEach(b => {
+    b.addEventListener("click", () => {
+      const k = b.dataset.state;
+      state.states.has(k) ? state.states.delete(k) : state.states.add(k);
+      render();
+    });
+  });
+
+  document.getElementById("completeToggle").setAttribute("aria-pressed", String(state.completeOnly));
+}
+
+/* ---------- render: 2-D volcano ----------
+   x = ΔG(O) − ΔG(OH),  y = ΔG(OH).  η is a field over both descriptors:
+     OOH scaling : η = max( y, x, 3.2 − x, 1.72 − y ) − 1.23
+     ideal OOH   : η = max( y, x, (4.92 − G(O)) / 2 ) − 1.23
+   Both reproduce the workflow's stored η exactly (0 / 98 mismatches), so each
+   point's η equals the field value underneath it. Since η is a max of linear
+   terms, every iso-η contour is an exact polygon — a rectangle for the scaling
+   field, a triangle for the ideal one — so bands are drawn, never rasterised.
+   Axis domains are fixed to the full dataset so the plot cannot rescale
+   underneath you while filtering.                                            */
+const VW = 800, VH = 470, VM = { l: 66, r: 22, t: 20, b: 56 };
+const VPW = VW - VM.l - VM.r, VPH = VH - VM.t - VM.b;
+const VX0 = 0.0, VX1 = 3.0, VY0 = -0.7, VY1 = 2.7;
+
+const vsx = x => VM.l + ((x - VX0) / (VX1 - VX0)) * VPW;
+const vsy = y => VM.t + ((VY1 - y) / (VY1 - VY0)) * VPH;   // G(OH) increases upward
+
+const FIELD = {
+  eta_scaling: (x, y) => Math.max(y, x, 3.2 - x, 1.72 - y) - 1.23,
+  eta_ideal:   (x, y) => Math.max(y, x, (4.92 - (x + y)) / 2) - 1.23,
+};
+
+/* Colormaps sampled at 33 stops from matplotlib / seaborn and lerped between.
+   Sampled rather than approximated: Turbo's published polynomial returns a
+   brown near t=0 instead of #30123B, right where the volcano optimum sits.
+
+   Default is crest. White points, grid and annotations sit on top of this
+   field, and a light colormap swallows them — over this plot's area, white
+   drops below 2:1 contrast on 55% of Turbo but only 4% of crest.          */
+const CMAPS = {
+  crest:   "A5CD909CC89193C4918AC09181BC9178B89170B39068AF9061AA905AA69053A1904E9D9048988F43938F3E8E8E388A8E33858D2E808D297B8C24778B20728B1E6D8A1C68891D63881E5D86205885225283244D8027477D29427A2A3C772B36742C3172",
+  mako:    "0B04051409101C101C2416282B1C3531214237284F3B2E5D3E356B403C794143873F4C923B5698385F9C36699F3572A1357BA33484A5348DA73496A9359FAB37A8AC3CB1AD42B9AD4BC2AD57CBAD6AD2AD82D8B099DDB6AEE3C0C0E9CCD0EFD9DEF5E5",
+  cividis: "00224E00285B002E6A0533711A386F273E6E32436D3B496C434E6C4B546C535A6D5A5F6E61656F686A716F70737676767D7C788482798C8878938E789B9476A39A74ABA072B4A76FBCAE6CC4B468CDBB63D5C25EDEC958E7D150F0D846F9E03AFEE838",
+  viridis: "440154470D6048186A482374472D7B4537814240863E49893B528B375B8D33638D2F6B8E2C728E297A8E26828E23898E21918C1F988B1FA08822A78528AE8032B67A3FBC734EC36B5EC96270CF5784D44B98D83EADDC30C2DF23D8E219ECE51BFDE725",
+  turbo:   "30123B392A734040A24456C7466BE34680F64294FF37A8FA28BCEB1CCDD818DDC21FE9AF32F2984EF97D6DFE628BFF4BA4FC3CB9F635CDEC34DFDF37EECF3AF8BE39FDAC34FE962BFB7E21F46617EB500EDF3F08D02F05BE2102A91601920B017A0403",
+};
+
+const CMAP_LABEL = { crest: "Crest", mako: "Mako", cividis: "Cividis", viridis: "Viridis", turbo: "Turbo" };
+
+function cmap(t) {
+  const tbl = CMAPS[state.cmap] || CMAPS.crest;
+  t = Math.max(0, Math.min(1, t));
+  const n = tbl.length / 6 - 1;
+  const f = t * n, i = Math.min(n - 1, Math.floor(f)), u = f - i;
+  const c = (stop, k) => parseInt(tbl.substr(stop * 6 + k * 2, 2), 16);
+  const mix = k => Math.round(c(i, k) + (c(i + 1, k) - c(i, k)) * u);
+  return `rgb(${mix(0)},${mix(1)},${mix(2)})`;
+}
+
+// one fixed scale for both fields: 0, 0.2, 0.4 ... 2.0
+const VRANGE = { eta_scaling: [0.0, 2.0], eta_ideal: [0.0, 2.0] };
+const VSTEP = 0.2;
+
+function levelsFor(metric) {
+  const [lo, hi] = VRANGE[metric];
+  const out = [];
+  for (let v = hi; v >= lo - 1e-9; v -= VSTEP) out.push(Number(v.toFixed(2)));
+  return out;                      // outermost (worst η) first
+}
+
+const FIELD_LABEL = { eta_scaling: "η with OOH scaling", eta_ideal: "η with ideal OOH" };
+
+/* The region where every reaction step is ≤ c + 1.23, or null when that region
+   is empty. The null case is essential: the scaling field cannot go below
+   0.37 V, so for c < 0.37 the bounds invert (x from 1.97−c down to 1.23+c) and
+   the polygon would silently render back-to-front as a spurious block sitting
+   on top of the real contours. */
+function contour(c, metric) {
+  const k = 1.23 + c;
+  if (metric === "eta_scaling") {
+    // y ≤ k, x ≤ k, x ≥ 1.97 − c, y ≥ 0.49 − c  →  axis-aligned rectangle
+    const x0 = 1.97 - c, y0 = 0.49 - c;
+    if (x0 > k || y0 > k) return null;
+    return [[x0, y0], [k, y0], [k, k], [x0, k]];
+  }
+  // y ≤ k, x ≤ k, x + y ≥ 2.46 − 2c  →  triangle
+  const m = 2.46 - 2 * c;
+  if (m - k > k) return null;
+  return [[m - k, k], [k, k], [k, m - k]];
+}
+
+function renderVolcano(rows) {
+  const host = document.getElementById("vplot");
+  const tip = document.getElementById("vtip");
+  const metric = state.metric;
+  const levels = levelsFor(metric);
+  const [vlo, vhi] = VRANGE[metric];
+  const vnorm = e => (e - vlo) / (vhi - vlo);
+
+  const ids = new Set(rows.map(c => c.id));
+  let pool = SITES.filter(s => ids.has(s.cand) && s[metric] !== null && s[metric] !== undefined);
+  if (state.vmode === "best") pool = bestPerCandidate(pool, metric);
+
+  const inside = pool.filter(s => s.x >= VX0 && s.x <= VX1 && s.y >= VY0 && s.y <= VY1);
+  const clipped = pool.length - inside.length;
+  const withData = new Set(pool.map(s => s.cand)).size;
+
+  document.getElementById("vcaption").innerHTML =
+    `${inside.length} point${inside.length === 1 ? "" : "s"} · ` +
+    `${withData} of ${rows.length} filtered candidates have complete energetics` +
+    (clipped ? ` · ${clipped} outside axis range` : "");
+
+  if (!inside.length) {
+    host.innerHTML = `<div class="vempty">No sites with complete O* and OH* energetics match these filters.</div>`;
+    host.appendChild(tip);
+    document.getElementById("vlegend").innerHTML = "";
+    document.getElementById("vscale").innerHTML = "";
+    return;
+  }
+
+  /* --- filled contour bands in Turbo, outermost (worst η) first.
+         The base rect covers everything above the top level.              --- */
+  const bands =
+    `<rect x="${VM.l}" y="${VM.t}" width="${VPW}" height="${VPH}" fill="${cmap(1)}"/>` +
+    levels.map(c => {
+      const poly = contour(c, metric);
+      if (!poly) return "";                    // level below this field's floor
+      const pts = poly.map(([x, y]) => `${vsx(x).toFixed(1)},${vsy(y).toFixed(1)}`).join(" ");
+      return `<polygon points="${pts}" fill="${cmap(vnorm(c))}"/>`;
+    }).join("");
+
+  const xticks = [0, 0.5, 1, 1.5, 2, 2.5, 3];
+  const yticks = [-0.5, 0, 0.5, 1, 1.5, 2, 2.5];
+
+  // grid sits on top of the colour field, so it is white rather than themed
+  const gl = 'stroke="#fff" stroke-opacity=".17" stroke-width="1"';
+  const grid =
+    xticks.map(t => `<line ${gl} x1="${vsx(t)}" y1="${VM.t}" x2="${vsx(t)}" y2="${VM.t + VPH}"/>`).join("") +
+    yticks.map(t => `<line ${gl} x1="${VM.l}" y1="${vsy(t)}" x2="${VM.l + VPW}" y2="${vsy(t)}"/>`).join("");
+
+  const axes = `
+    <line class="vaxis" x1="${VM.l}" y1="${VM.t}" x2="${VM.l}" y2="${VM.t + VPH}"/>
+    <line class="vaxis" x1="${VM.l}" y1="${VM.t + VPH}" x2="${VM.l + VPW}" y2="${VM.t + VPH}"/>
+    ${xticks.map(t => `<text class="vtick" x="${vsx(t)}" y="${VM.t + VPH + 17}" text-anchor="middle">${t.toFixed(1)}</text>`).join("")}
+    ${yticks.map(t => `<text class="vtick" x="${VM.l - 9}" y="${vsy(t) + 4}" text-anchor="end">${t.toFixed(1)}</text>`).join("")}
+    <text class="vlab" x="${VM.l + VPW / 2}" y="${VH - 10}" text-anchor="middle">ΔG(O) − ΔG(OH)  (eV)</text>
+    <text class="vlab" transform="translate(16,${VM.t + VPH / 2}) rotate(-90)" text-anchor="middle">ΔG(OH)  (eV)</text>`;
+
+  // markers ride on top of the colour field, so they are white; no labels on the plot
+  const ax = vsx(1.6), a1 = vsy(1.60), a2 = vsy(0.12), ix = vsx(1.23), iy = vsy(1.23);
+  const opt = metric === "eta_scaling"
+    ? `<line x1="${ax}" y1="${a1}" x2="${ax}" y2="${a2}" stroke="#fff" stroke-width="1.8" stroke-dasharray="5 3">
+         <title>optimum ridge — η 0.37 V</title></line>`
+    : `<g><title>ideal — η 0 V</title>
+       <circle cx="${ix}" cy="${iy}" r="4.5" fill="none" stroke="#fff" stroke-width="1.8"/>
+       <line x1="${ix - 10}" y1="${iy}" x2="${ix + 10}" y2="${iy}" stroke="#fff" stroke-width="1.4"/>
+       <line x1="${ix}" y1="${iy - 10}" x2="${ix}" y2="${iy + 10}" stroke="#fff" stroke-width="1.4"/></g>`;
+
+  const r = state.vmode === "best" ? 5.2 : 4.2;
+  const pts = inside.map(s => {
+    const c = CANDS.find(z => z.id === s.cand);
+    const col = "#fff";   // one colour for every point; white reads over Turbo
+    const site = (s.term !== null && s.term !== undefined) ? `term ${s.term} · site ${s.site}` : "";
+    return `<circle class="vpt" cx="${vsx(s.x).toFixed(1)}" cy="${vsy(s.y).toFixed(1)}" r="${r}"
+      fill="${col}" data-cand="${esc(s.cand)}" data-f="${esc(c ? c.formula : s.cand)}"
+      data-e="${Number(s[metric]).toFixed(2)}" data-x="${s.x.toFixed(2)}" data-y="${s.y.toFixed(2)}"
+      data-go="${Number(s.gO).toFixed(2)}" data-d="${esc(c ? (c.decision || "unassigned") : "")}"
+      data-s="${esc(site)}"><title>${esc((c ? c.formula : s.cand) + " — η " + Number(s[metric]).toFixed(2) + " V")}</title></circle>`;
+  }).join("");
+
+  host.innerHTML =
+    `<svg viewBox="0 0 ${VW} ${VH}" role="img" aria-label="Two-dimensional activity volcano: overpotential field over the ΔG(O) − ΔG(OH) and ΔG(OH) descriptors">
+      <defs><clipPath id="vclip"><rect x="${VM.l}" y="${VM.t}" width="${VPW}" height="${VPH}"/></clipPath></defs>
+      <g clip-path="url(#vclip)">${bands}${opt}</g>
+      ${grid}${axes}
+      <g clip-path="url(#vclip)">${pts}</g>
+    </svg>`;
+  host.appendChild(tip);
+
+  /* --- legends --- */
+  document.getElementById("vlegend").innerHTML =
+    `<span><i style="background:#fff;border:1px solid #111"></i>${state.vmode === "best" ? "candidate (best site)" : "site"}</span>`;
+
+  // the ramp shows the actual bands, so legend and plot agree; label every other
+  const ramp = levels.slice().reverse();
+  document.getElementById("vscale").innerHTML =
+    `<span class="lbl">${esc(FIELD_LABEL[metric])} (V)</span>` +
+    `<span class="ramp">` + ramp.map((c, i) => {
+      const lab = (i % 2 === 0 || i === ramp.length - 1) ? c.toFixed(2) : "&nbsp;";
+      return `<span class="sw"><i style="background:${cmap(vnorm(c))}"></i>${lab}</span>`;
+    }).join("") + `</span>`;
+
+  /* --- hover + click --- */
+  host.querySelectorAll(".vpt").forEach(el => {
+    el.addEventListener("mouseenter", () => {
+      const b = el.getBoundingClientRect(), h = host.getBoundingClientRect();
+      tip.innerHTML =
+        `<span class="tf">${formula(el.dataset.f)}</span><br>` +
+        `<span class="tm">η ${el.dataset.e} V</span><br>` +
+        `<span class="tm">G(O) ${el.dataset.go} · G(OH) ${el.dataset.y} · Δ ${el.dataset.x}</span>` +
+        (el.dataset.s ? `<br><span class="tm">${esc(el.dataset.s)}</span>` : "") +
+        `<br><span class="tm">${esc(el.dataset.d)}</span>`;
+      tip.style.left = (b.left - h.left + b.width / 2) + "px";
+      tip.style.top = (b.top - h.top - 8) + "px";
+      tip.classList.add("on");
+      el.setAttribute("r", String(r + 2.2));
+    });
+    el.addEventListener("mouseleave", () => {
+      tip.classList.remove("on");
+      el.setAttribute("r", String(r));
+    });
+    el.addEventListener("click", () => openDrawer(el.dataset.cand));
+  });
+}
+
+/* ---------- render: periodic table ---------- */
+const MODE_WORD = { 1: "required", "-1": "excluded" };
+
+function renderPtable() {
+  document.getElementById("ptable").innerHTML = PTABLE.map(([sym, col, r]) => {
+    const n = ELEM_N.get(sym) || 0;
+    const mode = state.elems.get(sym) || 0;
+
+    if (!n) {
+      return `<button class="el off" style="--c:${col};--r:${r}" data-el="${sym}" disabled
+               title="${sym} — not present in this dataset"><span class="sym">${sym}</span></button>`;
+    }
+
+    const cls = "el" + (mode === 1 ? " req" : mode === -1 ? " exc" : "");
+    // untouched cells carry a coverage tint so the table doubles as a map of explored chemistry
+    const tint = mode ? "" : `background:color-mix(in srgb, var(--ink-3) ${Math.round((n / ELEM_MAX) * 24)}%, var(--surface));`;
+    const label = `${sym} — in ${n} of ${CANDS.length} candidates${mode ? " · " + MODE_WORD[mode] : ""}`;
+
+    return `<button class="${cls}" style="--c:${col};--r:${r};${tint}" data-el="${sym}"
+             title="${esc(label)}" aria-label="${esc(label)}"><span class="sym">${sym}</span><span class="cnt">${n}</span></button>`;
+  }).join("");
+
+  document.querySelectorAll("[data-el]:not([disabled])").forEach(b => {
+    b.addEventListener("click", () => {
+      const sym = b.dataset.el;
+      const cur = state.elems.get(sym) || 0;
+      const next = cur === 0 ? 1 : cur === 1 ? -1 : 0;
+      if (next === 0) state.elems.delete(sym); else state.elems.set(sym, next);
+      render();
+      // the button was replaced by the re-render; keep focus on it so the
+      // require -> exclude -> clear cycle stays usable from the keyboard
+      const again = document.querySelector(`[data-el="${sym}"]`);
+      if (again) again.focus();
+    });
+  });
+
+  // summary line
+  const req = [...state.elems].filter(([, m]) => m === 1).map(([s]) => s);
+  const exc = [...state.elems].filter(([, m]) => m === -1).map(([s]) => s);
+  const parts = [];
+  if (req.length) parts.push(`<span class="tagset">must contain ${req.map(s => `<span class="etag req">${s}</span>`).join("")}</span>`);
+  if (exc.length) parts.push(`<span class="tagset">must not contain ${exc.map(s => `<span class="etag exc">${s}</span>`).join("")}</span>`);
+  if (parts.length) parts.push(`<button class="resetbtn" id="clearElems">Clear elements</button>`);
+
+  const host = document.getElementById("ptsummary");
+  host.innerHTML = parts.join("");
+  const ce = document.getElementById("clearElems");
+  if (ce) ce.addEventListener("click", () => { state.elems.clear(); render(); });
+}
+
+/* ---------- adsorption sites + free energy diagrams ----------
+   A site is one (candidate, termination, site index). The O* and OH* processes
+   for that site are merged, so a site carries G(O) from the O run and G(OH) /
+   G(OOH) / η from the OH run. 311 sites exist; 98 have a complete four-step
+   ladder, 144 have G(O) only (the OH run was rejected or never ran).          */
+const SITE_INDEX = new Map();
+
+// per-site metadata pulled from study_obj: site type, adsorption element,
+// neighbouring shell, Miller index and relaxed surface energy
+const SITE_META = new Map();
+for (const m of (DATA.sites || [])) SITE_META.set(m.cand + "|" + m.term + "|" + m.site, m);
+
+const millerStr = m => !m ? "" :
+  "(" + (m.every(v => v >= 0 && v <= 9) ? m.join("") : m.join(" ")) + ")";
+
+// lattice-O sites carry no adsorption-site element by construction
+function siteDescriptor(m) {
+  if (!m) return "";
+  if (m.type === "lattice O" || m.el === "N/A") {
+    return "lattice O" + (m.coord && m.coord !== "N/A" ? ` · coord ${m.coord}` : "");
+  }
+  return `${m.type || "site"} ${m.el || ""}`.trim();
+}
+
+(function buildSites() {
+  const g = new Map();
+  for (const p of PROCS) {
+    if (p.job !== "O_adsorption" && p.job !== "OH_adsorption") continue;
+    if (p.term === null || p.term === undefined || p.site === null || p.site === undefined) continue;
+    const key = p.cand + "|" + p.term + "|" + p.site;
+    if (!g.has(key)) {
+      g.set(key, {
+        cand: p.cand, term: p.term, site: p.site, pids: [], statuses: [],
+        gO: null, gOH: null, gOOH: null, eta_scaling: null, eta_ideal: null,
+      });
+    }
+    const s = g.get(key);
+    s.pids.push(p.id);
+    if (p.status) s.statuses.push(p.status);
+    for (const k of ["gO", "gOH", "gOOH", "eta_scaling", "eta_ideal"]) {
+      if (s[k] === null && p[k] !== null && p[k] !== undefined) s[k] = p[k];
+    }
+  }
+  for (const [key, s] of g) {
+    s.complete = s.gO !== null && s.gOH !== null;
+    s.meta = SITE_META.get(key) || null;
+    if (!SITE_INDEX.has(s.cand)) SITE_INDEX.set(s.cand, []);
+    SITE_INDEX.get(s.cand).push(s);
+  }
+  // complete ladders first (best η first), then G(O)-only, then bare sites
+  for (const arr of SITE_INDEX.values()) {
+    arr.sort((a, b) => {
+      if (a.complete !== b.complete) return a.complete ? -1 : 1;
+      if (a.complete) return a.eta_scaling - b.eta_scaling;
+      if ((a.gO === null) !== (b.gO === null)) return a.gO === null ? 1 : -1;
+      return (a.term - b.term) || (a.site - b.site);
+    });
+  }
+})();
+
+const FED_STATES = ["*", "OH*", "O*", "OOH*", "O₂"];
+
+/* Cumulative free energies of the five intermediates, shifted by the applied
+   potential. OOH* is never computed directly, so its rung comes from one of
+   two assumptions:
+     scaling : G(OOH) = G(OH) + 3.2          (the universal scaling relation)
+     ideal   : G(OOH) = (4.92 + G(O)) / 2    (the last two steps split evenly)
+   The largest step of each ladder, minus 1.23, reproduces η_scaling and
+   η_ideal respectively.                                                     */
+function fedOOH(s) {
+  if (state.fedMode === "ideal") {
+    return (s.gO === null || s.gO === undefined) ? null : (4.92 + s.gO) / 2;
+  }
+  return s.gOOH;
+}
+
+function fedLevels(s, U) {
+  const raw = [0, s.gOH, s.gO, fedOOH(s), 4.92];
+  return raw.map((v, i) => (v === null || v === undefined) ? null : v - i * U);
+}
+
+// Onset is taken from the ladder itself, not from 1.23 + stored η — the stored
+// value is rounded to 2 dp, which would leave the limiting step visibly off zero.
+function fedU(s, mode) {
+  if (mode !== "onset") return mode;
+  const lv = fedLevels(s, 0);
+  let m = 0;
+  for (let i = 1; i < 5; i++) {
+    if (lv[i] === null || lv[i - 1] === null) continue;
+    m = Math.max(m, lv[i] - lv[i - 1]);
+  }
+  return m;
+}
+
+// shared y-range across a candidate's sites so the diagrams stay comparable
+function fedDomain(sites, mode) {
+  let lo = Infinity, hi = -Infinity;
+  for (const s of sites) {
+    for (const v of fedLevels(s, fedU(s, mode))) {
+      if (v === null) continue;
+      lo = Math.min(lo, v); hi = Math.max(hi, v);
+    }
+  }
+  if (!isFinite(lo)) { lo = 0; hi = 4.92; }
+  const pad = Math.max(0.35, (hi - lo) * 0.12);
+  return [lo - pad, hi + pad];
+}
+
+function fedSVG(s, dom, mode, activeRung) {
+  const U = fedU(s, mode);
+  const lv = fedLevels(s, U);
+  const W = 480, H = 186, L = 46, R = 12, T = 16, B = 34;
+  const pw = W - L - R, ph = H - T - B;
+  const [lo, hi] = dom;
+  const sy = v => T + ((hi - v) / (hi - lo)) * ph;
+  const slot = pw / 5;
+  const half = slot * 0.28;
+  const cx = i => L + slot * (i + 0.5);
+
+  // potential-determining step = largest rise between consecutive known levels
+  let pds = -1, best = -Infinity;
+  for (let i = 1; i < 5; i++) {
+    if (lv[i] === null || lv[i - 1] === null) continue;
+    const d = lv[i] - lv[i - 1];
+    if (d > best) { best = d; pds = i; }
+  }
+
+  const gridVals = [];
+  for (let v = Math.ceil(lo * 2) / 2; v <= hi; v += 0.5) gridVals.push(Number(v.toFixed(2)));
+
+  const grid = gridVals.map(v =>
+    `<line class="vgrid" x1="${L}" y1="${sy(v).toFixed(1)}" x2="${W - R}" y2="${sy(v).toFixed(1)}"/>` +
+    `<text class="fedtick" x="${L - 6}" y="${(sy(v) + 3.5).toFixed(1)}" text-anchor="end">${v.toFixed(1)}</text>`
+  ).join("");
+
+  const plats = lv.map((v, i) => {
+    if (v === null) {
+      return `<line class="fedplat miss" x1="${(cx(i) - half).toFixed(1)}" y1="${sy((lo + hi) / 2).toFixed(1)}"
+               x2="${(cx(i) + half).toFixed(1)}" y2="${sy((lo + hi) / 2).toFixed(1)}"/>`;
+    }
+    return `<line class="fedplat" x1="${(cx(i) - half).toFixed(1)}" y1="${sy(v).toFixed(1)}"
+             x2="${(cx(i) + half).toFixed(1)}" y2="${sy(v).toFixed(1)}"/>`;
+  }).join("");
+
+  const links = [];
+  for (let i = 1; i < 5; i++) {
+    const a = lv[i - 1], b = lv[i];
+    if (a === null || b === null) {
+      links.push(`<line class="fedlink" x1="${(cx(i - 1) + half).toFixed(1)}" y1="${sy(a === null ? (lo + hi) / 2 : a).toFixed(1)}"
+                   x2="${(cx(i) - half).toFixed(1)}" y2="${sy(b === null ? (lo + hi) / 2 : b).toFixed(1)}"/>`);
+      links.push(`<text class="feddg" x="${((cx(i - 1) + cx(i)) / 2).toFixed(1)}" y="${(sy((lo + hi) / 2) - 6).toFixed(1)}" text-anchor="middle">?</text>`);
+      continue;
+    }
+    const isPds = i === pds;
+    links.push(`<line class="fedlink${isPds ? " pds" : ""}" x1="${(cx(i - 1) + half).toFixed(1)}" y1="${sy(a).toFixed(1)}"
+                 x2="${(cx(i) - half).toFixed(1)}" y2="${sy(b).toFixed(1)}"/>`);
+    links.push(`<text class="feddg${isPds ? " pds" : ""}" x="${((cx(i - 1) + cx(i)) / 2).toFixed(1)}"
+                 y="${(Math.min(sy(a), sy(b)) - 5).toFixed(1)}" text-anchor="middle">${(b - a >= 0 ? "+" : "") + (b - a).toFixed(2)}</text>`);
+  }
+
+  const labels = FED_STATES.map((t, i) =>
+    `<text class="fedstate" x="${cx(i).toFixed(1)}" y="${H - 12}" text-anchor="middle">${t}</text>`
+  ).join("");
+
+  // one transparent hit target per intermediate, so rungs are clickable
+  const hits = FED_STATES.map((_, i) =>
+    `<rect class="fedslot${i === activeRung ? " on" : ""}" data-rung="${i}"
+       x="${(L + slot * i).toFixed(1)}" y="${T}" width="${slot.toFixed(1)}" height="${ph}"><title>${FED_STATES[i]}</title></rect>`
+  ).join("");
+
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Free energy diagram at ${U.toFixed(2)} volts">
+    ${hits}${grid}${links.join("")}${plats}${labels}
+    <text class="fedtick" x="${L - 6}" y="${T - 5}" text-anchor="end">eV</text>
+  </svg>`;
+}
+
+/* ---------- structure viewer ----------
+   Hand-rolled canvas renderer: orthographic projection, depth-sorted balls and
+   sticks, drag to rotate. No external library, so it works identically inside a
+   CSP-restricted artifact and on a plain static host.
+   ASE tags drive the "adsorbate" colour mode:
+     4 = adsorbate atoms, 3 = the surface atom it binds to, 1/2 = other
+     identified sites, 0 = slab.                                             */
+const STRUCTS = DATA.structs || {};
+
+const CPK={H:"FFFFFF",He:"D9FFFF",Li:"CC80FF",Be:"C2FF00",B:"FFB5B5",C:"909090",N:"3050F8",O:"FF0D0D",F:"90E050",Ne:"B3E3F5",Na:"AB5CF2",Mg:"8AFF00",Al:"BFA6A6",Si:"F0C8A0",P:"FF8000",S:"FFFF30",Cl:"1FF01F",Ar:"80D1E3",K:"8F40D4",Ca:"3DFF00",Sc:"E6E6E6",Ti:"BFC2C7",V:"A6A6AB",Cr:"8A99C7",Mn:"9C7AC7",Fe:"E06633",Co:"F090A0",Ni:"50D050",Cu:"C88033",Zn:"7D80B0",Ga:"C28F8F",Ge:"668F8F",As:"BD80E3",Se:"FFA100",Br:"A62929",Kr:"5CB8D1",Rb:"702EB0",Sr:"00FF00",Y:"94FFFF",Zr:"94E0E0",Nb:"73C2C9",Mo:"54B5B5",Tc:"3B9E9E",Ru:"248F8F",Rh:"0A7D8C",Pd:"006985",Ag:"C0C0C0",Cd:"FFD98F",In:"A67573",Sn:"668080",Sb:"9E63B5",Te:"D47A00",I:"940094",Xe:"429EB0",Cs:"57178F",Ba:"00C900",La:"70D4FF",Ce:"FFFFC7",Pr:"D9FFC7",Nd:"C7FFC7",Pm:"A3FFC7",Sm:"8FFFC7",Eu:"61FFC7",Gd:"45FFC7",Tb:"30FFC7",Dy:"1FFFC7",Ho:"00FF9C",Er:"00E675",Tm:"00D452",Yb:"00BF38",Lu:"00AB24",Hf:"4DC2FF",Ta:"4DA6FF",W:"2194D6",Re:"267DAB",Os:"266696",Ir:"175487",Pt:"D0D0E0",Au:"FFD123",Hg:"B8B8D0",Tl:"A6544D",Pb:"575961",Bi:"9E4FB5",Po:"AB5C00",At:"754F45",Rn:"428296",Fr:"420066",Ra:"007D00",Ac:"70ABFA",Th:"00BAFF",Pa:"00A1FF",U:"008FFF",Np:"0080FF",Pu:"006BFF",Am:"545CF2",Cm:"785CE3",Bk:"8A4FE3",Cf:"A136D4",Es:"B31FD4",Fm:"B31FBA",Md:"B30DA6",No:"BD0D87",Lr:"C70066",Rf:"CC0059",Db:"D1004F",Sg:"D90045",Bh:"E00038",Hs:"E6002E",Mt:"EB0026",Ds:"999999",Rg:"999999",Cn:"999999",Nh:"999999",Fl:"999999",Mc:"999999",Lv:"999999",Ts:"999999",Og:"999999"};
+
+const RCOV={H:0.31,He:0.28,Li:1.28,Be:0.96,B:0.84,C:0.76,N:0.71,O:0.66,F:0.57,Ne:0.58,Na:1.66,Mg:1.41,Al:1.21,Si:1.11,P:1.07,S:1.05,Cl:1.02,Ar:1.06,K:2.03,Ca:1.76,Sc:1.70,Ti:1.60,V:1.53,Cr:1.39,Mn:1.39,Fe:1.32,Co:1.26,Ni:1.24,Cu:1.32,Zn:1.22,Ga:1.22,Ge:1.20,As:1.19,Se:1.20,Br:1.20,Kr:1.16,Rb:2.20,Sr:1.95,Y:1.90,Zr:1.75,Nb:1.64,Mo:1.54,Tc:1.47,Ru:1.46,Rh:1.42,Pd:1.39,Ag:1.45,Cd:1.44,In:1.42,Sn:1.39,Sb:1.39,Te:1.38,I:1.39,Xe:1.40,Cs:2.44,Ba:2.15,La:2.07,Ce:2.04,Pr:2.03,Nd:2.01,Pm:1.99,Sm:1.98,Eu:1.98,Gd:1.96,Tb:1.94,Dy:1.92,Ho:1.92,Er:1.89,Tm:1.90,Yb:1.87,Lu:1.87,Hf:1.75,Ta:1.70,W:1.62,Re:1.51,Os:1.44,Ir:1.41,Pt:1.36,Au:1.36,Hg:1.32,Tl:1.45,Pb:1.46,Bi:1.48,Po:1.40,At:1.50,Rn:1.50,Fr:2.60,Ra:2.21,Ac:2.15,Th:2.06,Pa:2.00,U:1.96,Np:1.90,Pu:1.87,Am:1.80,Cm:1.69,Bk:2.00,Cf:2.00,Es:2.00,Fm:2.00,Md:2.00,No:2.00,Lr:2.00,Rf:2.00,Db:2.00,Sg:2.00,Bh:2.00,Hs:2.00,Mt:2.00,Ds:2.00,Rg:2.00,Cn:2.00,Nh:2.00,Fl:2.00,Mc:2.00,Lv:2.00,Ts:2.00,Og:2.00};
+
+const rcov = s => RCOV[s] || 1.4;
+const cpk = s => "#" + (CPK[s] || "9AA5AA");
+
+const RUNG_KIND = { 0: "surface", 1: "OH", 2: "O" };   // FED rung -> structure
+const KIND_RUNG = { surface: 0, OH: 1, O: 2 };
+
+// Accepts either a full site object (with .meta) or the trimmed {cand,term,site,lat}
+// copy stored on the card's dataset.
+function isLatticeO(s) {
+  if (typeof s.lat === "boolean") return s.lat;
+  const m = s.meta;
+  return !!(m && (m.type === "lattice O" || m.el === "N/A"));
+}
+
+function kindLabel(s, k) {
+  if (k === "surface") return isLatticeO(s) ? "* (vacancy)" : "*";
+  return k === "O" ? "O*" : "OH*";
+}
+
+/* On a lattice-oxygen site the stored slots are offset by one relative to their
+   names: the "surface" already carries the lattice O, so it IS the O* state,
+   and the "O" slot is that same surface with the oxygen removed, so it is the
+   bare * state. Verified by atom count — lattice sites have n(O) = n(surface)−1
+   where on-top sites have +1. Historical naming in the study class; swap here
+   so the rungs show the right geometry.                                      */
+function structKey(s, kind) {
+  if (isLatticeO(s)) {
+    if (kind === "surface") return `${s.cand}|${s.term}|${s.site}|O`;
+    if (kind === "O") return `${s.cand}|${s.term}|surface`;
+  }
+  return kind === "surface"
+    ? `${s.cand}|${s.term}|surface`
+    : `${s.cand}|${s.term}|${s.site}|${kind}`;
+}
+
+function kindsFor(s) {
+  return ["surface", "OH", "O"].filter(k => STRUCTS[structKey(s, k)]);
+}
+
+/* --- bonds, minimum-image in the two periodic directions, computed once --- */
+const BOND_CACHE = new Map();
+
+function bondsOf(key) {
+  if (BOND_CACHE.has(key)) return BOND_CACHE.get(key);
+  const st = STRUCTS[key];
+  const out = [];
+  if (!st) { BOND_CACHE.set(key, out); return out; }
+  const n = st.s.length, p = st.p, c = st.c;
+  const av = [c[0], c[1], c[2]], bv = [c[3], c[4], c[5]];
+
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const cut = (rcov(st.s[i]) + rcov(st.s[j])) * 1.20;
+      let bestD = null, bestLen = Infinity;
+      for (let na = -1; na <= 1; na++) {
+        for (let nb = -1; nb <= 1; nb++) {
+          const dx = p[j * 3]     - p[i * 3]     + na * av[0] + nb * bv[0];
+          const dy = p[j * 3 + 1] - p[i * 3 + 1] + na * av[1] + nb * bv[1];
+          const dz = p[j * 3 + 2] - p[i * 3 + 2] + na * av[2] + nb * bv[2];
+          const L = Math.hypot(dx, dy, dz);
+          if (L < bestLen) { bestLen = L; bestD = [dx, dy, dz]; }
+        }
+      }
+      if (bestLen < cut && bestLen > 0.4) out.push({ i, j, d: bestD });
+    }
+  }
+  BOND_CACHE.set(key, out);
+  return out;
+}
+
+/* --- colour resolution (canvas cannot use CSS custom properties) --- */
+function palette() {
+  const cs = getComputedStyle(document.documentElement);
+  const g = n => cs.getPropertyValue(n).trim() || "#888";
+  return {
+    ads: g("--d-high"), site: g("--accent"), other: g("--d-low"),
+    slab: g("--ink-3"), line: g("--line"), ink: g("--ink-3"),
+  };
+}
+
+function shade(hex, amt) {
+  const h = hex.replace("#", "");
+  const full = h.length === 3 ? h.split("").map(x => x + x).join("") : h;
+  const n = parseInt(full, 16);
+  let r = (n >> 16) & 255, gg = (n >> 8) & 255, b = n & 255;
+  if (amt > 0) { r += (255 - r) * amt; gg += (255 - gg) * amt; b += (255 - b) * amt; }
+  else { r *= (1 + amt); gg *= (1 + amt); b *= (1 + amt); }
+  return `rgb(${r | 0},${gg | 0},${b | 0})`;
+}
+
+function atomStyle(sym, tag, mode, pal) {
+  if (mode === "element") return { col: cpk(sym), alpha: 1 };
+  if (tag === 4) return { col: pal.ads, alpha: 1 };
+  if (tag === 3) return { col: pal.site, alpha: 1 };
+  if (tag === 1 || tag === 2) return { col: pal.other, alpha: .95 };
+  return { col: pal.slab, alpha: .5 };
+}
+
+function drawStructure(cv) {
+  const key = cv._key;
+  const st = STRUCTS[key];
+  const ctx = cv.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  const wCss = cv.clientWidth, hCss = cv.clientHeight;
+  // a hidden or unlaid-out canvas has no size; drawing now would bake a
+  // wrong-resolution bitmap that only corrects itself on the next redraw
+  if (!wCss || !hCss) return;
+  const bw = Math.round(wCss * dpr), bh = Math.round(hCss * dpr);
+  if (cv.width !== bw || cv.height !== bh) {
+    cv.width = bw;
+    cv.height = bh;
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, wCss, hCss);
+  if (!st) return;
+
+  const pal = palette();
+  const mode = state.colorMode;
+  const th = cv._th, ph = cv._ph;
+  const ct = Math.cos(th), stq = Math.sin(th), cp = Math.cos(ph), sp = Math.sin(ph);
+
+  const proj = (x, y, z) => {
+    const x1 = x * ct - y * stq;
+    const y1 = x * stq + y * ct;
+    return [x1, y1 * cp + z * sp, -y1 * sp + z * cp];   // sx, sy(up), depth
+  };
+
+  const n = st.s.length, p = st.p, c = st.c;
+  const av = [c[0], c[1], c[2]], bv = [c[3], c[4], c[5]];
+  const reps = state.repeatCell
+    ? [[-1,-1],[-1,0],[-1,1],[0,-1],[0,0],[0,1],[1,-1],[1,0],[1,1]]
+    : [[0,0]];
+
+  // Bounds include the radii, as ASE's own bbox does, so full-size spheres fit.
+  // Measured on the home cell only, so zoom is stable when repeat is toggled.
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const [sx, sy] = proj(p[i * 3], p[i * 3 + 1], p[i * 3 + 2]);
+    const rr = rcov(st.s[i]);
+    if (sx - rr < minX) minX = sx - rr;
+    if (sx + rr > maxX) maxX = sx + rr;
+    if (sy - rr < minY) minY = sy - rr;
+    if (sy + rr > maxY) maxY = sy + rr;
+  }
+  const spanX = Math.max(1e-3, maxX - minX), spanY = Math.max(1e-3, maxY - minY);
+  const scale = Math.min(wCss / (spanX * 1.04), hCss / (spanY * 1.04));
+  const cxp = wCss / 2 - ((minX + maxX) / 2) * scale;
+  const cyp = hCss / 2 + ((minY + maxY) / 2) * scale;
+  const X = sx => cxp + sx * scale;
+  const Y = sy => cyp - sy * scale;
+
+  /* --- sticks (off by default: ASE's viewer draws none) --- */
+  const bonds = state.showBonds ? bondsOf(key) : [];
+  ctx.lineCap = "round";
+  ctx.lineWidth = Math.max(1, scale * 0.075);
+  ctx.strokeStyle = mode === "element" ? shade(pal.line, 0) : pal.line;
+  ctx.globalAlpha = mode === "element" ? .85 : .5;
+  for (const [ra, rb] of reps) {
+    const ox = ra * av[0] + rb * bv[0], oy = ra * av[1] + rb * bv[1], oz = ra * av[2] + rb * bv[2];
+    for (const bd of bonds) {
+      const i = bd.i;
+      const x0 = p[i * 3] + ox, y0 = p[i * 3 + 1] + oy, z0 = p[i * 3 + 2] + oz;
+      const a = proj(x0, y0, z0);
+      const b = proj(x0 + bd.d[0], y0 + bd.d[1], z0 + bd.d[2]);
+      ctx.beginPath();
+      ctx.moveTo(X(a[0]), Y(a[1]));
+      ctx.lineTo(X(b[0]), Y(b[1]));
+      ctx.stroke();
+    }
+  }
+  ctx.globalAlpha = 1;
+
+  /* --- balls, far to near --- */
+  const draws = [];
+  for (const [ra, rb] of reps) {
+    const ox = ra * av[0] + rb * bv[0], oy = ra * av[1] + rb * bv[1], oz = ra * av[2] + rb * bv[2];
+    for (let i = 0; i < n; i++) {
+      const q = proj(p[i * 3] + ox, p[i * 3 + 1] + oy, p[i * 3 + 2] + oz);
+      const sym = st.s[i];
+      const stl = atomStyle(sym, st.t[i], mode, pal);
+      draws.push({ x: X(q[0]), y: Y(q[1]), d: q[2],
+                   r: Math.max(1.2, rcov(sym) * scale),   // full covalent radius, as ASE
+                   col: stl.col, alpha: stl.alpha, home: ra === 0 && rb === 0 });
+    }
+  }
+  draws.sort((a, b) => a.d - b.d);
+
+  // ASE's look: flat fill, thin black outline on every atom, no specular shading
+  for (const a of draws) {
+    if (a.x < -60 || a.x > wCss + 60 || a.y < -60 || a.y > hCss + 60) continue;
+    ctx.globalAlpha = a.alpha * (a.home ? 1 : 0.55);
+    ctx.beginPath(); ctx.arc(a.x, a.y, a.r, 0, 6.2832);
+    ctx.fillStyle = a.col; ctx.fill();
+    ctx.lineWidth = Math.max(0.7, a.r * 0.055);
+    ctx.strokeStyle = "#000";
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// orientation survives re-renders (colour / repeat / potential switches)
+const VIEW_ANGLES = new Map();
+
+function initViewers(root) {
+  root.querySelectorAll("canvas.sview").forEach(cv => {
+    cv._key = cv.dataset.key;
+    cv._ak = cv.dataset.key.split("|").slice(0, 3).join("|");
+    const saved = VIEW_ANGLES.get(cv._ak);
+    cv._th = saved ? saved[0] : 0.42;    // azimuth
+    cv._ph = saved ? saved[1] : 1.36;    // near-side view, slight tilt so layers stay visible
+    drawStructure(cv);
+
+    let drag = null;
+    cv.addEventListener("pointerdown", e => {
+      drag = { x: e.clientX, y: e.clientY, th: cv._th, ph: cv._ph };
+      cv.setPointerCapture(e.pointerId);
+      cv.style.cursor = "grabbing";
+    });
+    cv.addEventListener("pointermove", e => {
+      if (!drag) return;
+      cv._th = drag.th + (e.clientX - drag.x) * 0.011;
+      cv._ph = Math.max(0, Math.min(Math.PI / 2, drag.ph - (e.clientY - drag.y) * 0.011));
+      VIEW_ANGLES.set(cv._ak, [cv._th, cv._ph]);
+      drawStructure(cv);
+    });
+    const stop = e => { drag = null; cv.style.cursor = "grab"; };
+    cv.addEventListener("pointerup", stop);
+    cv.addEventListener("pointercancel", stop);
+
+    // redraw at the right resolution when the layout changes (window resize,
+    // or the first time the canvas gets a real width)
+    if (window.ResizeObserver) {
+      const ro = new ResizeObserver(() => drawStructure(cv));
+      ro.observe(cv);
+    }
+  });
+
+  // switch the shown intermediate, from the chips or from the FED rungs
+  const pick = (card, kind) => {
+    const cv = card.querySelector("canvas.sview");
+    if (!cv) return;
+    const s = JSON.parse(card.dataset.site);
+    const key = structKey(s, kind);
+    if (!STRUCTS[key]) return;   // the only guard needed; the key is the truth
+    cv._key = key;
+    cv.dataset.kind = kind;
+    drawStructure(cv);
+    card.querySelectorAll("[data-kind]").forEach(b =>
+      b.setAttribute("aria-pressed", String(b.dataset.kind === kind)));
+    card.querySelectorAll(".fedslot").forEach(r =>
+      r.classList.toggle("on", Number(r.dataset.rung) === KIND_RUNG[kind]));
+  };
+
+  root.querySelectorAll(".sitecard").forEach(card => {
+    card.querySelectorAll("button[data-kind]").forEach(b =>
+      b.addEventListener("click", () => pick(card, b.dataset.kind)));
+    card.querySelectorAll(".fedslot").forEach(r =>
+      r.addEventListener("click", () => {
+        const kind = RUNG_KIND[Number(r.dataset.rung)];
+        if (kind) pick(card, kind);
+      }));
+  });
+}
+
+// withStructs=false renders the diagrams only — structures are page-only
+function sitesSection(c, withStructs) {
+  const sites = SITE_INDEX.get(c.id) || [];
+  if (!sites.length) {
+    return `<section class="sec"><h3>Adsorption sites <span class="cnt">0</span></h3>
+      <div class="empty" style="padding:18px">No adsorption sites were reached for this candidate.</div></section>`;
+  }
+
+  const complete = sites.filter(s => s.complete);
+  const dom = fedDomain(complete.length ? complete : sites, state.fedU);
+  const modes = [[0, "U = 0"], [1.23, "U = 1.23 V"], ["onset", "U = onset"]];
+
+  const ctl = `<span class="seg">${modes.map(([m, lab]) =>
+    `<button data-fedu="${m}" aria-pressed="${String(state.fedU) === String(m)}">${lab}</button>`).join("")}</span>`;
+
+  const ladderCtl = `<span class="seg" role="group" aria-label="OOH rung">
+    <button data-fedmode="scaling" aria-pressed="${state.fedMode === "scaling"}">OOH scaling</button>
+    <button data-fedmode="ideal" aria-pressed="${state.fedMode === "ideal"}">Ideal OOH</button>
+  </span>`;
+
+  const colCtl = withStructs ? `<span class="seg">
+    <button data-cmode="element" aria-pressed="${state.colorMode === "element"}">Colour by element</button>
+    <button data-cmode="adsorbate" aria-pressed="${state.colorMode === "adsorbate"}">Colour by tag</button>
+  </span>
+  <button class="chip" data-repeat aria-pressed="${state.repeatCell}">Repeat cell</button>
+  <button class="chip" data-bonds aria-pressed="${state.showBonds}">Bonds</button>` : "";
+
+  const cards = sites.map(s => {
+    const eta = s.eta_scaling !== null
+      ? `<span class="se">η ${s.eta_scaling.toFixed(2)} V · η<sub>ideal</sub> ${s.eta_ideal !== null ? s.eta_ideal.toFixed(2) : "—"} V</span>`
+      : `<span class="se">no overpotential</span>`;
+
+    const ooh = fedOOH(s);
+    const energies = [
+      s.gO !== null ? `G(O) ${s.gO.toFixed(2)}` : null,
+      s.gOH !== null ? `G(OH) ${s.gOH.toFixed(2)}` : null,
+      (ooh !== null && ooh !== undefined)
+        ? `G(OOH) ${ooh.toFixed(2)}${state.fedMode === "ideal" ? " (ideal)" : ""}` : null,
+    ].filter(Boolean).join(" · ");
+
+    const kinds = kindsFor(s);
+    const shown = kinds.includes("OH") ? "OH" : (kinds.includes("O") ? "O" : kinds[0]);
+
+    // one wrapper, always: .sitebody is a two-column grid, so emitting the
+    // diagram and its note as separate children pushed the structure onto a
+    // second row whenever the ladder was incomplete
+    let fed = "";
+    if (s.gO === null && s.gOH === null) {
+      const why = s.statuses.find(t => t && t.startsWith("unrecoverable")) || s.statuses[0] || "no result";
+      fed = `<div class="fedcol"><div class="sitenote">No energetics — ${esc(why)}</div></div>`;
+    } else {
+      const note = s.complete ? "" :
+        `<div class="sitenote">Ladder incomplete — ${esc(s.statuses.find(t => t && t.startsWith("unrecoverable")) || "OH* step not finalized")}</div>`;
+      fed = `<div class="fedcol"><div class="fedwrap">${fedSVG(s, dom, state.fedU, shown ? KIND_RUNG[shown] : -1)}</div>${note}</div>`;
+    }
+
+    const viewer = !withStructs ? "" : (kinds.length ? `<div class="sviewwrap">
+        <canvas class="sview" data-key="${esc(structKey(s, shown))}" data-kind="${shown}"
+          aria-label="Relaxed structure, ${esc(kindLabel(s, shown))}"></canvas>
+        <div class="skinds">
+          ${kinds.map(k => `<button class="chip" data-kind="${k}" aria-pressed="${k === shown}">${esc(kindLabel(s, k))}</button>`).join("")}
+          <span class="shint">drag to rotate</span>
+        </div>
+        ${isLatticeO(s) ? `<div class="sitenote" style="padding:0">
+          Lattice-oxygen site: <b>*</b> is the surface with that oxygen removed,
+          <b>O*</b> is the pristine surface.</div>` : ""}
+      </div>` : `<div class="sitenote">No relaxed structure stored for this site.</div>`);
+
+    const m = s.meta;
+    const desc = siteDescriptor(m);
+
+    const info = m ? `<div class="siteinfo">
+        ${m.miller ? `<span><b>${millerStr(m.miller)}</b></span>` : ""}
+        ${m.surfF ? `<span>${formula(m.surfF)}</span>` : ""}
+      </div>` : "";
+
+    return `<div class="sitecard" data-site='${esc(JSON.stringify({ cand: s.cand, term: s.term, site: s.site, lat: isLatticeO(s) }))}'>
+      <div class="sitehead">
+        <span class="sid">term ${s.term} · site ${s.site}${desc ? ` <span class="stype">${esc(desc)}</span>` : ""}</span>
+        ${eta}
+      </div>
+      ${info}
+      ${energies ? `<div class="sitenote" style="padding-bottom:0"><span class="mono">${esc(energies)} eV</span> · processes ${s.pids.join(", ")}</div>` : ""}
+      <div class="sitebody">${fed}${viewer}</div>
+    </div>`;
+  }).join("");
+
+  const legend = !withStructs ? "" : (state.colorMode === "adsorbate"
+    ? `<div class="slegend">
+         <span><i style="background:var(--d-high)"></i>adsorbate (tag 4)</span>
+         <span><i style="background:var(--accent)"></i>binding site (tag 3)</span>
+         <span><i style="background:var(--d-low)"></i>other sites (tag 1–2)</span>
+         <span><i style="background:var(--ink-3);opacity:.5"></i>slab</span>
+       </div>`
+    : `<div class="slegend"><span>CPK element colours · lattice-O sites add no tagged adsorbate</span></div>`);
+
+  const ladderNote = state.fedMode === "ideal"
+    ? `OOH* placed at (4.92 + G(O))/2 — the last two steps split evenly. Largest step − 1.23 = η<sub>ideal</sub>.`
+    : `OOH* placed at G(OH) + 3.2 eV via the scaling relation. Largest step − 1.23 = η<sub>scaling</sub>.`;
+
+  const hint = withStructs
+    ? `Click a rung to show that intermediate — OOH* is never computed directly, so it has no geometry.`
+    : `Open the full page for the relaxed structures.`;
+
+  return `<section class="sec">
+    <h3>Adsorption sites <span class="cnt">${sites.length} · ${complete.length} with a full ladder</span></h3>
+    <div class="uctl">${ctl}${ladderCtl}${colCtl}</div>
+    <div class="uctl"><span style="font-size:.75rem;color:var(--ink-3)">
+      ${ladderNote} The highlighted riser is the potential-determining step. ${hint}</span></div>
+    ${legend}
+    ${cards}
+  </section>`;
+}
+
+/* ---------- candidate page ----------
+   A full-width view rather than a side drawer: the structures and free energy
+   diagrams need the room. The list view is hidden rather than destroyed, so
+   filters, sort and scroll position survive the round trip.                  */
+const listview = document.getElementById("listview");
+const cpage = document.getElementById("cpage");
+const drawer = document.getElementById("drawer");
+const scrim = document.getElementById("scrim");
+let listScroll = 0;
+let lastFocus = null;
+
+/* ---------- O-screening plot ----------
+   Every site with a G(O) result, including the ones whose OH partner never ran
+   and which therefore appear nowhere on the 2-D volcano.
+
+   G(O) alone bounds the achievable overpotential: the two G(OH)-dependent steps
+   are G(OH) and G(O)-G(OH), whose max is minimised at G(OH) = G(O)/2, and the
+   remaining step is (4.92-G(O))/2. So
+
+       eta_min(G(O)) = max( G(O)/2, (4.92-G(O))/2 ) - 1.23
+
+   peaking at G(O) = 2.46 eV, eta = 0. Verified against every complete site:
+   eta_ideal is never below this bound (bar 2-dp rounding).                   */
+const OSW = 800, OSH = 370, OSM = { l: 62, r: 20, t: 20, b: 50 };
+const OSPW = OSW - OSM.l - OSM.r, OSPH = OSH - OSM.t - OSM.b;
+const OX0 = 0, OX1 = 5, OY0 = 0, OY1 = 2.0;
+
+const osx = g => OSM.l + ((g - OX0) / (OX1 - OX0)) * OSPW;
+const osy = e => OSM.t + ((OY1 - e) / (OY1 - OY0)) * OSPH;   // eta increases upward
+const etaMin = g => Math.max(g / 2, (4.92 - g) / 2) - 1.23;
+
+let _osites = null;
+function oSites() {
+  if (!_osites) {
+    _osites = [...SITE_INDEX.values()].flat()
+      .filter(s => s.gO !== null && s.gO !== undefined);
+  }
+  return _osites;
+}
+
+function renderOScreen(rows) {
+  const host = document.getElementById("osplot");
+  if (!host) return;                       // section is currently removed
+  const tip = document.getElementById("ostip");
+  const ids = new Set(rows.map(c => c.id));
+  const pool = oSites().filter(s => ids.has(s.cand));
+
+  const inside = pool.filter(s => s.gO >= OX0 && s.gO <= OX1);
+  const promoted = inside.filter(s => s.complete);
+  const screened = inside.filter(s => !s.complete);
+
+  document.getElementById("oscaption").innerHTML =
+    `${inside.length} site${inside.length === 1 ? "" : "s"} with a G(O) result · ` +
+    `${promoted.length} promoted to a full ladder · ${screened.length} screened on G(O) alone` +
+    (pool.length - inside.length ? ` · ${pool.length - inside.length} outside axis range` : "");
+
+  if (!inside.length) {
+    host.innerHTML = `<div class="vempty">No G(O) results match these filters.</div>`;
+    host.appendChild(tip);
+    return;
+  }
+
+  const curve = [];
+  for (let g = OX0; g <= OX1 + 1e-9; g += 0.02) {
+    const e = etaMin(g);
+    if (e <= OY1) curve.push(`${osx(g).toFixed(1)},${osy(e).toFixed(1)}`);
+  }
+
+  const xt = [0, 1, 2, 3, 4, 5], yt = [0, 0.5, 1, 1.5, 2];
+  const grid =
+    xt.map(t => `<line class="vgrid" x1="${osx(t)}" y1="${OSM.t}" x2="${osx(t)}" y2="${OSM.t + OSPH}"/>`).join("") +
+    yt.map(t => `<line class="vgrid" x1="${OSM.l}" y1="${osy(t)}" x2="${OSM.l + OSPW}" y2="${osy(t)}"/>`).join("");
+
+  const axes = `
+    <line class="vaxis" x1="${OSM.l}" y1="${OSM.t}" x2="${OSM.l}" y2="${OSM.t + OSPH}"/>
+    <line class="vaxis" x1="${OSM.l}" y1="${OSM.t + OSPH}" x2="${OSM.l + OSPW}" y2="${OSM.t + OSPH}"/>
+    ${xt.map(t => `<text class="vtick" x="${osx(t)}" y="${OSM.t + OSPH + 16}" text-anchor="middle">${t}</text>`).join("")}
+    ${yt.map(t => `<text class="vtick" x="${OSM.l - 8}" y="${osy(t) + 4}" text-anchor="end">${t.toFixed(1)}</text>`).join("")}
+    <text class="vlab" x="${OSM.l + OSPW / 2}" y="${OSH - 8}" text-anchor="middle">ΔG(O)  (eV)</text>
+    <text class="vlab" transform="translate(15,${OSM.t + OSPH / 2}) rotate(-90)" text-anchor="middle">η  (V)</text>
+    <line x1="${osx(2.46)}" y1="${OSM.t}" x2="${osx(2.46)}" y2="${OSM.t + OSPH}"
+          stroke="var(--accent)" stroke-width="1.2" stroke-dasharray="4 3" opacity=".8">
+      <title>ideal ΔG(O) = 2.46 eV</title></line>`;
+
+  // for promoted sites, a line from the bound up to what OH actually gave
+  const drops = !state.oOutcome ? "" : promoted.map(s => {
+    const e = s.eta_ideal;
+    if (e === null || e === undefined) return "";
+    const y1 = osy(etaMin(s.gO)), y2 = osy(Math.min(e, OY1));
+    return `<line x1="${osx(s.gO).toFixed(1)}" y1="${y1.toFixed(1)}"
+             x2="${osx(s.gO).toFixed(1)}" y2="${y2.toFixed(1)}"
+             stroke="var(--d-high)" stroke-width="1" opacity=".45"/>` +
+           (e <= OY1 ? `<circle class="ospt" cx="${osx(s.gO).toFixed(1)}" cy="${y2.toFixed(1)}" r="3"
+             fill="var(--d-high)" data-cand="${esc(s.cand)}" data-kind="actual"
+             data-g="${s.gO.toFixed(2)}" data-e="${e.toFixed(2)}"
+             data-s="term ${s.term} · site ${s.site}"/>` : "");
+  }).join("");
+
+  const mark = (s, cls, fill, stroke) =>
+    `<circle class="ospt" cx="${osx(s.gO).toFixed(1)}" cy="${osy(etaMin(s.gO)).toFixed(1)}" r="4"
+      fill="${fill}" stroke="${stroke}" stroke-width="1.2" data-cand="${esc(s.cand)}" data-kind="${cls}"
+      data-g="${s.gO.toFixed(2)}" data-e="${etaMin(s.gO).toFixed(2)}"
+      data-a="${s.eta_ideal !== null && s.eta_ideal !== undefined ? s.eta_ideal.toFixed(2) : ""}"
+      data-s="term ${s.term} · site ${s.site}"/>`;
+
+  const pts =
+    screened.map(s => mark(s, "screened", "var(--surface)", "var(--ink-3)")).join("") +
+    promoted.map(s => mark(s, "promoted", "var(--accent)", "var(--surface)")).join("");
+
+  host.innerHTML =
+    `<svg viewBox="0 0 ${OSW} ${OSH}" role="img" aria-label="Overpotential bound from G(O) for every screened site">
+      ${grid}${axes}
+      <polyline class="vcurve" points="${curve.join(" ")}"/>
+      ${drops}${pts}
+    </svg>`;
+  host.appendChild(tip);
+
+  document.getElementById("oslegend").innerHTML =
+    `<span><i style="background:var(--accent)"></i>promoted to full ladder</span>` +
+    `<span><i style="background:var(--surface);border:1px solid var(--ink-3)"></i>screened on G(O) only</span>` +
+    (state.oOutcome ? `<span><i style="background:var(--d-high)"></i>η ideal actually reached</span>` : "");
+
+  host.querySelectorAll(".ospt").forEach(el => {
+    el.addEventListener("mouseenter", () => {
+      const b = el.getBoundingClientRect(), h = host.getBoundingClientRect();
+      const c = CANDS.find(z => z.id === el.dataset.cand);
+      const isActual = el.dataset.kind === "actual";
+      tip.innerHTML =
+        `<span class="tf">${formula(c ? c.formula : el.dataset.cand)}</span><br>` +
+        `<span class="tm">G(O) ${el.dataset.g} eV</span><br>` +
+        `<span class="tm">${isActual ? "η ideal " + el.dataset.e : "bound η ≥ " + el.dataset.e} V</span>` +
+        (!isActual && el.dataset.a ? `<br><span class="tm">reached ${el.dataset.a} V</span>` : "") +
+        (!isActual && !el.dataset.a ? `<br><span class="tm">no OH result</span>` : "") +
+        `<br><span class="tm">${esc(el.dataset.s)}</span>`;
+      tip.style.left = (b.left - h.left + b.width / 2) + "px";
+      tip.style.top = (b.top - h.top - 8) + "px";
+      tip.classList.add("on");
+    });
+    el.addEventListener("mouseleave", () => tip.classList.remove("on"));
+    el.addEventListener("click", () => openDrawer(el.dataset.cand));
+  });
+}
+
+/* ---------- quick-view drawer ----------
+   A light preview: metrics, diagrams and reasoning, but no structures — those
+   need the full page. The drawer's primary action is to go there.           */
+function wireSiteControls(root, rerender) {
+  root.querySelectorAll("[data-fedu]").forEach(b => {
+    b.addEventListener("click", () => {
+      const v = b.dataset.fedu;
+      state.fedU = v === "onset" ? "onset" : Number(v);
+      rerender();
+    });
+  });
+  root.querySelectorAll("[data-fedmode]").forEach(b => {
+    b.addEventListener("click", () => { state.fedMode = b.dataset.fedmode; rerender(); });
+  });
+  root.querySelectorAll("[data-cmode]").forEach(b => {
+    b.addEventListener("click", () => { state.colorMode = b.dataset.cmode; rerender(); });
+  });
+  const rep = root.querySelector("[data-repeat]");
+  if (rep) rep.addEventListener("click", () => { state.repeatCell = !state.repeatCell; rerender(); });
+  const bnd = root.querySelector("[data-bonds]");
+  if (bnd) bnd.addEventListener("click", () => { state.showBonds = !state.showBonds; rerender(); });
+}
+
+function openDrawer(id) {
+  const c = CANDS.find(x => x.id === id);
+  if (!c) return;
+  state.selected = id;
+  lastFocus = document.activeElement;
+
+  const procs = (byCand.get(c.id) || []).slice().sort((a, b) => a.id - b.id);
+  const sites = SITE_INDEX.get(c.id) || [];
+  const nStruct = sites.reduce((a, s) => a + kindsFor(s).length, 0);
+
+  document.getElementById("drawerTitle").innerHTML = formula(c.formula);
+  document.getElementById("drawerId").textContent = c.id + "  ·  " + c.state;
+
+  const metric = (k, v) => `<div class="metric"><div class="mk">${k}</div><div class="mv">${v}</div></div>`;
+  const body = document.getElementById("drawerbody");
+
+  body.innerHTML = `
+    <button class="openfull" id="openfull">
+      <span>Open full candidate page &rarr;</span>
+      <span class="sub">${nStruct} relaxed structure${nStruct === 1 ? "" : "s"}</span>
+    </button>
+
+    <div class="metrics">
+      ${metric(ETA_SCALING, fx(c.eta_scaling, 2) + " <span style='font-size:.7em;opacity:.6'>V</span>")}
+      ${metric(ETA_IDEAL, fx(c.eta_ideal, 2) + " <span style='font-size:.7em;opacity:.6'>V</span>")}
+      ${metric(DG_O_DEV, fx(c.gO_dev, 2) + " <span style='font-size:.7em;opacity:.6'>eV</span>")}
+      ${metric(DG_PBX, fx(c.pourbaix, 3) + " <span style='font-size:.7em;opacity:.6'>eV/atom</span>")}
+      ${metric("Decision", decPill(c.decision))}
+      ${metric("DFT jobs", procs.length)}
+    </div>
+
+    ${sitesSection(c, false)}
+
+    ${c.reason ? `<section class="sec">
+      <h3>Why it was proposed</h3>
+      <div class="prose">${esc(c.reason)}</div>
+    </section>` : ""}
+
+  `;
+
+  wireSiteControls(body, () => {
+    const keep = body.scrollTop;
+    openDrawer(c.id);
+    document.getElementById("drawerbody").scrollTop = keep;
+  });
+
+  document.getElementById("openfull").addEventListener("click", () => {
+    closeDrawer(true);
+    openCandidate(c.id);
+  });
+
+  drawer.classList.add("on");
+  scrim.classList.add("on");
+  drawer.focus();
+  render();
+}
+
+function closeDrawer(keepSelection) {
+  drawer.classList.remove("on");
+  scrim.classList.remove("on");
+  if (!keepSelection) {
+    state.selected = null;
+    render();
+    if (lastFocus && lastFocus.isConnected) lastFocus.focus();
+  }
+}
+
+document.getElementById("close").addEventListener("click", () => closeDrawer(false));
+scrim.addEventListener("click", () => closeDrawer(false));
+
+function openCandidate(id) {
+  const c = CANDS.find(x => x.id === id);
+  if (!c) return;
+
+  // a fresh arrival (vs. an in-place rerender) is what should reset scroll
+  const fresh = cpage.hidden;
+  if (fresh) listScroll = window.scrollY;
+  state.selected = id;
+
+  const procs = (byCand.get(c.id) || []).slice().sort((a, b) => a.id - b.id);
+  const groups = new Map();
+  for (const p of procs) {
+    if (!groups.has(p.job)) groups.set(p.job, []);
+    groups.get(p.job).push(p);
+  }
+
+  const metric = (k, v) => `<div class="metric"><div class="mk">${k}</div><div class="mv">${v}</div></div>`;
+  const rounds = (c.rounds || []);
+  const nSites = (SITE_INDEX.get(c.id) || []).length;
+
+  cpage.innerHTML = `
+    <div class="cphead">
+      <div>
+        <h2>${formula(c.formula)}</h2>
+        <span class="cid">${esc(c.id)} &nbsp;·&nbsp; ${esc(c.state)} &nbsp;·&nbsp; ${nSites} site${nSites === 1 ? "" : "s"}</span>
+      </div>
+      <button class="backbtn" id="backbtn">&larr; All candidates</button>
+    </div>
+
+    <div class="metrics">
+      ${metric(ETA_SCALING, fx(c.eta_scaling, 2) + " <span style='font-size:.7em;opacity:.6'>V</span>")}
+      ${metric(ETA_IDEAL, fx(c.eta_ideal, 2) + " <span style='font-size:.7em;opacity:.6'>V</span>")}
+      ${metric(DG_O_DEV, fx(c.gO_dev, 2) + " <span style='font-size:.7em;opacity:.6'>eV</span>")}
+      ${metric(DG_PBX, fx(c.pourbaix, 3) + " <span style='font-size:.7em;opacity:.6'>eV/atom</span>")}
+      ${metric("Decision", decPill(c.decision))}
+      ${metric("DFT jobs", procs.length)}
+    </div>
+
+    ${sitesSection(c, true)}
+
+    ${c.reason ? `<section class="sec">
+      <h3>Why it was proposed</h3>
+      <div class="prose">${esc(c.reason)}</div>
+    </section>` : ""}
+
+    ${c.notes ? `<section class="sec">
+      <h3>Notes</h3>
+      <div class="prose">${esc(c.notes)}</div>
+    </section>` : ""}
+
+    <section class="sec">
+      <h3>Decision history <span class="cnt">${rounds.length} round${rounds.length === 1 ? "" : "s"}</span></h3>
+      ${rounds.length ? rounds.map((r, i) => `
+        <div class="round">
+          <div class="roundhead">
+            <span class="rn">ROUND ${i + 1}</span>
+            ${decPill(r.decision)}
+            ${r.pids ? `<span class="rn">processes ${esc(String(r.pids).replace(/[\[\]]/g, ""))}</span>` : ""}
+          </div>
+          ${r.summary ? `<div class="prose">${esc(r.summary)}</div>` : ""}
+          ${r.plan ? `<div class="plan"><span class="label">Next step</span>${esc(r.plan)}</div>` : ""}
+        </div>`).join("")
+        : `<div class="empty" style="padding:18px">No disposition rounds recorded.</div>`}
+    </section>
+
+    <section class="sec">
+      <h3>All DFT jobs <span class="cnt">${procs.length}</span></h3>
+      ${[...groups.entries()].map(([job, list]) => {
+        const done = list.filter(p => p.status === "completed").length;
+        return `<div class="jobgroup">
+          <div class="jt"><span>${esc(job.replace(/_/g, " "))}</span><span>${done}/${list.length} completed</span></div>
+          ${list.map(p => {
+            const g = [
+              p.gO !== null && p.gO !== undefined ? `G(O) ${Number(p.gO).toFixed(2)}` : null,
+              p.gOH !== null && p.gOH !== undefined ? `G(OH) ${Number(p.gOH).toFixed(2)}` : null,
+              p.eta_scaling !== null && p.eta_scaling !== undefined ? `η ${Number(p.eta_scaling).toFixed(2)}` : null,
+            ].filter(Boolean).join("  ");
+            const site = (p.term !== null && p.term !== undefined)
+              ? `term ${p.term}${(p.site !== null && p.site !== undefined) ? ` · site ${p.site}` : ""}` : "";
+            return `<div class="proc">
+              <span class="pid">#${p.id}</span>
+              <span class="pstat">${statusPill(p.status)}</span>
+              <span class="pg">${esc(g)}</span>
+              ${site ? `<span class="psite">${esc(site)}</span>` : ""}
+            </div>`;
+          }).join("")}
+        </div>`;
+      }).join("")}
+    </section>
+  `;
+
+  // controls that need the section rebuilt; page scroll and orientation are kept
+  const rerender = () => {
+    const keep = window.scrollY;
+    openCandidate(c.id);
+    window.scrollTo(0, keep);
+  };
+
+  wireSiteControls(cpage, rerender);
+  document.getElementById("backbtn").addEventListener("click", closeCandidate);
+
+  listview.hidden = true;
+  cpage.hidden = false;
+  // only now do the canvases have a real width; initialising them while the
+  // panel was still display:none sized every bitmap at the 300x200 fallback
+  initViewers(cpage);
+  if (fresh) window.scrollTo(0, 0);
+}
+
+function closeCandidate() {
+  cpage.hidden = true;
+  listview.hidden = false;
+  state.selected = null;
+  cpage.innerHTML = "";           // drop canvases so they stop holding memory
+  render();
+  window.scrollTo(0, listScroll);
+}
+
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape") return;
+  if (!cpage.hidden) closeCandidate();
+  else if (drawer.classList.contains("on")) closeDrawer(false);
+});
+
+/* ---------- controls ---------- */
+let qt;
+document.getElementById("q").addEventListener("input", e => {
+  clearTimeout(qt);
+  qt = setTimeout(() => { state.q = e.target.value; render(); }, 90);
+});
+
+document.querySelectorAll("[data-metric]").forEach(b => {
+  b.addEventListener("click", () => {
+    state.metric = b.dataset.metric;
+    document.querySelectorAll("[data-metric]").forEach(o =>
+      o.setAttribute("aria-pressed", String(o.dataset.metric === state.metric)));
+    render();
+  });
+});
+
+document.querySelectorAll("[data-vmode]").forEach(b => {
+  b.addEventListener("click", () => {
+    state.vmode = b.dataset.vmode;
+    document.querySelectorAll("[data-vmode]").forEach(o =>
+      o.setAttribute("aria-pressed", String(o.dataset.vmode === state.vmode)));
+    render();
+  });
+});
+
+const ooutcomeBtn = document.getElementById("ooutcome");
+if (ooutcomeBtn) ooutcomeBtn.addEventListener("click", () => {
+  state.oOutcome = !state.oOutcome;
+  ooutcomeBtn.setAttribute("aria-pressed", String(state.oOutcome));
+  render();
+});
+
+(function () {
+  const sel = document.getElementById("cmapsel");
+  sel.innerHTML = Object.keys(CMAPS).map(k =>
+    `<option value="${k}"${k === state.cmap ? " selected" : ""}>${CMAP_LABEL[k]}</option>`).join("");
+  sel.addEventListener("change", () => { state.cmap = sel.value; render(); });
+})();
+
+document.getElementById("completeToggle").addEventListener("click", () => {
+  state.completeOnly = !state.completeOnly;
+  render();
+});
+
+document.getElementById("reset").addEventListener("click", () => {
+  state.q = "";
+  document.getElementById("q").value = "";
+  state.decisions.clear();
+  state.states.clear();
+  state.elems.clear();
+  state.completeOnly = false;
+  render();
+});
+
+/* ---------- tabs ----------
+   Panels are hidden, not destroyed, so filter state and the rendered plots
+   survive switching. Filters, plots and table all stay on one panel — they are
+   one working surface and splitting them would strand the controls.         */
+const PANELS = ["explore", "methods", "cite"];
+
+function showTab(name) {
+  state.tab = name;
+  for (const p of PANELS) {
+    document.getElementById("panel-" + p).hidden = (p !== name);
+  }
+  document.querySelectorAll("#tabbar button").forEach(b =>
+    b.setAttribute("aria-selected", String(b.dataset.tab === name)));
+  if (name !== "explore") window.scrollTo(0, 0);
+}
+
+document.querySelectorAll("#tabbar button").forEach(b =>
+  b.addEventListener("click", () => showTab(b.dataset.tab)));
+
+/* ---------- citation block ----------
+   Assembled from an array of lines: no escape sequences to be mangled by an
+   editor, and the BibTeX stays readable in source.                        */
+(function citation() {
+  const bib = [
+    "@dataset{oer_gnome,",
+    "  title  = {OER-GNoME: autonomous screening of GNoME oxides for oxygen evolution},",
+    "  author = {TODO},",
+    "  year   = {2026},",
+    "  doi    = {TODO},",
+    "  note   = {Non-commercial use only (CC BY-NC 4.0)}",
+    "}",
+    "",
+    "@article{wang2025dreams,",
+    "  author  = {Wang, Ziqi and Huang, Hongshuo and Zhao, Hancheng and Xu, Changwen",
+    "             and Zhu, Shang and Janssen, Jan and Viswanathan, Venkatasubramanian},",
+    "  title   = {DREAMS: Density Functional Theory Based Research Engine for",
+    "             Agentic Materials Simulation},",
+    "  journal = {arXiv preprint arXiv:2507.14267},",
+    "  year    = {2025},",
+    "  doi     = {10.48550/arXiv.2507.14267}",
+    "}",
+    "",
+    "@article{nissen2026aqgnome,",
+    "  author  = {Nissen and others},",
+    "  title   = {AQ-GNoME},",
+    "  journal = {ChemRxiv},",
+    "  year    = {2026},",
+    "  doi     = {10.26434/chemrxiv.15003677/v1}",
+    "}",
+    "",
+    "@article{merchant2023gnome,",
+    "  author  = {Merchant and others},",
+    "  title   = {Scaling deep learning for materials discovery},",
+    "  journal = {Nature},",
+    "  year    = {2023},",
+    "  doi     = {10.1038/s41586-023-06735-9}",
+    "}",
+    "",
+    "@article{jakob2025disorder,",
+    "  author  = {Jakob and others},",
+    "  journal = {Advanced Materials},",
+    "  year    = {2025},",
+    "  doi     = {10.1002/adma.202514226}",
+    "}",
+    "",
+    "@article{gaultois2013hhi,",
+    "  author  = {Gaultois and others},",
+    "  journal = {Chemistry of Materials},",
+    "  volume  = {25},",
+    "  pages   = {2911--2920},",
+    "  year    = {2013},",
+    "  doi     = {10.1021/cm400893e}",
+    "}"
+  ];
+  document.getElementById("citebox").textContent = bib.join("\n");
+})();
+
+/* ---------- summary tiles ---------- */
+(function summary() {
+  const withEta = CANDS.filter(c => c.eta_scaling !== null).length;
+  const rounds = CANDS.reduce((a, c) => a + (c.rounds || []).length, 0);
+  const best = CANDS.filter(c => c.eta_scaling !== null)
+                    .reduce((m, c) => (m === null || c.eta_scaling < m.eta_scaling) ? c : m, null);
+
+  const tiles = [
+    { v: CANDS.length, k: "candidates screened" },
+    { v: withEta, k: `with full energetics (${CANDS.length - withEta} incomplete)` },
+    { v: PROCS.length, k: "DFT jobs launched" },
+    { v: rounds, k: "agent decision rounds" },
+    { v: best ? best.eta_scaling.toFixed(2) + " V" : "—", k: "best η scaling" },
+  ];
+
+  document.getElementById("tiles").innerHTML = tiles.map(t =>
+    `<div class="tile"><span class="v">${t.v}</span><span class="k">${esc(t.k)}</span></div>`
+  ).join("");
+
+  // meta.version is the date the PAGE was built; meta.data_date is the date
+  // the explog snapshot itself was frozen. They differ whenever a page is
+  // rebuilt from an older pickle, so show both when they disagree.
+  const meta = DATA.meta || {};
+  if (meta.version) {
+    const dd = (meta.data_date && meta.data_date !== meta.version)
+      ? ` \u00b7 data ${esc(meta.data_date)}` : "";
+    document.getElementById("provenance").innerHTML =
+      `version ${esc(meta.version)}${dd}`;
+    document.title = "OER-GNoME " + meta.version;
+  } else {
+    document.getElementById("provenance").innerHTML = "";
+  }
+
+  document.getElementById("pagefoot").innerHTML =
+    `<span>Data: <a href="https://creativecommons.org/licenses/by-nc/4.0/">CC BY-NC 4.0</a>` +
+    ` &mdash; non-commercial use only</span>` +
+    `<button class="footlink" id="footcite">How to cite &rarr;</button>`;
+
+  document.getElementById("footcite").addEventListener("click", () => {
+    if (!cpage.hidden) closeCandidate();
+    showTab("cite");
+  });
+})();
+
+render();
+}
+</script>
