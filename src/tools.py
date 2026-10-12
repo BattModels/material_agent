@@ -57,6 +57,7 @@ import copy
 from aq_gnome import Data_Handler, Stable_Entries, Stability_Criteria, get_simplified_df, atoms_from_db
 from gnome_dreams_oer_screening.oer.oer_study import OER_catalyst_study
 from gnome_dreams_oer_screening.explog.explog import EXPLOG
+from gnome_dreams_oer_screening.niflheim.slurm import PartitionName
 from src.disposition_messages import (
     format_get_disposition,
     format_update_disposition,
@@ -1018,7 +1019,7 @@ def submit_dft_job(
     termination_index_ref: Annotated[str, "Reference ID of the result or output message where you determind to submit a dft job for this termination index."] = "",
     ad_site_index: Annotated[int | None, "Index of the site onto which O or OH is adsorbed. Only required for adsorption calculations."] = None,
     ad_site_index_ref: Annotated[str, "Reference ID of the result or output message where you determind to submit a dft job for this adsorption site index."] = "",
-    partition: Annotated[Literal['xeon56', 'xeon40el8', 'xeon24el8', 'auto'], "HPC partition to submit the job to. Use 'auto' to let the system select the partition automatically."] = "auto",
+    partition: Annotated[PartitionName, "HPC partition to submit the job to. Use 'auto' to let the system select the partition automatically."] = "auto",
 ) -> str:
     """
     Submit a DFT job for a candidate to the HPC cluster.

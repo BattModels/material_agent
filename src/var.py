@@ -63,7 +63,7 @@ PATH_B_CUTOFF_SECONDS = PATH_B_CUTOFF_DAYS * _SECONDS_PER_DAY
 # (with the real numbers) to refill. Queued -- not running -- jobs are the target:
 # queued jobs are what feed nodes the instant they free up, and under fair-share
 # a near-empty queue means the cluster is absorbing everything we submit.
-QUEUE_MIN_PENDING = 25
+QUEUE_MIN_PENDING = 50
 
 # Hard ceiling on queued jobs. SLURM refuses submissions once a user has 1000
 # active jobs, so this leaves headroom rather than expressing a preference: going
