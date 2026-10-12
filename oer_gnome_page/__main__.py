@@ -15,9 +15,11 @@ The commit is assembled in a throwaway repository, so nothing is written into
 this repository's object store.
 """
 import argparse
+import re
 import subprocess
 import sys
 import tempfile
+import time
 import webbrowser
 from datetime import date
 from pathlib import Path
@@ -26,6 +28,9 @@ HERE = Path(__file__).resolve().parent
 
 SITE_REPO = "https://github.com/Matminator/OER-GNoME.git"
 SITE_BRANCH = "main"
+
+# relative to the invocation directory, i.e. the one that contains this package
+CONFIG = Path("config") / "default.yaml"
 
 
 # ----------------------------------------------------------------- helpers
@@ -54,6 +59,43 @@ def need(p, what):
     if not p.exists():
         sys.exit("no such %s: %s" % (what, p))
     return p
+
+
+def live_pickle():
+    """The explog of the run the workflow is CURRENTLY writing to.
+
+    Read from config/default.yaml:WORKING_DIR rather than typed by hand, on the
+    same reasoning as vasp_backlog_cleanup.py: that file is what the workflow
+    itself reads to decide which fork it writes to, so the two cannot disagree.
+    Naming the path by hand is how a stale fork reaches a public page - the
+    build succeeds and the page looks right, only the numbers are old.
+    """
+    cfg = resolve(CONFIG)
+    if not cfg.exists():
+        sys.exit("no pickle named, and no %s here to read WORKING_DIR from.\n"
+                 "Run from the directory that contains this package, or name "
+                 "the pickle explicitly." % CONFIG)
+    m = re.search(r"^\s*WORKING_DIR\s*:\s*['\"]?([^'\"\s]+)",
+                  cfg.read_text(encoding="utf-8"), re.M)
+    if not m:
+        sys.exit("could not read WORKING_DIR from %s" % cfg)
+    return Path(m.group(1)) / "vasp_calcs" / "explog.pkl"
+
+
+def pickle_for(a):
+    """The pickle to build from: the one named, else the live run's.
+
+    The resolved path, its size and its age are printed whenever the default is
+    used. A stale WORKING_DIR is the one way this picks the wrong data, and it
+    is silent unless something says out loud what it just chose.
+    """
+    if a.pickle:
+        return need(resolve(a.pickle), "pickle")
+    pkl = need(live_pickle(), "explog (via %s -> WORKING_DIR)" % CONFIG)
+    st = pkl.stat()
+    print("explog  %s\n        %.1f MB, last written %.1f h ago"
+          % (pkl, st.st_size / 1e6, (time.time() - st.st_mtime) / 3600.0))
+    return pkl
 
 
 # ----------------------------------------------------------------- commands
@@ -90,7 +132,7 @@ def validate(target, quiet=False):
 
 
 def cmd_build(a):
-    pkl = need(resolve(a.pickle), "pickle")
+    pkl = pickle_for(a)
     if a.split:
         out = resolve(a.output or "docs")
         args = [pkl, "--out", out]
@@ -134,7 +176,7 @@ def cmd_serve(a):
 
 
 def cmd_publish(a):
-    pkl = need(resolve(a.pickle), "pickle")
+    pkl = pickle_for(a)
 
     with tempfile.TemporaryDirectory() as tmp:
         stage = Path(tmp) / "stage"
@@ -205,7 +247,7 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     b = sub.add_parser("build", help="build the page from an explog pickle")
-    b.add_argument("pickle")
+    b.add_argument("pickle", nargs="?", help="explog pickle; default: the live run's, via config/default.yaml:WORKING_DIR")
     b.add_argument("-o", "--output", help="output file, or directory with --split")
     b.add_argument("--split", action="store_true",
                    help="index.html + data.json instead of one self-contained file")
@@ -223,7 +265,7 @@ def main():
     s.set_defaults(fn=cmd_serve)
 
     p = sub.add_parser("publish", help="build and force-replace the hosted page")
-    p.add_argument("pickle")
+    p.add_argument("pickle", nargs="?", help="explog pickle; default: the live run's, via config/default.yaml:WORKING_DIR")
     p.add_argument("--push", action="store_true", help="actually push (makes it public)")
     p.add_argument("-m", "--message")
     p.add_argument("--repo", default=SITE_REPO)
