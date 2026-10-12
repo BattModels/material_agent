@@ -32,7 +32,7 @@ LangGraph and LangChain; VASP via pysqa on SLURM, with partition routing by
 system size and convergence recovery. The DFT pipeline is a fixed ladder (bulk →
 surface → O\* → OH\*); the agent chooses which materials and sites to spend it
 on. Entry point `invoke.py`, agent layer `src/`; the chemistry engine is a
-separate package, `GNoME_DREAMS_OER_screening`.
+separate package, [GNoME_DREAMS_OER_screening](https://github.com/Matminator/GNoME_DREAMS_OER_screening).
 
 ## Provenance
 
