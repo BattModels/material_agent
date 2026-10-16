@@ -351,8 +351,8 @@ def test_side_effecting_tools_are_never_clearable():
     # If ClearToolUsesEdit blanks a submit_dft_job result, the agent can lose the
     # evidence it already submitted and RE-SUBMIT real DFT jobs. Burned compute,
     # not just a context bug. This fence must never regress.
-    for tool in ("submit_dft_job", "enter_candidate_in_log", "update_disposition_info",
-                 "write_report", "write_my_canvas", "wait_for_update"):
+    for tool in ("run_coupled_mode_analysis", "enter_design_in_log", "update_disposition_info",
+                 "write_report", "write_my_canvas"):
         assert tool in CLEARABLE_EXCLUDE_TOOLS
 
 
@@ -494,4 +494,10 @@ def test_compaction_pipeline_end_to_end_on_pydantic_steps():
     # numbering must resume at the right ABSOLUTE step, not restart at 1
     rendered = render_past_steps(compacted, start_index=first_verbatim_index(compacted))
     assert rendered.startswith(digest)
-    assert "\n11. OER_Agent:" in rendered
+    if K_VERBATIM > 0:
+        assert f"\n{plan.n_evicted + 1}. OER_Agent:" in rendered
+    else:
+        # K_VERBATIM == 0: everything was evicted, so only the digest remains and
+        # the next real step would be numbered right after the digest's range.
+        assert rendered == digest
+        assert first_verbatim_index(compacted) == 21

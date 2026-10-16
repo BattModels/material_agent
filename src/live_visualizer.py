@@ -247,7 +247,7 @@ class LiveVisualizer:
         # Columns to hide from each EXPLOG tab. Configurable; defaults match
         # your request (candidates: study_obj; processes: VASP_dir).
         default_hide = {
-            "candidates": {"study_obj"},
+            "candidates": {"study_obj", "disposition_record", "ready_for_disposition_update"},
             "processes": {"VASP_dir"},
         }
         if hide_columns:
@@ -266,6 +266,9 @@ class LiveVisualizer:
 
         self.tokens_total = {"input": 0, "output": 0}
         self.current_agent_guess = "Supervisor"
+        # Worker node name, learned from the supervisor's plan steps (see
+        # _finalize_current_step); used to attribute worker steps correctly.
+        self.last_planned_agent = None
         self.pending_inputs_text = None
         self.dag_links = {}                # step_id -> filename (for step-card badges)
         self.latest_dag_filename = None    # most recently written DAG file
@@ -555,6 +558,24 @@ class LiveVisualizer:
         payload = pending[1] if (pending and len(pending) >= 2) else None
         parsed = self._parse_structured(structured_name, raw_content, payload)
 
+        # Worker attribution. planNexe2's print_stream unwraps the {node: update}
+        # envelope before calling on_event, so the worker's node name never
+        # reaches us and `current_agent_guess` is still whoever ran last (usually
+        # "Supervisor") when the worker's wokerResponse closes its step. The
+        # supervisor's own plan names the agent for each step, so learn the
+        # worker's name from there and use it. Domain-agnostic: it works for
+        # FEM_Agent, OER_Agent or any future worker without configuration.
+        if structured_name == SUPERVISOR_TOOL:
+            for s in (parsed.get("steps") or []):
+                name = s.get("agent") if isinstance(s, dict) else None
+                if name:
+                    self.last_planned_agent = name
+                    self.known_agents.add(name)
+                    break
+        elif structured_name == WORKER_TOOL:
+            if self.current_step.get("agent") in (None, "", "Supervisor", "Boss"):
+                agent_guess = self.last_planned_agent or "Worker"
+
         title, summary, tags, phase = self._derive_step_meta(
             agent_guess, structured_name, parsed
         )
@@ -786,17 +807,23 @@ class LiveVisualizer:
             rf = getattr(self.explog_obj, "relational_frame", None)
             if rf is None:
                 return out
-            for cand_attr in ("candidates", "explog_candidates"):
-                obj = getattr(rf, cand_attr, None)
-                if obj is not None:
+            # Hidden columns are dropped HERE, not just at render time: they are
+            # agent-internal (e.g. the full disposition_record text) and would
+            # otherwise be serialized into live_data.js and embedded verbatim in
+            # the saved HTML on every flush.
+            for tab, attrs in (("candidates", ("candidates", "explog_candidates")),
+                               ("processes", ("processes", "explog_processes"))):
+                for attr in attrs:
+                    obj = getattr(rf, attr, None)
+                    if obj is None:
+                        continue
                     df = getattr(obj, "df", obj)
-                    out["candidates"] = _df_to_records(df)
-                    break
-            for proc_attr in ("processes", "explog_processes"):
-                obj = getattr(rf, proc_attr, None)
-                if obj is not None:
-                    df = getattr(obj, "df", obj)
-                    out["processes"] = _df_to_records(df)
+                    hide = self.hide_columns.get(tab, set())
+                    if hide is not None and pd is not None and isinstance(df, pd.DataFrame):
+                        drop = [c for c in df.columns if c in hide]
+                        if drop:
+                            df = df.drop(columns=drop)
+                    out[tab] = _df_to_records(df)
                     break
         except Exception as e:
             out["_error"] = f"Failed to read EXPLOG: {e}"
@@ -937,6 +964,15 @@ class LiveVisualizer:
             ) + 1
             self.tokens_total = data.get("tokens_total", self.tokens_total)
             self.session_start = data.get("session_start", self.session_start)
+            # Re-learn the worker's node name from the restored history, so the
+            # first worker step after a resume is attributed correctly even
+            # before the supervisor plans again.
+            for s in reversed(self.steps):
+                a = s.get("agent")
+                if a and a not in ("Supervisor", "Boss", "Worker"):
+                    self.last_planned_agent = a
+                    self.known_agents.add(a)
+                    break
 
             dag_links = data.get("dag_links") or {}
             self.dag_links = {}
@@ -1685,10 +1721,9 @@ function cellClassFor(col, v) {
   if (c === 'processnote') return 'wrap wide-note';
   if (c === 'status') return '';
   if (typeof v === 'number') {
-    if (c.includes('overpot') || c.includes('deviation')) {
-      if (Math.abs(v) > 1.0) return 'num bad';
-      return 'num';
-    }
+    // ranking metrics: flag values outside the study's acceptance window
+    if (c.includes('excess_loss')) return Math.abs(v) > 0.22 ? 'num bad' : 'num';   // 0.22 dB = 95 % transfer
+    if (c.includes('deviation'))   return Math.abs(v) > 1.0 ? 'num bad' : 'num';    // 1 um off target
     return 'num';
   }
   if (c.includes('note') || c.includes('reason')) return 'wrap';

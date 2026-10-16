@@ -36,10 +36,9 @@ from pydantic import BaseModel, Field
 from pydantic import model_validator
 
 from src.tools import *
-from src.prompt import dft_agent_prompt,hpc_agent_prompt,supervisor_prompt, oer_agent_prompt, boss_prompt
-from src.disposition_messages import classify_wait_handback, format_supervisor_handback_directive
-from src.forgotten_jobs import find_forgotten_jobs
+from src.prompt import supervisor_prompt, fem_agent_prompt, boss_prompt
 from src.history_log import write_history
+from src.run_gate import init_control_files, wait_for_turn
 from src.past_steps import (
     HARD_TOKENS,
     K_VERBATIM,
@@ -59,7 +58,7 @@ from src.past_steps import (
 from src import var
 from src.myCANVAS import CANVAS
 from src.live_visualizer import LiveVisualizer
-from gnome_dreams_oer_screening.explog.explog import EXPLOG
+from src.fem_explog import EXPLOG
 
 import json, hashlib, time
 from collections import defaultdict, deque
@@ -71,7 +70,7 @@ viz = LiveVisualizer(
     explog_obj=EXPLOG,       # has `.relational_frame.<name>.df`
 )
 
-members = ["OER_Agent"]
+members = ["FEM_Agent"]
 
 class myStep(BaseModel):
     """Step in the plan."""
@@ -84,25 +83,19 @@ class myStep(BaseModel):
                             "inspect_my_canvas",
                             "write_my_canvas",
                             "read_my_canvas",
-                            "OER_data_analasis_v2",
-                            "browse_df",
-                            "arXiv_search",
-                            "enter_candidate_in_log",
-                            "submit_dft_job",
-                            "get_terminations_ranking",
-                            "list_adsorption_sites",
-                            "read_explog",
-                            "wait_for_update",
-                            "query_explog",
-                            "get_disposition_info",
-                            "update_disposition_info",
-                            # "math_expression_tool",
-                            # "extract_numeric_from_tool_output",
                             "write_report",
                             "search_artifacts",
+                            "check_time",
+                            "arXiv_search",
+                            "list_materials",
+                            "enter_design_in_log",
+                            "run_coupled_mode_analysis",
+                            "query_explog",
+                            "read_explog",
+                            "get_disposition_info",
+                            "update_disposition_info",
                             ""
                 ]] = Field(f"must-use tools for this step, should be a subset of the tools available to the agent. read the CANVAS with key Worker_available_tools to see more details about each tools.")
-    enforce_queue_floor: bool = Field(True, description=f"Whether the worker must keep the HPC queue stocked (at least {var.QUEUE_MIN_PENDING} QUEUED jobs) before it may wait for current jobs to finish. Keep True to ensure maximum HPC utilization: the worker submits ready continuation work itself, and only returns to the supervisor to discuss expanding the study when no ready work remains. Set False only when genuinely winding the study down -- when the remaining time is too short for newly-submitted jobs to finish -- so the worker may instead wait for and finalize the in-flight results. False is honored only within the final {var.FLOOR_DISARM_WINDOW_DAYS} days of the {var.STUDY_BUDGET_DAYS}-day study budget; set earlier, it is ignored (coerced back to True) and the worker is told so.")
 
 class myPastStep(BaseModel):
     """Step in the plan."""
@@ -228,7 +221,7 @@ class PlanExecute(TypedDict):
 # the SqliteSaver + thread_id + a per-task checkpoint namespace) and passes it
 # into agent.stream(). LangGraph then checkpoints every super-step of the
 # react loop (model call / tool call) under a namespaced checkpoint_ns like
-# "OER_Agent:<task_id>", in the SAME sqlite file — while
+# "FEM_Agent:<task_id>", in the SAME sqlite file — while
 # graph.get_state_history() on the parent thread keeps returning only the
 # round-level (checkpoint_ns == "") checkpoints, so time travel still indexes
 # big rounds.
@@ -319,13 +312,10 @@ def _fingerprint(x):
 POLLING_TOOLS = {
     "query_explog",
     "read_explog",
-    "extract_df",
-    "OER_data_analasis_v2",
-    "read_df",
     "arXiv_search",
-    "enter_candidate_in_log",
-    "submit_dft_job",
-    "browse_df",
+    "list_materials",
+    "enter_design_in_log",
+    "run_coupled_mode_analysis",
     }
 
 @wrap_tool_call
@@ -376,7 +366,7 @@ def prevent_redundant_polling(request, handler):
         You have called {tool_name} with the same arguments {args} and got the same result {content} for {len(recent_same)} times in the last 60 seconds.
         Please do not call {tool_name} again right now. You could:
             1) Move on to other tasks and come back to this later.
-            2) Call wait_for_update and wait for next dft job to finish if you have nothing else to do
+            2) End your turn and report back to the supervisor if you have nothing else to do
         You have a grace period of {goWildPatient - len(recent_same)} more calls with the same args and result before the entire system halts indefinitely to prevent damage. Please use this grace period wisely to avoid halting the system.
         """
         
@@ -428,33 +418,6 @@ def on_act_parse_error(exc: Exception) -> str:
         "Return exactly one of {Plan, NoChange, Response} as `action`, "
         "with the inner fields directly — do NOT wrap in {'NoChange': {...}}."
     )
-
-teamCapability = """
-<DFT Agent>:
-    - Create intial structure of the system
-    - Find pseudopotential
-    - Write initial script
-    - generate convergence test input files
-    - determine the best parameters from convergence test result
-    - generate EOS calculation input files using the best parameters
-    - generate production run input files
-    - generate BEEF input files from finished relax calculation
-    - Read output file to get energy
-    - Calculate lattice constant
-    - Calculate formation energy
-<HPC Agent>:
-    - find job list from the job list file
-    - Add resource suggestion base on the DFT input file
-    - Submit job to HPC and report back once all jobs are done
-"""
-
-teamRestriction = """
-<DFT Agent>:
-    - Cannot submit job to HPC
-<HPC Agent>:
-    - Cannot determine the best parameters from convergence test result
-"""
-
 
 def print_stream(s, DAG=None):
     viz.on_event(s, DAG=DAG)
@@ -508,16 +471,9 @@ def boss_node(state, config, agent=None, name=None):
     # thread_id and this task's checkpoint namespace). Propagating it into
     # agent.stream() makes the inner agent a checkpointed subgraph.
     inner_cfg = {**config, "recursion_limit": 1000}
-    # read "status.txt" in the working directory
-    with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
-        status = f.read()
-    while status == "stop":
-        print(f"Calculation pause, {name} is waiting. cwd: {var.my_WORKING_DIRECTORY}")
-        # wait for 5 second
-        time.sleep(5)
-        with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
-            status = f.read()
-            
+    # Pause / step-through gate (status.txt + step_num.txt). One crossing = one step.
+    wait_for_turn(name)
+
     # Time thing. may or may not need this for the boss 
     currentTime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     timeElapsed = timedelta(seconds= time.time() - var.startTime)
@@ -588,16 +544,9 @@ def supervisor_chain_node(state, config, agent=None, name=None):
     # checkpointed subgraph (see StateSyncMiddleware notes above).
     inner_cfg = {**config, "recursion_limit": 1000}
     
-    # read "status.txt" in the working directory
-    with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
-        status = f.read()
-    while status == "stop":
-        print(f"Calculation pause, supervisor is waiting. cwd: {var.my_WORKING_DIRECTORY}")
-        # wait for 5 second
-        time.sleep(5)
-        with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
-            status = f.read()
-    
+    # Pause / step-through gate (status.txt + step_num.txt). One crossing = one step.
+    wait_for_turn(name or "Supervisor")
+
     currentTime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     timeElapsed = timedelta(seconds= time.time() - var.startTime)
     
@@ -664,56 +613,6 @@ def supervisor_chain_node(state, config, agent=None, name=None):
         Or if you think the overall goal is finished, you can choose <Response> and write a draft final answer for the boss review.
         """
 
-    # --- Queue-floor handback -------------------------------------------------
-    # wait_for_update raises var.wait_handback when it refuses on the "expand"
-    # path (queue below floor with nothing ready, or idle) -- a situation only
-    # the supervisor can resolve (Path A ready work is the worker's own standing
-    # duty and raises no handback). Consume-and-clear it here (one-shot) and
-    # inject the expand directive so the handback is ACTED on instead of reaching
-    # the supervisor only as ignorable worker prose. The path is re-derived from
-    # live EXPLOG (self-correcting: if the queue refilled since the worker's
-    # turn, classify returns None and nothing is injected). Uses only the pure
-    # gate -- never the real wait tool, whose loop sleeps regardless of patience.
-    if getattr(var, "wait_handback", False):
-        var.wait_handback = False
-        _hb_forgotten = find_forgotten_jobs(EXPLOG, var.GO_DEV_OH_THRESHOLD)
-        _hb_status = EXPLOG.relational_frame.processes.df["status"].tolist()
-        _hb_path = classify_wait_handback(
-            candidates_need_disposition=EXPLOG.candidates_needing_disposition(),
-            pending_count=EXPLOG.job_handler.count_pending(),
-            running_count=_hb_status.count("running"),
-            enforce_queue_floor=getattr(var, "enforce_queue_floor", True),
-            queue_min_pending=var.QUEUE_MIN_PENDING,
-            remaining_seconds=var.STUDY_BUDGET_SECONDS - (time.time() - var.startTime),
-            forgotten_jobs=_hb_forgotten,
-        )
-        if _hb_path is not None:
-            supervisorMessage = (
-                supervisorMessage
-                + "\n\n"
-                + format_supervisor_handback_directive(_hb_path, _hb_forgotten)
-            )
-
-    # --- Early floor-disarm notice ---------------------------------------------
-    # worker_agent_node raises var.floor_coerce_notice when it ignored a plan
-    # step's enforce_queue_floor=False (requested before the final disarm
-    # window). Consume-and-clear it and tell the supervisor DIRECTLY -- the rule
-    # must be learned from feedback at the moment it matters, not only from the
-    # myStep field description.
-    if getattr(var, "floor_coerce_notice", False):
-        var.floor_coerce_notice = False
-        _notice_remaining = var.STUDY_BUDGET_SECONDS - (time.time() - var.startTime)
-        supervisorMessage += (
-            f"\n\nNOTE -- QUEUE FLOOR: your last plan set enforce_queue_floor="
-            f"False on a step, but the study still has "
-            f"{_notice_remaining / 86400:.1f} days remaining, so it was IGNORED "
-            f"(the floor stayed armed). enforce_queue_floor=False is honored "
-            f"only within the final {var.FLOOR_DISARM_WINDOW_DAYS} days of the "
-            f"{var.STUDY_BUDGET_DAYS}-day budget -- you cannot disarm the floor "
-            f"at will before then, so do not plan around an early disarm; plan "
-            f"submit/expansion steps instead."
-        )
-
     # --- Context budget (SOFT watermark) --------------------------------------
     # The step history used to grow ~666 tokens/step forever and was injected into
     # every prompt. It is now bounded, and a report is the cheapest way to bound it:
@@ -770,26 +669,21 @@ def supervisor_chain_node(state, config, agent=None, name=None):
         if isinstance(agent_response.action, Plan):
             for step in agent_response.action.steps:
                 ToolList = [
-                    "inspect_my_canvas",
-                    "write_my_canvas",
-                    "read_my_canvas",
-                    "OER_data_analasis_v2",
-                    "browse_df",
-                    "arXiv_search",
-                    "enter_candidate_in_log",
-                    "submit_dft_job",
-                    "get_terminations_ranking",
-                    "list_adsorption_sites",
-                    "read_explog",
-                    "wait_for_update",
-                    "query_explog",
-                    "get_disposition_info",
-                    "update_disposition_info",
-                    # "math_expression_tool",
-                    # "extract_numeric_from_tool_output",
-                    "write_report",
-                    "search_artifacts",
-                    ""
+                            "inspect_my_canvas",
+                            "write_my_canvas",
+                            "read_my_canvas",
+                            "write_report",
+                            "search_artifacts",
+                            "check_time",
+                            "arXiv_search",
+                            "list_materials",
+                            "enter_design_in_log",
+                            "run_coupled_mode_analysis",
+                            "query_explog",
+                            "read_explog",
+                            "get_disposition_info",
+                            "update_disposition_info",
+                            ""
                 ]
                 wrongTools = set(step.required_tools) - set(ToolList)
                 print(f"wrongTools: {wrongTools}")
@@ -902,7 +796,8 @@ Return ONLY a JSON object with exactly two string fields:
          from the experiment log -- the strategy and how it evolved, hypotheses formed
          and whether confirmed or rejected, literature findings, what was tried and
          FAILED, and any CANVAS keys or reference IDs worth revisiting. Do NOT restate
-         per-candidate numbers (G(O), G(OH), overpotentials) -- those live in EXPLOG,
+         per-design numbers (effective indices, coupling lengths, power transfer, the
+         coupling_length_deviation_um / excess_loss_dB ranking metrics) -- those live in EXPLOG,
          retrievable with query_explog.
 Output only the JSON object, nothing else."""
     response = summarizer.invoke(prompt)
@@ -1002,38 +897,15 @@ def worker_agent_node(state, config, agent=None, name=None, summarizer=None):
     # checkpointed subgraph; every tool call gets a resumable checkpoint.
     inner_cfg = {**config, "recursion_limit": 1000}
     # CANVAS.snap()
-    # read "status.txt" in the working directory
-    with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
-        status = f.read()
-    while status == "stop":
-        print(f"Calculation pause, {name} Agent is waiting. cwd: {var.my_WORKING_DIRECTORY}")
-        # wait for 5 second
-        time.sleep(5)
-        with open(f"{var.my_WORKING_DIRECTORY}/status.txt", "r") as f:
-            status = f.read()
-    
+    # Pause / step-through gate (status.txt + step_num.txt). One crossing = one step.
+    wait_for_turn(name)
+
     print(f"Agent {name} is processing!!!!!")
     write_history(f"Agent {name} is processing!!!!!\n")
 
     plan = state["plan"]
     plan_str = "\n".join(f"{i+1}. {step.step}" for i, step in enumerate(plan))
     task = plan[0]
-    # Bridge the per-task queue-floor flag to the global wait_for_update tool
-    # (Gate 2, Step 6). Re-derived from plan[0] every turn, so it survives resume;
-    # defaults True when the supervisor omits it.
-    # False is honored only inside the final FLOOR_DISARM_WINDOW_DAYS of the
-    # study budget; requested earlier, it is coerced back to True and both
-    # agents are told (worker note below + supervisor notice next planning turn).
-    # Running every worker turn, this also re-arms False steps already sitting
-    # in a resumed checkpoint -- no checkpoint surgery needed.
-    _floor = getattr(task, "enforce_queue_floor", True)
-    _remaining = var.STUDY_BUDGET_SECONDS - (time.time() - var.startTime)
-    _floor_coerced = (not _floor) and _remaining >= var.FLOOR_DISARM_WINDOW_SECONDS
-    if _floor_coerced:
-        _floor = True
-        var.floor_coerce_notice = True  # one-shot; supervisor told next turn
-    var.enforce_queue_floor = _floor
-
     # This step's absolute number. Derived from the ledger (past_steps.steps_completed
     # reads the digest block's step range back out), NOT len(past_steps) -- compaction
     # shrinks the ledger, which used to make the step_<N>_DAG.html filenames march
@@ -1050,18 +922,8 @@ Here are what has been done so far:
 Here is the overall objective:
 {state["inputs"]}
 
-Now, you are tasked with: {task}. Focus on this task. Your standing duties are always in scope regardless of the task: recording dispositions for finished results, submitting pipeline-continuation jobs (e.g. a finalized bulk -> surface relaxation, a finalized surface -> O adsorption on its sites, a competitive O site -> OH adsorption), and complying with instructions returned by tools. Do not otherwise go beyond the task -- no new candidates, no reports, no study-scope changes unless the task asks for them. Please note down important information on CANVAS together with their reference id before you end.
+Now, you are tasked with: {task}. Focus on this task. Your standing duties are always in scope regardless of the task: recording dispositions for finished results and complying with instructions returned by tools. Do not otherwise go beyond the task -- no new designs, no reports, no study-scope changes unless the task asks for them. Please note down important information on CANVAS together with their reference id before you end.
 """
-    if _floor_coerced:
-        task_formatted += (
-            f"\nNOTE: this step requested enforce_queue_floor=False, but the "
-            f"study still has {_remaining / 86400:.1f} days remaining -- the "
-            f"disarm is honored only within the final "
-            f"{var.FLOOR_DISARM_WINDOW_DAYS} days of the "
-            f"{var.STUDY_BUDGET_DAYS}-day budget. The queue floor remains ARMED "
-            f"for this step.\n"
-        )
-
     old_task_formatted = task_formatted
     # On a mid-round resume, this node re-executes from the top while the
     # inner agent continues after its last completed tool call — so the
@@ -1106,7 +968,7 @@ Now, you are tasked with: {task}. Focus on this task. Your standing duties are a
             else:
                 tool_use_passed, tool_use_msg = CANVAS.check_required_tool_use(task.required_tools)
             print(tool_use_msg)
-            # Force true, not as necessary in OER case
+            # Advisory only: the supervisor judges tool use from the worker's summary
             if not tool_use_passed:
                 tool_use_passed = True
                 tool_use_msg += "\nHowever, we will not enforce the tool use in this case, and let the supervisor decide whether the tool use is necessary or not based on the worker's execution result and notes on CANVAS."
@@ -1210,23 +1072,23 @@ def whos_next(state):
     return state["next"]
     
 def create_planning_graph(config: dict) -> StateGraph:
-    # create a file named status.txt in the working directory
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     viz.set_working_directory(WORKING_DIRECTORY)
-    with open(f"{WORKING_DIRECTORY}/status.txt", "w") as f:
-        f.write("run")
+    # Create status.txt / step_num.txt if absent; a resume keeps them as they are.
+    init_control_files(WORKING_DIRECTORY)
     
     # Define the model
     # llm = ChatAnthropic(model="claude-haiku-4-5-20251001", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
     # workerllm = ChatAnthropic(model="claude-haiku-4-5-20251001", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0, tool_choice="auto")
-    llm = ChatAnthropic(model="claude-sonnet-4-5-20250929", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
-    workerllm = ChatAnthropic(model="claude-sonnet-4-5-20250929", api_key=config['ANTHROPIC_API_KEY'],temperature=0.0, tool_choice="auto")
+    model_name = config.get("ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929")
+    llm = ChatAnthropic(model=model_name, api_key=config['ANTHROPIC_API_KEY'],temperature=0.0)
+    workerllm = ChatAnthropic(model=model_name, api_key=config['ANTHROPIC_API_KEY'],temperature=0.0, tool_choice="auto")
     # Built ONCE and injected into worker_agent_node, rather than constructed inline
     # per compaction as it used to be. It now runs on the HARD-watermark path (the
     # agent ignored the report nudge), so it needs a retry and a bounded output --
     # a transient 529 here must not take down a 30-day campaign.
     summarizer_llm = ChatAnthropic(
-        model="claude-sonnet-4-5-20250929",
+        model=model_name,
         api_key=config['ANTHROPIC_API_KEY'],
         temperature=0.0,
         max_tokens=1500,
@@ -1261,10 +1123,6 @@ def create_planning_graph(config: dict) -> StateGraph:
     
     ## Memory Saver
     memory = MemorySaver()
-
-    PAST_STEPS = []
-    myCANVAS = {}
-    
 
 
     # The boss used to have NO tools, which was fine while the full step history sat
@@ -1305,120 +1163,35 @@ def create_planning_graph(config: dict) -> StateGraph:
     #                                prompt=supervisor_prompt, response_format=Act)   
     supervisor_node = functools.partial(supervisor_chain_node, agent=supervisor_agent, name="Supervisor_Agent")
     
-    ### DFT Agent
-    dft_tools = [
-        inspect_my_canvas,
-        write_my_canvas,
-        read_my_canvas,
-        calculate_formation_E,
-        generateSurface_and_getPossibleSite,
-        generate_myAdsorbate,
-        add_myAdsorbate,
-        init_structure_data,
-        find_pseudopotential,
-        write_QE_script_w_ASE,
-        calculate_lc,
-        generate_convergence_test,
-        find_optimal_parameter,
-        generate_eos_test,
-        read_energy_from_output,
-        get_convergence_suggestions,
-        analyze_BEEF_result,
-        extract_numeric_from_tool_output,
-        math_expression_tool
-        # get_ase_atoms_property,
-        # inspect_ase_atoms,
-        ]
-    # dft_agent = create_react_agent(workerllm, tools=dft_tools,
-    #                                prompt="You are a DFT expert")   
-    dft_agent = create_agent(
-        model=workerllm,
-        tools=dft_tools,
-        system_prompt=dft_agent_prompt,
-        response_format=ToolStrategy(wokerResponse),
-        middleware=[StateSyncMiddleware(), DisableParallelToolCallsMiddleware(), handle_tool_errors]
-    )
-    dft_node = functools.partial(worker_agent_node, agent=dft_agent, name="DFT_Agent")
-
-    
-    oer_tools = [
+    fem_tools = [
         inspect_my_canvas,
         write_my_canvas,
         read_my_canvas,
         write_report,
+        search_artifacts,
         check_time,
-        OER_data_analasis_v2,
-        browse_df,
         arXiv_search,
-        enter_candidate_in_log,
-        submit_dft_job,
-        get_terminations_ranking,
-        list_adsorption_sites,
-        read_explog,
-        wait_for_update,
+        list_materials,
+        enter_design_in_log,
+        run_coupled_mode_analysis,
         query_explog,
+        read_explog,
         get_disposition_info,
         update_disposition_info,
-        # math_expression_tool,
-        # extract_numeric_from_tool_output,
-        search_artifacts,
         ]
-    # oer_agent = create_react_agent(workerllm, tools=oer_tools,
-    #                                prompt=oer_agent_prompt)
-    oer_agent = create_agent(
+    fem_agent = create_agent(
         model=workerllm,
-        tools=oer_tools,
-        system_prompt=oer_agent_prompt,
+        tools=fem_tools,
+        system_prompt=fem_agent_prompt,
         response_format=ToolStrategy(wokerResponse),
         middleware=[StateSyncMiddleware(), DisableParallelToolCallsMiddleware(), prevent_redundant_polling, handle_tool_errors]
     )
-    oer_node = functools.partial(worker_agent_node, agent=oer_agent, name="OER_Agent", summarizer=summarizer_llm)
-
-    ### HPC Agent
-    # hpc_tools = [read_script, submit_and_monitor_job, read_energy_from_output]
-    hpc_tools = [
-        inspect_my_canvas,
-        write_my_canvas,
-        read_my_canvas,
-        submit_and_monitor_job,
-        add_resource_suggestion
-        ]
-
-    # hpc_agent = create_react_agent(workerllm, tools=hpc_tools,
-    #                                prompt=hpc_agent_prompt)
-    hpc_agent = create_agent(
-        model=workerllm,
-        tools=hpc_tools,
-        system_prompt=hpc_agent_prompt,
-        response_format=ToolStrategy(wokerResponse),
-        middleware=[StateSyncMiddleware(), DisableParallelToolCallsMiddleware(), handle_tool_errors]
-    )
-    hpc_node = functools.partial(worker_agent_node, agent=hpc_agent, name="HPC_Agent")
-    
-    ### MD Agent
-    # md_tools = [
-    #     find_classical_potential,
-    #     init_structure_data,
-    #     write_LAMMPS_script
-    # ]
-    
-    # md_agent = create_react_agent(llm, tools=md_tools,
-    #                               state_modifier=md_agent_prompt)
-    
-    # md_node = functools.partial(worker_agent_node, agent=md_agent, name="MD_Agent")
-
-    # save_graph_to_file(dft_agent, config['working_directory'], "dft_agent")
-    
-
+    fem_node = functools.partial(worker_agent_node, agent=fem_agent, name="FEM_Agent", summarizer=summarizer_llm)
 
     # Create the graph
     graph = StateGraph(PlanExecute)
-    # graph.add_node("DFT_Agent", dft_node)
-    # graph.add_node("HPC_Agent", hpc_node)
-    graph.add_node("OER_Agent", oer_node)
+    graph.add_node("FEM_Agent", fem_node)
     graph.add_node("Boss_Agent", boss_agent_node)
-    # graph.add_node("MD_Agent", md_node)
-    # graph.add_node("CSS_Agent", css_node)
 
     graph.add_node("Supervisor", supervisor_node)
     
@@ -1428,8 +1201,6 @@ def create_planning_graph(config: dict) -> StateGraph:
     # The supervisor populates the "next" field in the graph state
     # which routes to a node or finishes
     conditional_map = {k: k for k in members}
-    # above line will crete a dict like:
-    # {"DFT_Agent": "DFT_Agent_node", "HPC_Agent": "HPC_Agent", "OER_Agent": "OER_Agent", ...}
     
     conditional_map["Boss_Agent"] = "Boss_Agent"
     conditional_map["FINISH"] = END

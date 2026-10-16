@@ -31,10 +31,8 @@ Three cooperating thresholds, all recomputed from the ledger itself every turn
              summary of the un-reported steps. This is the backstop that makes
              the bound unconditional.
 
-DOCTRINE: this module is pure and stdlib-only, like src/disposition_messages.py
-and src/forgotten_jobs.py. It must never import src.tools (which loads a
-~500k-row database at module scope, ~109 s) nor src.planNexe2 (which imports
-src.tools). In particular it is *duck-typed* on step objects -- it reads
+DOCTRINE: this module is pure and stdlib-only, like src/disposition_messages.py.
+It must never import src.tools nor src.planNexe2 (which imports src.tools). In particular it is *duck-typed* on step objects -- it reads
 .step/.agent/.timeStamp/.timeSpent and never constructs a `myPastStep`; the
 caller in planNexe2 builds the models. That keeps the fast test tier fast and
 keeps zero serialization risk.
@@ -91,13 +89,12 @@ DIGEST_AGENT = "system"
 # workflow (disposition coverage, report bookkeeping, the wait gate) and the
 # agent reasons directly off their text.
 CLEARABLE_EXCLUDE_TOOLS: tuple[str, ...] = (
-    "submit_dft_job",
-    "enter_candidate_in_log",
+    "run_coupled_mode_analysis",
+    "enter_design_in_log",
     "update_disposition_info",
     "get_disposition_info",
     "write_report",
     "write_my_canvas",
-    "wait_for_update",
 )
 
 

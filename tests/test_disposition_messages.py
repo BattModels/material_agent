@@ -17,7 +17,6 @@
 from src.disposition_messages import (
     format_get_disposition,
     format_update_disposition,
-    format_supervisor_handback_directive,
     evaluate_terminal_tag_gate,
 )
 from src import var
@@ -45,9 +44,9 @@ _TERMINAL = ("Abandon", "Sufficient")
 _ACTIVE = ("Low priority", "Medium priority", "High priority")
 
 
-def _gate(decision, state, is_forgotten, has_in_flight):
+def _gate(decision, state, has_in_flight):
     return evaluate_terminal_tag_gate(
-        decision=decision, state=state, is_forgotten=is_forgotten,
+        decision=decision, state=state,
         has_in_flight=has_in_flight, terminal_decisions=_TERMINAL,
         active_decisions=_ACTIVE,
     )
@@ -56,35 +55,27 @@ def _gate(decision, state, is_forgotten, has_in_flight):
 def test_gate_failed_candidate_only_abandon():
     # failed + non-Abandon -> rejected; message names FAILED, the fix (Abandon),
     # and the offending decision.
-    msg = _gate("Medium priority", "failed", False, False)
+    msg = _gate("Medium priority", "failed", False)
     assert msg is not None
     assert "FAILED" in msg and "Abandon" in msg
     assert "Medium priority" in msg
-    msg2 = _gate("Sufficient", "failed", False, False)
+    msg2 = _gate("Sufficient", "failed", False)
     assert msg2 is not None and "Abandon" in msg2 and "Sufficient" in msg2
-    # failed + Abandon -> allowed, regardless of forgotten / in-flight
-    assert _gate("Abandon", "failed", True, True) is None
+    # failed + Abandon -> allowed, regardless of in-flight
+    assert _gate("Abandon", "failed", True) is None
 
 
-def test_gate_terminal_requires_settled():
-    # forgotten -> reject; message names the decision, the reason (not settled),
-    # and steers to an active priority.
-    msg = _gate("Abandon", "surface_relaxation", True, False)
-    assert msg is not None
-    assert "Abandon" in msg
-    assert "settled" in msg.lower()
+def test_gate_terminal_requires_nothing_in_flight():
+    msg = _gate("Sufficient", "active", True)
+    assert msg is not None and "Sufficient" in msg and "in flight" in msg.lower()
     assert all(a in msg for a in _ACTIVE)         # ALL active options offered
-    # in-flight -> reject
-    msg2 = _gate("Sufficient", "surface_relaxation", False, True)
-    assert msg2 is not None and "settled" in msg2.lower() and "Sufficient" in msg2
-    # fully settled -> allow (None)
-    assert _gate("Abandon", "surface_relaxation", False, False) is None
-    assert _gate("Sufficient", None, False, False) is None
+    assert _gate("Abandon", "active", False) is None
+    assert _gate("Sufficient", None, False) is None
 
 
 def test_gate_active_priority_always_allowed_when_not_failed():
-    assert _gate("Medium priority", "surface_relaxation", True, True) is None
-    assert _gate("Low priority", None, True, False) is None
+    assert _gate("Medium priority", "active", True) is None
+    assert _gate("Low priority", None, False) is None
 
 
 # ---------------------------------------------------------------------------
@@ -133,9 +124,8 @@ def test_ok_message_confirms_candidate_and_decision():
 
 def test_get_message_lists_outstanding_ids():
     outstanding = {
-        "must_cover": [{"job_type": "surface_relaxation", "termination_index": 1,
-                        "site_index": None, "ids": [42]}],
-        "legacy_optional": [],
+        "must_cover": [{"job_type": "coupled_mode_analysis", "ids": [42]}],
+        
         "latest_disposition": None,
         "has_finalized": True,
     }
@@ -145,7 +135,7 @@ def test_get_message_lists_outstanding_ids():
 
 
 def test_get_message_when_nothing_outstanding():
-    outstanding = {"must_cover": [], "legacy_optional": [],
+    outstanding = {"must_cover": [], 
                    "latest_disposition": None, "has_finalized": False}
     msg = format_get_disposition("matX", outstanding)
     assert isinstance(msg, str) and msg          # non-empty, no crash
@@ -157,7 +147,7 @@ def test_get_message_renders_latest_disposition_when_present():
     # in test_disposition_tools.py). Here we just check it is surfaced.
     outstanding = {
         "must_cover": [],
-        "legacy_optional": [],
+        
         "latest_disposition": {"Decision": "Medium priority", "Summary": "promising",
                                "Future_plan": "run more OH sites",
                                "Summarized_process_id": [1]},
@@ -170,7 +160,7 @@ def test_get_message_renders_latest_disposition_when_present():
 
 
 def test_get_message_states_no_prior_disposition_when_none():
-    outstanding = {"must_cover": [], "legacy_optional": [],
+    outstanding = {"must_cover": [], 
                    "latest_disposition": None, "has_finalized": False}
     msg = format_get_disposition("matX", outstanding)
     assert "no prior disposition" in msg.lower()
@@ -180,8 +170,7 @@ def test_get_message_never_lists_legacy_ids():
     # legacy_optional present, must_cover empty -> the legacy id must NOT appear
     outstanding = {
         "must_cover": [],
-        "legacy_optional": [{"job_type": "surface_relaxation",
-                             "termination_index": 0, "site_index": None,
+        "_ignored": [{"job_type": "coupled_mode_analysis",
                              "ids": [7]}],
         "latest_disposition": None,
         "has_finalized": True,
@@ -216,42 +205,3 @@ def test_get_message_unknown_candidate():
     assert "no prior disposition" not in msg.lower()  # must not read like success
 
 
-# ---------------------------------------------------------------------------
-# format_supervisor_handback_directive: the SUPERVISOR-facing instruction the
-# supervisor node injects on a queue-floor handback. Only the "expand" path
-# remains: ready continuation work (the old Path A / submit_ready handback) is
-# now the worker's own standing duty, submitted under its task with no
-# supervisor round-trip, so the directive never plans a submit step. It does
-# not address the worker or tell anyone to "wait".
-# ---------------------------------------------------------------------------
-
-def test_handback_directive_expand_guards_the_floor_disarm():
-    msg = format_supervisor_handback_directive("expand")
-    # Disarming the floor is reserved for a genuine wind-down, not the default,
-    # and the directive states the structural rule (final-days window).
-    assert "enforce_queue_floor=False" in msg
-    assert "winding down" in msg.lower()
-    assert "final" in msg.lower() and "days" in msg.lower()
-
-
-def test_handback_directive_expand_opens_discussion_with_oer_agent():
-    msg = format_supervisor_handback_directive("expand")
-    low = msg.lower()
-    assert "discussion" in low                   # a discussion, ...
-    assert "oer_agent" in low                     # ... with the OER_agent
-    assert "not a decision you make alone" in low  # not decided unilaterally
-    # The four minimum discussion points are all present.
-    assert "(1)" in msg and "(2)" in msg and "(3)" in msg and "(4)" in msg
-    assert "current results" in low              # point 1: results
-    assert "arxiv" in low                        # point 2: literature
-    assert "active candidates" in low            # point 3: which active to push
-    assert "aq-gnome" in low                     # point 4: add more candidates
-    # Wind-down remains available, but nobody is told to "wait" as an instruction.
-    assert "enforce_queue_floor=False" in msg
-    assert "END YOUR TURN" not in msg
-
-
-def test_handback_directive_expand_lists_no_specific_jobs():
-    # Path B has no ready work, so it must not fabricate a job listing.
-    msg = format_supervisor_handback_directive("expand")
-    assert "Ready work to submit" not in msg
