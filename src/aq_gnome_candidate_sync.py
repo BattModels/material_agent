@@ -23,7 +23,7 @@
 #   Unlike Part 2's columns, this one is NOT joined on demand -- it's a
 #   PERSISTED EXPLOG column, same as Part 1's "Reduced Formula". compute_decomposition_energy
 #   does the actual per-candidate work (an H5PY decomposition-energy-grid
-#   read, mirroring the now-deactivated get_candidate_data tool's exact
+#   read, mirroring the now-removed get_candidate_data tool's exact
 #   algorithm); sync_decomposition_energy calls it to backfill ONLY rows
 #   currently <NA> (never unconditionally, unlike sync_reduced_formula,
 #   since recomputing an already-known value would waste a real file read).
@@ -132,7 +132,7 @@ def _decomposition_energy_from_row(row: pd.Series, dh, sc) -> float:
     reason (e.g. enter_candidate_in_log, which also reads "Reduced Formula"
     off the same row -- fetching it once avoids a second lookup).
 
-    Mirrors the now-deactivated get_candidate_data tool's exact per-row
+    Mirrors the now-removed get_candidate_data tool's exact per-row
     algorithm: prefer mixed (GGA/GGA(+U)/r2SCAN) results, fall back to
     GGA-only when mixed_pbx_save_id == "Not computed", floor at 0.0 (a
     material can't be "more stable than most stable").

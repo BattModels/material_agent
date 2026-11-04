@@ -109,7 +109,7 @@ def test_include_material_properties_true_shows_columns(tmp_path):
 
 
 def test_include_material_properties_true_shows_decomposition_energy(tmp_path):
-    # Replaces the now-deactivated get_candidate_data tool's per-ID
+    # Replaces the now-removed get_candidate_data tool's per-ID
     # decomposition-energy lookup. This candidate is added via the raw
     # EXPLOG.add_candidate test helper (no decomposition_energy passed), so
     # the persisted value starts <NA> -- query_explog's internal

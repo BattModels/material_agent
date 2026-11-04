@@ -289,8 +289,8 @@ def test_disposition_tools_in_mystep_required_tools_literal():
 
 # ===========================================================================
 # Deactivated tools (inspect_explog, get_candidate_data) actually absent.
-# Functions themselves remain importable (T.inspect_explog, T.get_candidate_data
-# still exist -- deactivated, not deleted); these check they're gone from the
+# The functions have since been deleted from src/tools.py as well (see git
+# history for their last form); these check they're gone from the
 # 3 module-level registration surfaces that don't require constructing a real
 # agent graph to inspect. NOT covered here (would need to call
 # P.create_planning_graph(config), which needs a real LLM config): the
