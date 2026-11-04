@@ -1,5 +1,4 @@
 import sys
-sys.path.append('/home/energy/matnis/projects/dreams_colab/material_agent/src')
 from copy import deepcopy
 from pathlib import Path
 from matplotlib import pyplot as plt
