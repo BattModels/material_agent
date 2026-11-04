@@ -1,0 +1,53 @@
+[project]
+name = "material-agent"
+version = "0.1.0"
+description = "Autonomous multi-agent DFT screening for acidic OER catalysts"
+requires-python = ">=3.11"
+
+dependencies = [
+    # agent stack -- majors capped, the 0.3 -> 1.x move was breaking
+    "langgraph>=1.0.9,<2",
+    "langgraph-checkpoint-sqlite>=3.0.3,<4",
+    "langchain>=1.2.10,<2",
+    "langchain-core>=1.2.14,<2",
+    "langchain-anthropic>=1.3.3,<2",
+    "ursa-ai>=0.15.1",
+    "tiktoken>=0.12.0",
+
+    # data / modelling
+    "pandas>=2.3.3",
+    "numpy>=2.4.2",
+    "pydantic>=2.12.5",
+    "pymatgen>=2025.10.7",
+    "ase>=3.27.0",
+    "autocat>=2022.8.5",
+    "networkx>=3.6.1",
+
+    # HPC + plotting + misc
+    "pysqa>=0.3.5",
+    "matplotlib>=3.10.8",
+    "seaborn>=0.13.2",
+    "tqdm>=4.67.3",
+    "PyYAML>=6.0.3",
+    "typing-extensions>=4.15.0",
+
+    # the chemistry engine and the candidate database -- see [tool.uv.sources]
+    "GNoME-DREAMS-OER-screening",
+    "aq-gnome",
+]
+
+[project.optional-dependencies]
+# Only used by a guarded probe in src/tools.py; the system runs without them.
+mace = ["torch", "mace-torch"]
+
+[dependency-groups]
+dev = ["pytest>=9.0.2"]
+
+[tool.uv.sources]
+aq-gnome = { git = "https://github.com/Matminator/AQ-GNoME" }
+"GNoME-DREAMS-OER-screening" = { git = "https://github.com/Matminator/GNoME_DREAMS_OER_screening" }
+
+[tool.uv]
+# src/ is a namespace package by design (see pytest.ini); this project declares
+# dependencies, it is not itself installable.
+package = false
