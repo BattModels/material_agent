@@ -474,13 +474,18 @@ def test_render_handles_a_pydantic_step_with_a_timedelta_timestamp():
 
 
 def test_compaction_pipeline_end_to_end_on_pydantic_steps():
+    # K is pinned here rather than taken from the module. This test is about
+    # ABSOLUTE step numbering after a compaction, which needs at least one
+    # verbatim step to survive; the live K_VERBATIM is 0. The production value
+    # is guarded by test_knobs_satisfy_the_thrash_constraint, not by this test.
+    K = 10
     ledger = [
         RealShapePastStep(step=f"step {i}" * 50, agent="OER_Agent",
                           timeStamp=timedelta(seconds=i * 600), timeSpent="0:10:00")
         for i in range(1, 21)
     ]
-    plan = plan_compaction(ledger, report_written=True)
-    assert plan.should and plan.n_evicted == 20 - K_VERBATIM
+    plan = plan_compaction(ledger, report_written=True, k=K)
+    assert plan.should and plan.n_evicted == 20 - K
 
     digest = build_report_digest(report_name="round3_report", report_id="abc123",
                                  step_lo=1, step_hi=plan.n_evicted)
@@ -489,7 +494,7 @@ def test_compaction_pipeline_end_to_end_on_pydantic_steps():
                           timeStamp=timedelta(seconds=0), timeSpent="0:00:00")
     ] + ledger[plan.evict_hi:]
 
-    assert len(compacted) == 1 + K_VERBATIM
+    assert len(compacted) == 1 + K
     assert is_digest(compacted[0])
     # numbering must resume at the right ABSOLUTE step, not restart at 1
     rendered = render_past_steps(compacted, start_index=first_verbatim_index(compacted))
