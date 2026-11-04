@@ -460,7 +460,6 @@ CANVAS = myCANVAS()
 #     print(CANVAS.inspect())
 #     print(CANVAS.write('test', 'test value3'))
 #     print(CANVAS.write('test2', 'test2 value3', overwrite=True))
-#     tmp = read("/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/Rb-BCC-plan/Rb_bcc_k_0.5_ecutwfc_70.in.pwo")
 #     print(CANVAS.write('Rb_bcc_k_0.5_ecutwfc_70', tmp))
 #     dd = {'a': 1, 'b': 2}
 #     ddd = {'c': 3, 'd': 4, 'dd': dd}

@@ -3609,7 +3609,6 @@ def get_convergence_suggestions(
     outFile = filename + ".pwo"
     errFile = filename + ".err"
     block_size_tokens = 150000
-    # WORKING_DIRECTORY = "/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/out"
     WORKING_DIRECTORY = var.my_WORKING_DIRECTORY
     
     # config = load_config(os.path.join('./config', "default.yaml"))
@@ -4291,7 +4290,7 @@ echo "Job Ended at `date`"
     ", "outputFilename": "input1.pwi.pwo"}, "gpawScript.py": {"nnodes": 1, "ntasks": 1, "runtime": 30, "submissionScript": "
 echo "Job started on `hostname` at `date`"\n \
 \n \
-export GPAW_SETUP_PATH=/nfs/turbo/coe-venkvis/ziqiw-turbo/material_agent/gpaw-setups-24.11.0\n \
+export GPAW_SETUP_PATH=/path/to/gpaw-setups\n \
 spack load py-gpaw\n \
 \n \
 python gpawScript.py\n \
