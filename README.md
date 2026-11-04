@@ -31,13 +31,14 @@ lives on disk, so a campaign survives driver restarts and cluster reboots.
 LangGraph and LangChain; VASP via pysqa on SLURM, with partition routing by
 system size and convergence recovery. The DFT pipeline is a fixed ladder (bulk →
 surface → O\* → OH\*); the agent chooses which materials and sites to spend it
-on. Entry point `invoke.py`, agent layer `src/`; the chemistry engine is a
-separate package, [GNoME_DREAMS_OER_screening](https://github.com/Matminator/GNoME_DREAMS_OER_screening).
+on. Entry point `invoke.py`, agent layer `src/`; EXPLOG and the DFT engine live
+in a separate package, [GNoME_DREAMS_OER_screening](https://github.com/Matminator/GNoME_DREAMS_OER_screening).
 
 ## Provenance
 
 A divergent branch of [DREAMS](https://arxiv.org/abs/2507.14267) (Wang et al.),
-which supplies the plan–execute loop and CANVAS. Added here: the exploration log
+which supplies the plan–execute loop and CANVAS. This branch was built together
+with Ziqi Wang, DREAMS' first author. Added on this branch: the exploration log
 and its decision model, the OER and VASP domain layer, HPC scheduling and queue
 management, the durable-state rework behind month-long resumability, operator
 steering, and the published record.
