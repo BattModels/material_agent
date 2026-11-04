@@ -567,7 +567,9 @@ def print_stream(s, DAG=None):
             title=DAG_title,
         )
     
-    if "messages" not in s:
+    # isinstance first: `in` is a key test on a dict but a substring test on a
+    # str, and worker_agent_node passes a raw summary. Non-dicts belong in raw-print.
+    if not isinstance(s, dict) or "messages" not in s:
         print("#################")
         write_history("#################\n")
         print(s)
@@ -1165,8 +1167,8 @@ def _compact_ledger(ledger, *, report_written, report_name,
         print(f"HARD watermark hit: mechanically summarized steps {lo_abs}-{hi_abs} "
               f"(CANVAS: '{raw_steps_key}'). A report would have done this better, and free.")
 
-    # Not routed through print_stream: that expects a graph stream event, and its
-    # `"messages" not in s` guard is a substring test on a raw string.
+    # Keep the plain print here. Through print_stream this digest would land in
+    # the history file as one quoted line, with its line breaks turned into \n.
     print(digest_text)
     write_history(digest_text + "\n")
 
