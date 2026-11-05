@@ -367,6 +367,9 @@ body {
   letter-spacing: .09em; text-transform: uppercase; color: var(--ink-3);
   margin: 0 0 12px;
 }
+.statsub { font-size: .78rem; color: var(--ink-3); margin: -6px 0 12px;
+  max-width: 82ch; line-height: 1.5; }
+.statgrid + .statgrid { margin-top: 10px; }
 .statgrid { display: grid; gap: 1px; background: var(--line-soft);
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
   border: 1px solid var(--line-soft); border-radius: 3px; overflow: hidden; }
@@ -1359,7 +1362,7 @@ footer.pagefoot code {
         launched, and the reasoning behind each decision, including the paths it abandoned.
       </p>
       <p class="leadsub">
-        Candidates were drawn from the GNoME database and screened with spin-polarised
+        Candidates were selected from the GNoME database and screened with spin-polarised
         RPBE+U calculations in VASP.
         <button type="button" class="inlink" id="gotomethods">see methods &rarr;</button>
       </p>
@@ -1370,16 +1373,20 @@ footer.pagefoot code {
 
     <section class="statgroup">
       <h2>Screening outcomes</h2>
+      <p class="statsub">how far materials got &mdash; each tile a subset of the one on its right</p>
       <div class="statgrid" id="stats-science"></div>
+      <div class="statgrid" id="stats-computed"></div>
     </section>
 
     <section class="statgroup">
       <h2>Calculation outcomes</h2>
+      <p class="statsub">what happened to each job &mdash; the four outcomes sum to the total</p>
       <div class="statgrid" id="stats-dft"></div>
     </section>
 
     <section class="statgroup">
       <h2>Calculations by type</h2>
+      <p class="statsub">converged jobs broken down by stage</p>
       <div class="statgrid" id="stats-jobs"></div>
     </section>
 
@@ -3460,6 +3467,8 @@ document.querySelectorAll("#tabbar button").forEach(b =>
   const oEnergies = PROCS.filter(p => p.job === "O_adsorption" && done(p) &&
                                       p.gO !== null && p.gO !== undefined);
   const oCands    = new Set(oEnergies.map(p => p.cand)).size;
+  const pctOf = (a, b) => b ? Math.round(100 * a / b) + "%" : "\u2014";
+  const per   = (a, b) => b ? (a / b).toFixed(1) : "\u2014";
 
   const card = (v, k, n, cls) =>
     '<div class="stat' + (cls ? " " + cls : "") + '"><span class="v">' + v + "</span>" +
@@ -3468,15 +3477,28 @@ document.querySelectorAll("#tabbar button").forEach(b =>
 
   document.getElementById("stats-science").innerHTML = [
     card(etaCands, "materials with an overpotential",
-         "a complete ladder on at least one site" + pct(etaCands, CANDS.length) + " of all materials"),
-    card(etaSites.length, "overpotentials computed",
-         "one per adsorption site, not one per calculation"),
+         pctOf(etaCands, CANDS.length) + " of all started \u00b7 " + etaSites.length +
+         " ladders across " + per(etaSites.length, etaCands) + " sites each"),
     card(oCands, "materials with an O* binding energy",
-         "reached the first adsorption step"),
-    card(oEnergies.length, "O* binding energies computed",
-         "completed O* relaxations that yielded a free energy"),
+         pctOf(oCands, CANDS.length) + " of all started \u00b7 " +
+         per(oEnergies.length, oCands) + " O* energies each"),
     card(CANDS.length, "Total number of materials for which calculations started",
          "every candidate the agent registered, pursued or abandoned"),
+  ].join("");
+
+  /* Site-level volume. A different unit from the funnel above - these have no
+     shared denominator with it - so it gets its own row rather than being
+     interleaved, which is what made the single braided row unreadable. */
+  document.getElementById("stats-computed").innerHTML = [
+    card(etaSites.length, "overpotentials computed",
+         "one per complete ladder, in both conventions"),
+    card(oEnergies.length, "O* binding energies computed",
+         "G(O), one per relaxed site"),
+    /* Empty third cell, on purpose: it keeps this row's columns under the
+       matching ones in the funnel above - overpotential, then O*, then the
+       all-materials total, which has no site-level counterpart. Layout only,
+       so it is hidden from screen readers rather than announced as blank. */
+    '<div class="stat spacer" aria-hidden="true"></div>',
   ].join("");
 
   const nDone = PROCS.filter(done).length;
@@ -3484,23 +3506,23 @@ document.querySelectorAll("#tabbar button").forEach(b =>
   const nFail = PROCS.filter(failed).length;
   const nQ    = PROCS.filter(queued).length;
   document.getElementById("stats-dft").innerHTML = [
+    card(PROCS.length, "DFT relaxations launched", ""),
     card(nDone, "converged successfully",
          Math.round(100 * nDone / PROCS.length) + "% of everything launched", "good"),
-    card(PROCS.length, "DFT relaxations launched", "total jobs submitted to the cluster"),
     card(nUnr, "rejected on the relaxed structure",
          "adsorbate drifted off its site, surface dissociated, or the structure came back disconnected", "warn"),
-    card(nFail, "failed to converge",
-         "convergence not reached even after the error handler retried", "bad"),
-    card(nQ, "still running or queued", "results not yet in this snapshot"),
+    card(nFail, "failed to converge", "", "bad"),
+    card(nQ, "still running or queued", ""),
   ].join("");
 
-  const JOBS = [["bulk_relaxation", "bulk relaxations", "lowest-energy magnetic ordering carried forward"],
-                ["surface_relaxation", "surface relaxations", "symmetry-distinct terminations"],
-                ["O_adsorption", "O* adsorptions", "one per candidate site"],
-                ["OH_adsorption", "OH* adsorptions", "three tilted initialisations per site, all relaxed"]];
+  const JOBS = [["bulk_relaxation", "bulk relaxations converged", ""],
+                ["surface_relaxation", "surface relaxations converged", ""],
+                ["O_adsorption", "O* adsorptions converged", "one per candidate site"],
+                ["OH_adsorption", "OH* adsorptions converged", "three tilted initialisations per site, all relaxed"]];
   document.getElementById("stats-jobs").innerHTML = JOBS.map(function (row) {
     const all = PROCS.filter(p => p.job === row[0]), ok = all.filter(done).length;
-    return card(all.length, row[1], ok + " converged" + pct(ok, all.length) + " \u00b7 " + row[2]);
+    return card(ok, row[1], "of " + all.length + " launched" + pct(ok, all.length) +
+                            (row[2] ? " \u00b7 " + row[2] : ""));
   }).join("");
 
   // meta.version is the date the PAGE was built; meta.data_date is the date
