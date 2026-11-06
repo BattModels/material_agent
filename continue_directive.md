@@ -18,37 +18,41 @@
 # message body below with a '#' heading, or it is eaten with the header.
 # EDIT BEFORE USE.
 
-OPERATOR UPDATE — the run was down for four days on an infrastructure fault, not on anything
-you did. Two things have changed while you were stopped.
+OPERATOR UPDATE — the run was stopped for 18 days (18 Oct to 5 Nov) by a crash in the
+driver's own output code. Nothing you did caused it and nothing in your plan needs
+revisiting on account of it. Three things need your attention, in this order.
 
-1. THE TIME BUDGET IS NOW 200 DAYS, not 30. This study is a continuing programme that runs
-until the compute grant is spent; there is no deadline and no final report to work toward.
-Your CANVAS and plan text still say "Day 24 of 30", "5.8 days remaining" and "wind down at
-Day 26.0". All of that is now wrong. Correct it in your notes NOW rather than at reporting
-time -- a stale figure left in the record is inherited by every later round, which is how the
-0.30 eV threshold survived two corrections.
+1. DISPOSITION THE LANDED RESULTS FIRST. 71 jobs finished while the run was down and are
+not yet dispositioned: 45 O adsorption, 14 surface relaxation, 8 OH adsorption, 4 bulk. The
+wait tool will refuse to wait until every finished result is tied back to a disposition, and
+that refusal is correct — work the backlog before anything else.
 
-2. SAMPLE EACH CANDIDATE AT MORE ADSORPTION SITES. Across the study a candidate averages 2.91
-O sites tried. 139 candidates have found a competitive O site, but 87 of them found exactly
-one and stopped there. The deepest candidate in the study reached 12 sites and 4 terminations,
-so the room exists -- this is a habit, not a limit. Aim for roughly 4 to 8 O sites per
-candidate, more where your results justify it, and relax a further termination when a surface
-runs out of distinct promising sites. Treat that range as a guide: some candidates genuinely
-do not offer that many sites, and those are finished, not under-sampled.
+2. THE QUEUE IS TEN TIMES TOO DEEP: 357 queued against a working level of 30 to 40. Every
+one of those jobs is blocked on `Resources`, some submitted a month ago, so queueing deeper
+has bought nothing — allocation here is fair-share limited. Until the queue is back near
+30-40, keep submitting what your results directly unlock (a surface for a finished bulk, O
+sites for a finished surface, OH for a competitive O site) but register NO new candidates
+for breadth. That continuation work is tens of jobs against roughly 60 completions a day, so
+the queue still falls while the valuable work goes on. Once it is near 30-40, resume
+registering and submitting normally; at that depth the wait tool shows you its ready-work
+list on every call, which is how relevant work is meant to surface. It is already holding
+116 items — 90 competitive O sites with no OH yet, 26 candidates with no bulk started —
+opening with
 
-The most under-sampled are also among the best you have. Verify these against the log rather
-than taking the list on faith:
+  2b2d464842  InBiRh2O7        term 0  site 0   G(O) deviation 0.034
+  cd2cb17607  ZnIr2(RhO4)3     term 3  site 2   0.134
+  631ae89b41  LuBi3(Rh2O7)2    term 8  site 1   0.137
+  cb7ab85bb4  Ir2PdO6          term 12 site 1   0.156
 
-  9e74301d57  PrBiRh2O7          1 site,  1 surface,  best G(O) deviation 0.010
-  cf03e0cb1d  LuBi3Ir2(RhO7)2    1 site,  1 surface,  0.020
-  47c41df315  YCoTeO6            2 sites, 1 surface,  0.030
-  65c2439d36  Al3Co(TeO6)2       2 sites, 1 surface,  0.030
-  a21b6febda  FeIrRhO6           3 sites, 1 surface,  0.030
-  0dbc4e8975  PtRh(SeO3)4        2 sites, 1 surface,  0.040
+3. YOU HAVE BEEN COMPARING TWO DIFFERENT OVERPOTENTIALS AS IF THEY WERE ONE NUMBER, and it
+has cost this study its best results. The two lowest scaling overpotentials in the whole
+study are both marked Abandon: BiPt(RhO3)2 (d5cc0fd2e0) at 0.37 V, which is the floor the
+scaling relation permits, and CoPt2RhO8 (f17ffdeee0) at 0.38 V. Meanwhile your High priority
+tier has a median of 0.64 V — the worst median of any tier you use — and holds EuNiIO6
+(728d6560b8) on an ideal 0.23 V whose scaling value is 0.73 V. Fifteen candidates at or
+below 0.45 V scaling are in Abandon. Re-examine those fifteen before registering anything
+new, and fix the tiering in your notes now rather than at reporting time: a stale ranking
+left in the record is inherited by every later round. The standing rule is in the objective.
 
-You can find the rest yourself: query_explog on the candidates table, sort n_O_started
-ascending, filter on G(O) deviation or idealOverPotential to take the promising ones first.
-
-Also: about 354 calculations finished while the run was down and need dispositioning, and
-there is one hard ceiling on submission -- do not take the queue above ~800 queued jobs,
-because SLURM refuses submissions once you hold 1000 active and they will simply fail.
+53 days of 200 are used, about 147 remain. Do not wind down or reach for a final answer.
+Verify every figure above against the log rather than taking it on faith.
