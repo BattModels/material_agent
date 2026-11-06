@@ -63,7 +63,10 @@ PATH_B_CUTOFF_SECONDS = PATH_B_CUTOFF_DAYS * _SECONDS_PER_DAY
 # (with the real numbers) to refill. Queued -- not running -- jobs are the target:
 # queued jobs are what feed nodes the instant they free up, and under fair-share
 # a near-empty queue means the cluster is absorbing everything we submit.
-QUEUE_MIN_PENDING = 50
+# Lowered 50 -> 30 on 2026-11-05: every pending job was blocked on `Resources`,
+# some submitted a month earlier, so the cluster was NOT absorbing what we gave
+# it and queueing deeper bought nothing.
+QUEUE_MIN_PENDING = 30
 
 # Hard ceiling on queued jobs. SLURM refuses submissions once a user has 1000
 # active jobs, so this leaves headroom rather than expressing a preference: going
@@ -76,7 +79,11 @@ QUEUE_MAX_PENDING = 800
 # the floor (hard, gates waiting) triggers the refill; this target is what the
 # refill should AIM for -- fill the queue well beyond the floor with the most
 # VALUABLE ready work (never padding with junk just to hit a number).
-QUEUE_REFILL_TARGET = 100
+# Lowered 100 -> 40 alongside the floor. The GAP between the two is what stops
+# the gate oscillating: refilling to exactly the floor means the next completion
+# drops back under it, and once no ready work remains that re-fires the Path B
+# handback to the supervisor on every single wait. Keep target > floor.
+QUEUE_REFILL_TARGET = 40
 
 # --- Disposition gate ---------------------------------------------------------
 # Runtime slot mirroring the CURRENT task's `myStep.enforce_queue_floor` (the
@@ -146,7 +153,11 @@ GO_DEV_OH_THRESHOLD = 0.8
 # Both files are pure VIEWS rebuilt from in-memory state, so skipping a write
 # loses nothing -- the next flush emits the latest state. close() always forces
 # a final write, so the end state is never missing.
-LIVE_VIZ_ENABLED = True          # False disables the dashboard writes entirely
+# Switched off 2026-11-06: measured 324 MB live_visualization.html + 163 MB
+# live_data.js per flush, ~24 min of BLOCKING main-thread CPU each, running
+# back-to-back (build outruns the 900 s throttle). Also gates both gen_DAG
+# calls -- step_<N>_DAG.html had reached 159 MB each, 147 GB over 2044 files.
+LIVE_VIZ_ENABLED = False         # False disables the dashboard writes entirely
 LIVE_VIZ_DATA_MIN_INTERVAL_S = 60      # live_data.js  (lean; polled by the page)
 LIVE_VIZ_HTML_MIN_INTERVAL_S = 900     # live_visualization.html (heavy; ~99 MB)
 
@@ -154,7 +165,7 @@ LIVE_VIZ_HTML_MIN_INTERVAL_S = 900     # live_visualization.html (heavy; ~99 MB)
 # canvas.pickle.txt on every write -- 5 MB on the 27-05 run, x753
 # write_my_canvas calls ~= 3.8 GB of pure inspection output. Nothing reads the
 # file back (canvas.pickle is the real artefact), so it is safe to switch off.
-CANVAS_TXT_DUMP_ENABLED = True
+CANVAS_TXT_DUMP_ENABLED = False  # off 2026-11-06: 20.6 MB rewritten per CANVAS.write()
 
 # --- Dialogue history log rotation (hist/his_<N>.txt) --------------------------
 # Once the active his_<N>.txt file reaches this many bytes, close it and start
