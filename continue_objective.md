@@ -51,9 +51,13 @@ hypothesis-relevant unique sites instead of exhaustively evaluating all sites fo
 candidate (it may be relevant to consider many adsorption sites for a few candidates).
 Use the resulting G(O) values to identify the most promising candidates and sites before
 proceeding with OH adsorption calculations (possibly delaying OH calculations to later
-rounds). When evaluating overpotentials and ranking candidates, you will need to consider
-both the overpotential calculated assuming an ideal OOH binding and the one calculated
-via the scaling relation.
+rounds). Rank and tier candidates on the scaling-relation overpotential, which cannot fall below
+about 0.37 V, and quote the ideal overpotential alongside it as a diagnostic of how much a
+candidate would gain if OOH binding could be decoupled from OH binding -- not as an activity
+ranking. Never compare one candidate's ideal value against another candidate's scaling
+value: a candidate at 0.38 V from scaling outranks one showing an ideal 0.23 V whose scaling
+value is 0.73 V, and a candidate within about 0.1 V of the 0.37 V floor is a headline result
+that must not be abandoned because another candidate's ideal number looks better.
 
 Supply risk and earth abundance -- RAISED PRIORITY:
 A significant share of every remaining batch of candidate registrations must target LOW
@@ -106,18 +110,19 @@ during the study using refined selection criteria based on emerging insights, to
 new candidates.
 
 HPC usage:
-Keep the cluster genuinely fed. Have relevant DFT jobs pending/queued at all times, and
-do not wait for the jobs of one round to finish before submitting the next. Submit in
-LARGE BATCHES rather than a trickle: whenever the cluster has spare capacity, submissions
-are effectively free, and bulk relaxations in particular are cheap and are the natural way
-to buy breadth. How much spare capacity exists changes over the study, so judge it from
+Keep relevant work flowing to the cluster. Have relevant DFT jobs queued at all times, and
+do not wait for the jobs of one round to finish before submitting the next. Keep the queue
+shallow. Allocation here is fair-share limited, so a deeper queue does not start anything
+sooner and only hides the ready-work list that the wait tool surfaces when the queue is
+shallow. The wait tool tells you the live queued count and the level to aim for; treat
+that level as a consequence of submitting what your results justify, rather than a number
+to fill toward. How much spare capacity exists changes over the study, so judge it from
 the live running/queued counts rather than from any standing assumption. If the queue is
-running low, the first remedy is to register more candidates
-and submit their bulk relaxations; the second is more terminations and adsorption sites
-on the candidates that have earned them. Note that surface and adsorption jobs take much
-longer than bulk jobs, so start them as soon as their prerequisites land. Only when the
-remaining time is too short for a newly submitted job to finish should you stop
-submitting and move to finalizing the in-flight results.
+running low, the first remedy is more terminations and adsorption sites on the candidates
+that have earned them; register more candidates once that frontier genuinely thins. Note
+that surface and adsorption jobs take much longer than bulk jobs, so start them as soon as
+their prerequisites land. Only when the remaining time is too short for a newly submitted
+job to finish should you stop submitting and move to finalizing the in-flight results.
 
 Report:
 At the end of EACH ROUND as well as the end of the study, produce an extensive report
