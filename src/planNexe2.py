@@ -1293,11 +1293,15 @@ Now, you are tasked with: {task}. Focus on this task. Your standing duties are a
                 # LLM sanity check
                 # if LLM_check_passed:
                 #     workerGood = True
-                DAG_title = f"step_{step_no}_DAG"
-                CANVAS.gen_DAG(
-                    filename=f"{var.my_WORKING_DIRECTORY}/{DAG_title}.html",
-                    title=DAG_title,
-                )
+                # Same kill switch as print_stream's gen_DAG (see line ~564).
+                # This call site was ungated, so LIVE_VIZ_ENABLED=False only
+                # silenced one of the two until 2026-11-06.
+                if getattr(var, "LIVE_VIZ_ENABLED", True):
+                    DAG_title = f"step_{step_no}_DAG"
+                    CANVAS.gen_DAG(
+                        filename=f"{var.my_WORKING_DIRECTORY}/{DAG_title}.html",
+                        title=DAG_title,
+                    )
                 workerGood = True
             else:
                 task_formatted = old_task_formatted
