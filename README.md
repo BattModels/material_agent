@@ -36,9 +36,11 @@ in a separate package, [GNoME_DREAMS_OER_screening](https://github.com/Matminato
 
 ## Provenance
 
-A divergent branch of [DREAMS](https://arxiv.org/abs/2507.14267) (Wang et al.),
-which supplies the plan–execute loop and CANVAS. This branch was built together
-with Ziqi Wang, DREAMS' first author. Added on this branch: the exploration log
+A divergent branch of [DREAMS](https://arxiv.org/abs/2507.14267) by Ziqi Wang,
+Hongshuo Huang, Hancheng Zhao, Changwen Xu, Shang Zhu, Jan Janssen and
+Venkatasubramanian Viswanathan, which supplies the plan–execute loop and CANVAS.
+This branch was built together with Ziqi Wang, DREAMS' first author. Added on
+this branch: the exploration log
 and its decision model, the OER and VASP domain layer, HPC scheduling and queue
 management, the durable-state rework behind month-long resumability, operator
 steering, and the published record.
